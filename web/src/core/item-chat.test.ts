@@ -59,3 +59,17 @@ test("X4: item-level chat with LLM gets a digest of all runs, artifacts and huma
     await f.stop();
   }
 });
+
+test("X6: clarification answers are positional; skipped questions are explicit", async () => {
+  const { f, name } = await blockedItem({});
+  try {
+    const d = (await f.app.getWorkItem(p, name))!;
+    const c = d.clarifications[0];
+    assert.equal(c.spec.questions.length, 2);
+    await assert.rejects(f.app.answerClarification(p, c.metadata.name, ["", "  "]), /at least one/);
+    const answered = await f.app.answerClarification(p, c.metadata.name, ["", "Only engineers, P3"]);
+    assert.deepEqual(answered.spec.answers, ["(no answer)", "Only engineers, P3"]);
+  } finally {
+    await f.stop();
+  }
+});

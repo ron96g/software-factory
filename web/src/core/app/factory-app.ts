@@ -150,8 +150,9 @@ export class FactoryApp
     const c = await this.d.reader.get<Clarification>("Clarification", this.ns, name);
     if (!c) throw new Error(`clarification ${name} not found`);
     if (c.spec.answers?.length) throw new Error("already answered");
-    const cleaned = answers.map((a) => a.trim()).filter(Boolean);
-    if (!cleaned.length) throw new Error("an answer is required");
+    // Positional: answer i belongs to question i; skipped questions are explicit so the agent can tell them apart.
+    const cleaned = c.spec.questions.map((_, i) => (answers[i] ?? "").trim() || "(no answer)");
+    if (cleaned.every((a) => a === "(no answer)")) throw new Error("answer at least one question");
     return this.d.writer.update({ ...c, spec: { ...c.spec, answers: cleaned, answeredBy: p.id } });
   }
 

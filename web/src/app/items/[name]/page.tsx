@@ -90,7 +90,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           {st.message}
         </Alert>
       )}
-      {openClar && <ClarificationPanel c={openClar} />}
+      {openClar && <ClarificationPanel c={openClar} d={d} />}
       {openAppr && <ApprovalPanel a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
 
       <Grid>
@@ -239,41 +239,138 @@ function StageProgress({ d }: { d: WorkItemDetail }) {
   );
 }
 
-function ClarificationPanel({ c }: { c: Clarification }) {
+function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
   const [answers, setAnswers] = useState<string[]>(c.spec.questions.map(() => ""));
+  const [skipped, setSkipped] = useState<boolean[]>(c.spec.questions.map(() => false));
   const [busy, setBusy] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  // The run that asked: latest run in this stage whose result carries these questions.
+  const asker = [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && r.status?.result?.questions?.length);
+  const done = c.spec.questions.filter((_, i) => skipped[i] || answers[i].trim()).length;
+  const anyAnswer = answers.some((a, i) => !skipped[i] && a.trim());
+  const set = <T,>(arr: T[], i: number, v: T) => arr.map((x, j) => (j === i ? v : x));
+
   return (
-    <Alert color="orange" variant="outline" styles={ALERT_STYLES} title={`Blocked at ${c.spec.stage}: the agent needs your input`} icon={<IconHandStop />}>
-      <Stack gap="sm" mt="xs">
-        {c.spec.questions.map((q, i) => (
-          <Textarea
-            key={i}
-            label={q}
-            autosize
-            minRows={1}
-            value={answers[i]}
-            onChange={(e) => {
-              const v = e.currentTarget.value;
-              setAnswers((a) => a.map((x, j) => (j === i ? v : x)));
-            }}
-          />
-        ))}
-        <Group justify="flex-end">
+    <Card withBorder radius="md" p="md" style={{ borderColor: "var(--mantine-color-orange-5)", borderLeftWidth: 4 }}>
+      <Stack gap="sm">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap" align="flex-start">
+            <ThemeIcon color="orange" variant="light" radius="xl">
+              <IconHandStop size={16} />
+            </ThemeIcon>
+            <div>
+              <Text fw={600}>
+                {asker?.spec.agentRef.name ?? "The agent"} needs your input
+                <Text span c="dimmed" fw={400}>
+                  {" "}
+                  · {c.spec.questions.length} question{c.spec.questions.length === 1 ? "" : "s"} in {c.spec.stage}
+                </Text>
+              </Text>
+              {asker?.status?.result?.summary && (
+                <Text size="sm" c="dimmed" lineClamp={2}>
+                  {asker.status.result.summary}
+                </Text>
+              )}
+            </div>
+          </Group>
+          <Badge variant="light" color={done === c.spec.questions.length ? "teal" : "orange"} style={{ flexShrink: 0 }}>
+            {done}/{c.spec.questions.length} answered
+          </Badge>
+        </Group>
+
+        <Stack gap="xs">
+          {c.spec.questions.map((q, i) => (
+            <Card key={i} withBorder p="sm" radius="sm" className="sf-surface" style={{ opacity: skipped[i] ? 0.6 : 1 }}>
+              <Group gap="xs" align="flex-start" wrap="nowrap" mb={6}>
+                <Badge size="sm" variant="filled" color={skipped[i] ? "gray" : answers[i].trim() ? "teal" : "orange"} circle>
+                  {i + 1}
+                </Badge>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <MarkdownView>{q}</MarkdownView>
+                </div>
+              </Group>
+              {skipped[i] ? (
+                <Group justify="space-between">
+                  <Text size="xs" c="dimmed">
+                    Skipped: the agent will be told you don&apos;t know.
+                  </Text>
+                  <Button size="compact-xs" variant="subtle" onClick={() => setSkipped(set(skipped, i, false))}>
+                    Answer instead
+                  </Button>
+                </Group>
+              ) : (
+                <Group gap="xs" align="flex-start" wrap="nowrap">
+                  <Textarea
+                    style={{ flex: 1 }}
+                    size="sm"
+                    autosize
+                    minRows={1}
+                    maxRows={6}
+                    placeholder="Your answer"
+                    value={answers[i]}
+                    onChange={(e) => {
+                      const v = e.currentTarget.value;
+                      setAnswers((a) => set(a, i, v));
+                    }}
+                  />
+                  <Button size="compact-sm" variant="subtle" color="gray" mt={4} onClick={() => setSkipped(set(skipped, i, true))}>
+                    Don&apos;t know
+                  </Button>
+                </Group>
+              )}
+            </Card>
+          ))}
+        </Stack>
+
+        <Group justify="space-between">
+          <Button
+            variant="subtle"
+            size="xs"
+            leftSection={<IconMessageQuestion size={14} />}
+            disabled={!asker}
+            onClick={() => setAskOpen(true)}
+          >
+            Ask {asker?.spec.agentRef.name ?? "the agent"} about these questions
+          </Button>
           <Button
             color="orange"
             loading={busy}
-            disabled={answers.every((a) => !a.trim())}
+            disabled={!anyAnswer}
             onClick={async () => {
               setBusy(true);
-              await act(`/api/clarifications/${c.metadata.name}/answer`, { answers }, "Answer sent. Resuming.");
+              await act(`/api/clarifications/${c.metadata.name}/answer`, { answers: answers.map((a, i) => (skipped[i] ? "" : a)) }, "Answers sent. Resuming.");
               setBusy(false);
             }}
           >
-            Answer &amp; resume
+            Send answers &amp; resume
           </Button>
         </Group>
       </Stack>
-    </Alert>
+
+      {asker && (
+        <Drawer opened={askOpen} onClose={() => setAskOpen(false)} position="right" size="lg" title={<Text fw={600}>Ask {asker.spec.agentRef.name} about its questions</Text>}>
+          <Stack gap="sm">
+            <Card withBorder p="xs" className="sf-surface">
+              <Text size="xs" c="dimmed" mb={4}>
+                Questions
+              </Text>
+              {c.spec.questions.map((q, i) => (
+                <Text key={i} size="sm">
+                  {i + 1}. {q}
+                </Text>
+              ))}
+            </Card>
+            <ChatPanel
+              existing={d.conversations.filter((cv) => cv.spec.agentRunRef?.name === asker.metadata.name)}
+              start={() => act<Conversation>("/api/conversations", { runName: asker.metadata.name })}
+              placeholder="e.g. What do you mean by question 2? Which options do I have?"
+              intro="The agent explains its questions from its recorded run (read-only). Your answers stay in the panel."
+              suggestions={["Why do you need this information?", "What would you assume if I don't know?", "Can you give me options for each question?"]}
+            />
+          </Stack>
+        </Drawer>
+      )}
+    </Card>
   );
 }
 

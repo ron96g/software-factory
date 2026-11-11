@@ -161,6 +161,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X3 | Structured agent runs | Runs grouped by stage (workflow order) → rounds (latest open, older superseded) → step rows (agent, outcome, duration, executor, summary); replays nested | The current state and history of runs are understandable without opening transcripts | ✅ |
 | X4 | Ask about the work item | `Conversation.purpose` (`explain` run · `explain-item` whole item), responders registered by purpose, item responder grounded in all runs/artifacts/human input/events; "Ask about this item" chat | "What did the product owner do?" answered without opening the PO run | ✅ (ADR-0026) |
 | X5 | Clear gates | Structured verdicts (`StepSpec.outcomes`, verifier `pass/partial/fail`), gate evidence (ok/warning/blocking) at every gate, server-enforced override with reason when blocking, verdict badges on artifacts + stage chips (ADR-0027) | A failed verification can't be approved by accident; the reason is visible at the gate | ✅ |
+| X6 | Structured clarifications | Header with asking agent + why + progress, one card per question (Markdown, own answer, skip), positional answers, "Ask the agent about these questions" chat | Answering several questions is calm and clear; users can ask back before answering | ⏳ |
 
 #### Later increments
 | Version | Increment | Highlights |
