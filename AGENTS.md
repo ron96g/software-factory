@@ -115,11 +115,11 @@ human spec-review → **Ready for construction**. Later stages run on the simula
 
 | # | Item | Scope | Exit criteria | Status |
 |---|---|---|---|---|
-| M1 | Store & admission | SQLite (`node:sqlite`), Git definition loader, composite store, admission (Source defaults, ref validation), Event recorder, **append-only transcript store** (ADR-0012). Namespaces `default` / `factory-system` only | CRUD, `resourceVersion` conflicts, owner cascade, transcript append/read tested | ⏳ next |
-| M2 | Control plane | Work queue, controller manager, WorkItem / AgentRun / Clarification / Approval controllers, workflow compiler, `decision` + `human-approval` gates (`automated` passes) | An item flows to Done on the simulated executor, including block/answer and approve/reject | ☐ |
-| M3 | Agent pipeline | Context factory, prompt builder, executor chain (LLM → skill handlers → simulated), **`ModelProvider` kind + `ModelResolver` + OpenAI-compatible & Anthropic adapters** (ADR-0014; `ToolCallingLLM` port only, loop in v0.5 per ADR-0017), **env `SecretResolver` + redaction** (ADR-0015), **read-only tool registry** (ADR-0016), code-search context provider (ripgrep on local-path repos), **transcript recording + provenance**, **explain-mode `ConversationResponder`** | Triage attaches `research-notes` with `repo:path:line` citations; every run has a transcript; "why?" gets an answer grounded in that transcript | ☐ |
-| M4 | Sources | `manual` + GitHub `ItemFetcher`, "Sync now" | GitHub issues appear as WorkItems | ☐ |
-| M5 | UI | Next.js + Mantine (space theme): dashboard table, new item, sync, item detail (stages, artifacts, timeline), answer clarification, approve/reject, **run timeline + transcript viewer (incl. delegation tree, provenance) + "Ask this agent" chat**, Markdown with **Mermaid rendering** (ADR-0013), live updates (SSE) | MVP goal demonstrable end to end | ☐ |
+| M1 | Store & admission | SQLite (`node:sqlite`), Git definition loader, composite store, admission (Source defaults, ref validation), Event recorder, **append-only transcript store** (ADR-0012). Namespaces `default` / `factory-system` only | CRUD, `resourceVersion` conflicts, owner cascade, transcript append/read tested | ✅ |
+| M2 | Control plane | Work queue, controller manager, WorkItem / AgentRun / Clarification / Approval controllers, workflow compiler, `decision` + `human-approval` gates (`automated` passes) | An item flows to Done on the simulated executor, including block/answer and approve/reject | ✅ |
+| M3 | Agent pipeline | Context factory, prompt builder, executor chain (LLM → skill handlers → simulated), **`ModelProvider` kind + `ModelResolver` + OpenAI-compatible & Anthropic adapters** (ADR-0014; `ToolCallingLLM` port only, loop in v0.5 per ADR-0017), **env `SecretResolver` + redaction** (ADR-0015), **read-only tool registry** (ADR-0016), code-search context provider (ripgrep on local-path repos), **transcript recording + provenance**, **explain-mode `ConversationResponder`** | Triage attaches `research-notes` with `repo:path:line` citations; every run has a transcript; "why?" gets an answer grounded in that transcript | ✅ |
+| M4 | Sources | `manual` + GitHub `ItemFetcher`, "Sync now" | GitHub issues appear as WorkItems | ✅ |
+| M5 | UI | Next.js + Mantine (space theme): dashboard table, new item, sync, item detail (stages, artifacts, timeline), answer clarification, approve/reject, **run timeline + transcript viewer (incl. delegation tree, provenance) + "Ask this agent" chat**, Markdown with **Mermaid rendering** (ADR-0013), live updates (SSE) | MVP goal demonstrable end to end | ✅ |
 
 ### Increments after the MVP (re-planned when each one starts)
 | Version | Increment | Highlights |
@@ -131,7 +131,7 @@ human spec-review → **Ready for construction**. Later stages run on the simula
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
 | v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself |
 
-Known MVP simplifications: single process (no leases); `forEach` runs the sub-workflow once; automated checks pass
+Known MVP simplifications: single process (no leases); definitions load once at startup (restart to reload); `forEach` runs the sub-workflow once; automated checks pass
 with a warning event; no auth, but the code stays auth-ready (rule 9).
 
 ---

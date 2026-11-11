@@ -59,6 +59,21 @@ schemas/      JSON Schemas per kind
 tools/        validate.py: checks schemas + resolves every reference
 ```
 
+## Run it (MVP v0.1)
+
+```bash
+cd web
+npm install
+cp .env.example .env.local   # optional: OPENAI_API_KEY / ANTHROPIC_API_KEY / GITHUB_TOKEN
+npm run dev                  # http://localhost:3000
+npm test                     # node:test, store + control plane + agent pipeline
+npm run typecheck
+```
+
+Without an LLM key, the factory still runs end to end. Classification and code research use deterministic
+skill handlers (ripgrep over the `software-factory` repository itself), and the other agents are simulated.
+Data lives in `web/data/factory.db`. Delete the file to reset.
+
 ## Validation
 
 ```bash

@@ -50,6 +50,18 @@ permissions:
   - action: shell
     resource: "rg *"
     effect: allow
+  - action: shell
+    resource: "cd * && npx tsc --noEmit*"
+    effect: allow
+  - action: shell
+    resource: "cd * && npm test*"
+    effect: allow
+  - action: shell
+    resource: "cd * && npm run typecheck*"
+    effect: allow
+  - action: shell
+    resource: "cd * && .venv/bin/python tools/validate.py*"
+    effect: allow
 ---
 
 You are the **architecture reviewer** for the software-factory repository. You never modify files.
