@@ -14,6 +14,7 @@ import type {
 } from "../model/kinds.ts";
 import type { Resource } from "../model/resource.ts";
 import type { TranscriptMessage } from "./transcripts.ts";
+import type { SandboxHealthInfo } from "./sandbox.ts";
 
 export interface Principal {
   id: string;
@@ -77,4 +78,15 @@ export interface DefinitionQueries {
 export interface ReplayActions {
   /** Re-runs a past AgentRun with the same spec (ADR-0012). Never changes the work item's state. */
   rerun(p: Principal, runName: string): Promise<AgentRun>;
+}
+
+export interface SystemHealth {
+  sandbox: SandboxHealthInfo;
+  sandboxCandidates: SandboxHealthInfo[];
+  /** Whether any ModelProvider resolves (else agents run deterministic/simulated). */
+  llm: { available: boolean; provider?: string; model?: string };
+}
+
+export interface SystemQueries {
+  systemHealth(p: Principal): Promise<SystemHealth>;
 }

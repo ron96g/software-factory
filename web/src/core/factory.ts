@@ -4,7 +4,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentToolInfo, Clock, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { AgentToolInfo, Clock, ExecutionEnvironment, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -37,11 +37,15 @@ import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
 import { JiraConnector } from "./adapters/sources/jira.ts";
 import { DefaultRunReplayer } from "./agents/replayer.ts";
+import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
+import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 
 export interface FactoryOptions {
   /** Repo root containing agents/, skills/, workflows/, … */
   definitionsRoot: string;
+  /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
+  sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
   commentPollMs?: number;
   /** SQLite file, or ":memory:". */
@@ -92,12 +96,26 @@ export async function createFactory(o: FactoryOptions) {
   skillHandlers.register(classificationHandler.skill, classificationHandler);
   skillHandlers.register(codebaseResearchHandler.skill, codebaseResearchHandler);
 
+  // ── sandbox runtimes (ADR-0019) ──────────────────────────────────────
+  const sandboxEnvs = new Registry<ExecutionEnvironment>();
+  sandboxEnvs.register("none", new NoSandboxEnvironment());
+  for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
+  const env = o.env ?? process.env;
+  const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [
+    ...(env.KUBERNETES_SERVICE_HOST ? ["kubernetes"] : []),
+    "podman",
+    "docker",
+    "remote",
+    ...(o.sandboxes ?? []).map((e) => e.runtime),
+  ]);
+
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces)],
     models,
     recorders,
+    environments,
   });
   const executor = new ExecutorChain([
     new LLMExecutor(new DefaultPromptBuilder(), tools),
@@ -144,6 +162,8 @@ export async function createFactory(o: FactoryOptions) {
     syncer,
     transcripts,
     replayer: new DefaultRunReplayer(store, store),
+    environments,
+    models,
     responder: new ExplainResponder({ reader: store, transcripts, recorders, models }),
   });
 

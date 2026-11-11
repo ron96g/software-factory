@@ -6,7 +6,7 @@ import { SYSTEM_NAMESPACE, type DocumentResource, type Resource } from "../model
 import type { DefinitionLoader } from "../ports/index.ts";
 
 const MARKDOWN_DIRS = ["agents", "skills"];
-const YAML_DIRS = ["workflows", "artifacts", "sources", "repositories", "model-providers"];
+const YAML_DIRS = ["workflows", "artifacts", "sources", "repositories", "model-providers", "sandbox-profiles"];
 
 /** Loads definitions from a Git checkout into `factory-system` (ADR-0011: squads/<squad>/… comes in v0.4). */
 export class GitDefinitionLoader implements DefinitionLoader {

@@ -20,6 +20,7 @@ REF_KINDS = {
     "sourceRefs": "Source",
     "repositoryRefs": "Repository",
     "providerRef": "ModelProvider",
+    "sandboxRef": "SandboxProfile",
 }
 
 

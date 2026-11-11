@@ -1,0 +1,14 @@
+# ADR-0019: runtime-neutral sandbox profiles. Adapters (podman, kubernetes, remote, …) translate them.
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: node-build
+spec:
+  image: docker.io/library/node:22-bookworm
+  resources: { cpu: "2", memory: 4Gi, pids: 512, timeout: 30m }
+  network:
+    mode: allowlist
+    allow: [registry.npmjs.org, github.com]
+  filesystem: { workspace: /workspace, rootReadOnly: true, tmpfs: [/tmp] }
+  user: "1000:1000"
+  isolation: container

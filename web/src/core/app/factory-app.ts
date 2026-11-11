@@ -17,6 +17,10 @@ import type {
   HumanActions,
   ReplayActions,
   RunReplayer,
+  SystemHealth,
+  SystemQueries,
+  ExecutionEnvironmentSelector,
+  ModelResolver,
   KindLookup,
   NewWorkItemInput,
   Principal,
@@ -43,6 +47,8 @@ export interface FactoryAppDeps {
   transcripts: TranscriptReader;
   responder: ConversationResponder;
   replayer: RunReplayer;
+  environments: ExecutionEnvironmentSelector;
+  models: ModelResolver;
 }
 
 const slug = (s: string) =>
@@ -61,7 +67,8 @@ export class FactoryApp
     TranscriptQueries,
     ConversationActions,
     DefinitionQueries,
-    ReplayActions
+    ReplayActions,
+    SystemQueries
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -177,6 +184,16 @@ export class FactoryApp
     if (!c) throw new Error(`conversation ${name} not found`);
     if (!text.trim()) throw new Error("message is empty");
     return this.d.responder.respond(c, text.trim(), { type: "human", id: p.id });
+  }
+
+  async systemHealth(_p: Principal): Promise<SystemHealth> {
+    const sel = await this.d.environments.select();
+    const m = await this.d.models.resolve({ namespace: this.ns, tier: "reasoning" });
+    return {
+      sandbox: sel.health,
+      sandboxCandidates: sel.candidates,
+      llm: m ? { available: true, provider: m.provider, model: m.model } : { available: false },
+    };
   }
 
   async rerun(_p: Principal, runName: string): Promise<AgentRun> {

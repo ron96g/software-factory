@@ -6,6 +6,7 @@ metadata:
   labels:
     factory.ai-dlc.io/phase: construction
 spec:
+  sandboxRef: { name: node-build }
   role: QA / Verification Engineer
   skillRefs:
     - name: verification

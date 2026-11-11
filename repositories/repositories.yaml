@@ -56,3 +56,4 @@ spec:
   context:
     docs: [README.md, docs/architecture.md]
     owners: [{ role: tech-lead, team: platform }]
+  sandboxRef: { name: node-build }

@@ -65,9 +65,7 @@ export class SimulatedExecutor implements AgentExecutor {
     await ctx.transcript.record({
       role: "note",
       author: { type: "system", id: "simulated-executor" },
-      content: ctx.model
-        ? `Simulated: agent tools [${(ctx.agent.spec.tools ?? []).join(", ")}] need the v0.3 sandbox (ADR-0016).`
-        : "Simulated: no ModelProvider with a resolvable secret is configured (ADR-0014).",
+      content: simulationReason(ctx),
     });
     const result: AgentResult = {
       summary: `Simulated ${ctx.agent.spec.role} output for ${ctx.run.spec.step}.`,
@@ -93,6 +91,15 @@ export class SimulatedExecutor implements AgentExecutor {
     await ctx.transcript.record({ role: "assistant", author, content: JSON.stringify(result, null, 2) });
     return result;
   }
+}
+
+function simulationReason(ctx: ExecutionContext): string {
+  if (ctx.sandbox && !ctx.sandbox.available) {
+    return `Simulated: this agent needs a sandbox, but ${ctx.sandbox.message ?? "none is available"}. Configure FACTORY_SANDBOX_RUNTIME (ADR-0019).`;
+  }
+  if (ctx.sandbox?.available) return `Simulated: sandbox "${ctx.sandbox.runtime}" is available, but the tool-call loop isn't implemented yet (v0.3 S3).`;
+  if (!ctx.model) return "Simulated: no ModelProvider with a resolvable secret is configured (ADR-0014).";
+  return `Simulated: agent tools [${(ctx.agent.spec.tools ?? []).join(", ")}] are not available (ADR-0019).`;
 }
 
 const STOP = new Set([

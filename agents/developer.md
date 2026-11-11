@@ -6,6 +6,7 @@ metadata:
   labels:
     factory.ai-dlc.io/phase: construction
 spec:
+  sandboxRef: { name: node-build }
   role: Software Engineer
   model:
     tier: coding

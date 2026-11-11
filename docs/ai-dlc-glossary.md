@@ -92,7 +92,8 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **ModelProvider** | A definition mapping model tiers (`reasoning`, `coding`, `fast`) to a vendor's models, with a `secretRef` (ADR-0014). |
 | **Model tier** | A vendor-neutral model class that agents declare instead of a model name. |
 | **secretRef** | A reference to a secret by name. The value is resolved at runtime and never stored (ADR-0015). |
-| **Execution environment / Sandbox** | An isolated place (a container per run) where agents may run commands and write code. Required from v0.3 (ADR-0016). |
+| **Execution environment / Sandbox** | An isolated place where agents may run commands and write code. Provided by a runtime adapter (podman, docker, kubernetes, remote, or `none`) (ADR-0019). |
+| **SandboxProfile** | A runtime-neutral sandbox definition: image, limits, network allowlist, minimum isolation. Agents reference it with `sandboxRef`. |
 
 ---
 

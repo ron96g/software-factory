@@ -8,6 +8,8 @@ import type { Condition, DocumentResource, Ref, Resource } from "./resource.ts";
 
 export interface AgentSpec {
   role: string;
+  /** Required for agents with write/exec tools (ADR-0019). */
+  sandboxRef?: Ref;
   model?: { tier?: string; providerRef?: Ref };
   skillRefs?: Ref[];
   delegates?: { agentRef: Ref }[];
@@ -92,6 +94,8 @@ export interface RepositorySpec {
   index?: { enabled?: boolean; type?: string; include?: string[]; exclude?: string[] };
   context?: { docs?: string[]; owners?: { role: string; team?: string }[] };
   observability?: Record<string, unknown>;
+  /** Default sandbox for agents working on this repository. */
+  sandboxRef?: Ref;
 }
 export type Repository = Resource<RepositorySpec>;
 
@@ -103,6 +107,18 @@ export interface ModelProviderSpec {
   default?: boolean;
 }
 export type ModelProvider = Resource<ModelProviderSpec>;
+
+/** Runtime-neutral sandbox definition; adapters translate it (ADR-0019). */
+export interface SandboxProfileSpec {
+  image: string;
+  resources?: { cpu?: string; memory?: string; pids?: number; timeout?: string };
+  network?: { mode: "none" | "allowlist"; allow?: string[] };
+  filesystem?: { workspace?: string; rootReadOnly?: boolean; tmpfs?: string[] };
+  user?: string;
+  /** Minimum isolation; runtimes below it are never used. */
+  isolation?: "process" | "container" | "microvm";
+}
+export type SandboxProfile = Resource<SandboxProfileSpec>;
 
 // ── Runtime ──────────────────────────────────────────────────────────────
 
@@ -193,6 +209,8 @@ export interface RunProvenance {
   promptHash?: string;
   /** Set when this run is a re-run of another. */
   replayOf?: Ref;
+  /** Sandbox runtime used or attempted, e.g. "none", "podman@5.5" (ADR-0019). */
+  executionEnvironment?: string;
 }
 
 export interface ConversationSpec {

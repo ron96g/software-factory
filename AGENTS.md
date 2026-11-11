@@ -70,8 +70,8 @@ Required reading:
     `SecretResolver`, are redacted everywhere, and are never put into prompts.
 17. **Providers via tiers (ADR-0014).** Agents declare `model.tier`, never a vendor or model name. Providers are
     `ModelProvider` definitions resolved through `ModelResolver`.
-18. **No free-form execution in-process (ADR-0016).** Until the v0.3 sandbox exists, agent tools are registered,
-    read-only handlers. Shell, file writes, and code execution only run inside an `ExecutionEnvironment` sandbox.
+18. **No free-form execution on the host (ADR-0016, ADR-0019).** Shell, file writes, and code execution only run inside an
+    `ExecutionEnvironment` sandbox. Without a sandbox runtime, such agents fall back to simulation with a visible reason.
 
 ---
 
@@ -136,15 +136,24 @@ Known v0.2 simplifications: all replies found at the first poll become one answe
 older than the Clarification are ignored (clock skew can drop a very early reply); the factory's marker is visible as
 text in Jira comments.
 
+#### v0.3: Construction for real (current, re-planned per ADR-0019)
+| # | Item | Scope | Exit criteria | Status |
+|---|---|---|---|---|
+| S1 | Sandbox ports & profile | `ExecutionEnvironment` + segregated `Sandbox*` ports, `SandboxHealth`, `SandboxProfile` kind, `sandboxRef` on agents/repos, in-memory fake sandbox for tests | Ports reviewed; fake passes a contract test | ✅ |
+| S2 | Runtime selection & `none` | Registry + `auto` selection by health and minimum isolation, `none` adapter, provenance + UI health badge, explicit fallback reason | Without a runtime: analysis works; construction is simulated with a visible reason | ✅ |
+| S3 | Tool-call loop | `ToolCallingLLM` adapters, agent tool loop (recorded), sandbox-bound tools (`run`, `read_file`, `write_file`, `git_diff`) | Developer agent edits code and runs tests in the fake sandbox | ⏳ next |
+| S4 | First real adapter | Depends on the environment (kubernetes / remote / podman) | Real run in an isolated sandbox | ☐ blocked: no usable runtime on the dev machine |
+| S5 | Git workspace, real checks, PR via outbox | Short-lived token clone, branch per item, `build`/`unit-tests` checks, draft PR through the outbox | End-to-end PR from a work item | ☐ |
+
 #### Later increments
 | Version | Increment | Highlights |
 |---|---|---|
 | v0.2 | Write-back | ✅ see table above |
-| v0.3 | Construction for real | **`ExecutionEnvironment` sandbox (container per AgentRun, ADR-0016)**, developer agent works on branches/PRs, Git workspace clones, real `automated` gate checks (build/tests), Bolt fan-out per Unit |
+| v0.3 | Construction for real | see table above (ADR-0019); Bolt fan-out per Unit moves to v1.0 |
 | v0.4 | Auth & squads | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
-| v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011), **LLM tool-call loop + delegation as tool calls** (ADR-0017) |
+| v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011), delegation as tool calls (loop itself moved to v0.3, ADR-0019) |
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
-| v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself |
+| v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself, Bolt fan-out per Unit |
 
 Known MVP simplifications: single process (no leases); definitions load once at startup (restart to reload); `forEach` runs the sub-workflow once; automated checks pass
 with a warning event; no auth, but the code stays auth-ready (rule 9).

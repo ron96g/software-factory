@@ -13,6 +13,7 @@ export const REF_FIELDS: Record<string, string> = {
   sourceRefs: "Source",
   repositoryRefs: "Repository",
   providerRef: "ModelProvider",
+  sandboxRef: "SandboxProfile",
   workItemRef: "WorkItem",
   agentRunRef: "AgentRun",
   parentRunRef: "AgentRun",

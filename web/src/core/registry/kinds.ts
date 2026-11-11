@@ -8,6 +8,7 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "Source", plural: "sources", scope: "definition" },
   { kind: "Repository", plural: "repositories", scope: "definition" },
   { kind: "ModelProvider", plural: "modelproviders", scope: "definition" },
+  { kind: "SandboxProfile", plural: "sandboxprofiles", scope: "definition" },
   { kind: "WorkItem", plural: "workitems", scope: "runtime" },
   { kind: "AgentRun", plural: "agentruns", scope: "runtime" },
   { kind: "Artifact", plural: "artifacts", scope: "runtime" },

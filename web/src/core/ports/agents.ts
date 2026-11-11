@@ -17,6 +17,7 @@ import type {
 } from "../model/kinds.ts";
 import type { TranscriptRecorder } from "./transcripts.ts";
 import type { ResolvedModel } from "./integration.ts";
+import type { SandboxHealthInfo } from "./sandbox.ts";
 import type { RunProvenance } from "../model/kinds.ts";
 
 /** A named block of context made available to the agent. */
@@ -42,6 +43,8 @@ export interface ExecutionContext {
   transcript: TranscriptRecorder;
   /** Resolved LLM for this run (ADR-0014); undefined when no provider is configured. */
   model?: ResolvedModel;
+  /** Set for agents that need a sandbox (sandboxRef): the selected runtime's health (ADR-0019). */
+  sandbox?: SandboxHealthInfo;
 }
 
 export interface ExecutionContextFactory {

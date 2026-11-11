@@ -92,6 +92,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         clarifications: ctx.clarifications.map((c) => c.metadata.name),
         ...result.provenance,
         replayOf: run.spec.replayOf,
+        executionEnvironment: ctx.sandbox ? `${ctx.sandbox.runtime}${ctx.sandbox.version ? `@${ctx.sandbox.version}` : ""}` : undefined,
       };
       const latest = (await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name))!;
       const done = await d.status.updateStatus({

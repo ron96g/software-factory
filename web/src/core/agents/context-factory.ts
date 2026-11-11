@@ -5,6 +5,7 @@ import type {
   ContextProvider,
   ExecutionContext,
   ExecutionContextFactory,
+  ExecutionEnvironmentSelector,
   ModelResolver,
   ResourceReader,
   TranscriptRecorderFactory,
@@ -17,6 +18,7 @@ export interface ContextFactoryDeps {
   providers: ContextProvider[];
   models: ModelResolver;
   recorders: TranscriptRecorderFactory;
+  environments: ExecutionEnvironmentSelector;
 }
 
 /** Assembles everything an executor needs: definitions, inputs, human answers, repos, enrichment, model. */
@@ -71,6 +73,8 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       providerRef: agent.spec.model?.providerRef,
     });
 
+    const sandbox = agent.spec.sandboxRef ? (await this.d.environments.select()).health : undefined;
+
     const ctx: ExecutionContext = {
       run,
       agent,
@@ -82,6 +86,7 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       sections: [],
       transcript: await this.d.recorders.forRun(run),
       model,
+      sandbox,
     };
     for (const p of this.d.providers) {
       if (p.appliesTo(ctx)) ctx.sections.push(...(await p.provide(ctx)));
