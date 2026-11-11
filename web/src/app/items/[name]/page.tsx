@@ -90,8 +90,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           {st.message}
         </Alert>
       )}
-      {openClar && <ClarificationPanel c={openClar} d={d} />}
-      {openAppr && <ApprovalPanel a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
+      {/* Keyed by clarification: a new round's questions must start with fresh answer state. */}
+      {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
+      {openAppr && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
@@ -307,7 +308,7 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
                     minRows={1}
                     maxRows={6}
                     placeholder="Your answer"
-                    value={answers[i]}
+                    value={answers[i] ?? ""}
                     onChange={(e) => {
                       const v = e.currentTarget.value;
                       setAnswers((a) => set(a, i, v));
