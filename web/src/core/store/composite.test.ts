@@ -76,9 +76,11 @@ test("transcripts: append-only, ordered, redacted", async () => {
   ts.tail(rec.ref, (m) => tailed.push(m.seq));
   await rec.record({ role: "system", author: { type: "system", id: "t" }, content: "hello" });
   await rec.record({ role: "assistant", author: { type: "agent", id: "a" }, content: "key sk-supersecret" });
+  await rec.record({ role: "tool-result", author: { type: "system", id: "t" }, content: "ok", meta: { tool: "x", arg: "Bearer sk-supersecret" } });
   const msgs = await ts.read(rec.ref);
-  assert.deepEqual(msgs.map((m) => m.seq), [1, 2]);
+  assert.deepEqual(msgs.map((m) => m.seq), [1, 2, 3]);
   assert.equal(msgs[1].content, "key «redacted»");
-  assert.deepEqual(tailed, [1, 2]);
-  assert.equal((await ts.read(rec.ref, { afterSeq: 1 })).length, 1);
+  assert.equal(msgs[2].meta?.arg, "Bearer «redacted»");
+  assert.deepEqual(tailed, [1, 2, 3]);
+  assert.equal((await ts.read(rec.ref, { afterSeq: 1 })).length, 2);
 });
