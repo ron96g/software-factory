@@ -206,6 +206,8 @@ export interface AgentRunStatus {
   /** ADR-0012: append-only transcript of this run. */
   transcriptRef?: { namespace: string; id: string };
   provenance?: RunProvenance;
+  /** Number of tool-call transcript messages; set when the run finishes. */
+  toolCalls?: number;
 }
 export type AgentRun = Resource<AgentRunSpec, AgentRunStatus>;
 

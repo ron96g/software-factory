@@ -381,6 +381,11 @@ function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void 
           <Badge size="xs" variant="outline">
             {r.status?.provenance?.executor ?? r.status?.executor ?? "…"}
           </Badge>
+          {typeof r.status?.toolCalls === "number" && (
+            <Text size="xs" c="dimmed">
+              {r.status.toolCalls} {r.status.toolCalls === 1 ? "tool" : "tools"}
+            </Text>
+          )}
         </Group>
         <Text size="xs" c="dimmed" lineClamp={1} maw={420}>
           {r.status?.result?.summary ?? r.status?.message ?? ""}

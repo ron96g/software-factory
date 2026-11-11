@@ -13,6 +13,8 @@ import {
   type ResourceReader,
   type ResourceWriter,
   type StatusWriter,
+  type TranscriptReader,
+  type TranscriptRef,
   type TranscriptRecorderFactory,
 } from "../../ports/index.ts";
 
@@ -25,7 +27,22 @@ export interface AgentRunControllerDeps {
   contexts: ExecutionContextFactory;
   executor: AgentExecutor;
   recorders: TranscriptRecorderFactory;
+  transcripts: TranscriptReader;
   redactor: Redactor;
+}
+
+const PAGE = 1000;
+
+/** Counts `tool-call` messages, paging by afterSeq so long transcripts are not truncated. */
+export async function countToolCalls(reader: TranscriptReader, ref: TranscriptRef): Promise<number> {
+  let n = 0;
+  let afterSeq = 0;
+  for (;;) {
+    const page = await reader.read(ref, { afterSeq, limit: PAGE });
+    for (const m of page) if (m.role === "tool-call") n++;
+    if (page.length < PAGE) return n;
+    afterSeq = page[page.length - 1]!.seq;
+  }
 }
 
 /**
@@ -34,6 +51,15 @@ export interface AgentRunControllerDeps {
  */
 export function createAgentRunController(d: AgentRunControllerDeps): Controller & InitialKeys {
   const inFlight = new Set<string>();
+
+  async function toolCallsOf(run: AgentRun): Promise<{ toolCalls?: number }> {
+    if (!run.status?.transcriptRef) return {};
+    try {
+      return { toolCalls: await countToolCalls(d.transcripts, run.status.transcriptRef) };
+    } catch {
+      return {};
+    }
+  }
 
   async function execute(key: string, run: AgentRun) {
     const ns = run.metadata.namespace ?? "default";
@@ -103,6 +129,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         status: {
           ...latest.status!,
           phase: "Succeeded",
+          ...(await toolCallsOf(latest)),
           finishedAt: d.clock.now().toISOString(),
           executor: provenance.executor,
           outputs,
@@ -120,7 +147,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       const message = d.redactor.redact(e instanceof Error ? e.message : String(e)); // ADR-0015
       const latest = await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name);
       if (latest) {
-        await d.status.updateStatus({ ...latest, status: { ...latest.status!, phase: "Failed", finishedAt: d.clock.now().toISOString(), message } });
+        await d.status.updateStatus({ ...latest, status: { ...latest.status!, phase: "Failed", finishedAt: d.clock.now().toISOString(), message, ...(await toolCallsOf(latest)) } });
         await d.events.warning(latest, "Failed", message);
       }
     } finally {
