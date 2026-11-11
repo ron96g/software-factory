@@ -1,5 +1,5 @@
 import type { ModelProvider } from "../../model/kinds.ts";
-import type { CompletionRequest, LLMClient, LLMClientFactory, ToolCall, ToolCallingLLM, ToolSchema } from "../../ports/index.ts";
+import type { CompletionRequest, LLMClient, LLMClientFactory } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
 
@@ -11,7 +11,7 @@ async function postJson(f: Fetch, url: string, headers: Record<string, string>, 
 }
 
 /** OpenAI Chat Completions API and compatibles (Azure, Ollama, OpenRouter, vLLM, …). */
-export class OpenAICompatibleClient implements LLMClient, ToolCallingLLM {
+export class OpenAICompatibleClient implements LLMClient {
   private readonly baseUrl: string;
   private readonly model: (tier?: string) => string;
   private readonly apiKey?: string;
@@ -34,21 +34,10 @@ export class OpenAICompatibleClient implements LLMClient, ToolCallingLLM {
     const choice = (r.choices as { message: { content: string } }[] | undefined)?.[0];
     return choice?.message.content ?? "";
   }
-  async completeWithTools(req: CompletionRequest & { tools: ToolSchema[] }) {
-    const r = await postJson(this.f, `${this.baseUrl}/chat/completions`, this.headers(), {
-      model: this.model(req.tier),
-      messages: req.messages,
-      tools: req.tools.map((t) => ({ type: "function", function: t })),
-    });
-    const msg = (r.choices as { message: { content?: string; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[])[0]
-      .message;
-    const toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, arguments: JSON.parse(c.function.arguments || "{}") }));
-    return { text: msg.content ?? undefined, toolCalls };
-  }
 }
 
 /** Anthropic Messages API. */
-export class AnthropicClient implements LLMClient, ToolCallingLLM {
+export class AnthropicClient implements LLMClient {
   private readonly baseUrl: string;
   private readonly model: (tier?: string) => string;
   private readonly apiKey?: string;
@@ -70,17 +59,6 @@ export class AnthropicClient implements LLMClient, ToolCallingLLM {
   async complete(req: CompletionRequest): Promise<string> {
     const r = await postJson(this.f, `${this.baseUrl}/v1/messages`, this.headers(), this.body(req));
     return ((r.content as { type: string; text?: string }[]) ?? []).filter((c) => c.type === "text").map((c) => c.text).join("");
-  }
-  async completeWithTools(req: CompletionRequest & { tools: ToolSchema[] }) {
-    const r = await postJson(this.f, `${this.baseUrl}/v1/messages`, this.headers(), {
-      ...this.body(req),
-      tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
-    });
-    const content = (r.content as { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]) ?? [];
-    return {
-      text: content.filter((c) => c.type === "text").map((c) => c.text).join("") || undefined,
-      toolCalls: content.filter((c) => c.type === "tool_use").map((c) => ({ id: c.id!, name: c.name!, arguments: c.input ?? {} })),
-    };
   }
 }
 

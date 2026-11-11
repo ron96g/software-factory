@@ -141,12 +141,19 @@ export class FactoryApp
     if (!run) throw new Error(`run ${runName} not found`);
     const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, run.spec.workItemRef.name);
     if (!wi) throw new Error("work item not found");
-    return this.d.writer.create<Conversation>({
+    const created = await this.d.writer.create<Conversation>({
       apiVersion: API_VERSION,
       kind: "Conversation",
       metadata: { name: "", generateName: `${runName.slice(0, 50)}-chat-`, namespace: this.ns, ownerReferences: [ownerRef(wi)] },
       spec: { workItemRef: { name: wi.metadata.name }, agentRunRef: { name: runName }, agentRef: run.spec.agentRef, purpose: "explain", startedBy: p.id },
     });
+    // The conversation controller opens the transcript; wait briefly so the UI can chat immediately.
+    for (let i = 0; i < 100; i++) {
+      const c = await this.d.reader.get<Conversation>("Conversation", this.ns, created.metadata.name);
+      if (c?.status?.transcriptRef) return c;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return created;
   }
 
   async conversationMessages(_p: Principal, name: string): Promise<TranscriptMessage[]> {

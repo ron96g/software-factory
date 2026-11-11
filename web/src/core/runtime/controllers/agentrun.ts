@@ -9,6 +9,7 @@ import {
   type EventRecorder,
   type ExecutionContextFactory,
   type InitialKeys,
+  type Redactor,
   type ResourceReader,
   type ResourceWriter,
   type StatusWriter,
@@ -24,6 +25,7 @@ export interface AgentRunControllerDeps {
   contexts: ExecutionContextFactory;
   executor: AgentExecutor;
   recorders: TranscriptRecorderFactory;
+  redactor: Redactor;
 }
 
 /**
@@ -106,7 +108,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       });
       await d.events.normal(done, "Succeeded", result.summary ?? `${outputs.length} artifact(s)`);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = d.redactor.redact(e instanceof Error ? e.message : String(e)); // ADR-0015
       const latest = await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name);
       if (latest) {
         await d.status.updateStatus({ ...latest, status: { ...latest.status!, phase: "Failed", finishedAt: d.clock.now().toISOString(), message } });

@@ -16,7 +16,7 @@ import {
   type StatusWriter,
   type WorkflowCompiler,
 } from "../../ports/index.ts";
-import { routeToDecision } from "../../workflow/gates.ts";
+import { routeToDecision } from "../../model/routes.ts";
 
 const TERMINAL = new Set(["Done", "Closed", "Failed"]);
 const DEFAULT_QUESTION = "The agent needs more information to continue. Please add details.";
@@ -167,7 +167,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           const decision: GateDecision =
             a.spec.decision === "approve"
               ? { action: "advance" }
-              : routeToDecision(stage.gate?.onReject, { action: "end", phase: "Closed", reason: "rejected" });
+              : routeToDecision<GateDecision>(stage.gate?.onReject, { action: "end", phase: "Closed", reason: "rejected" });
           return apply(wi, wf, stage, decision);
         }
 

@@ -5,7 +5,6 @@ import type {
   ConversationResponder,
   ModelResolver,
   ResourceReader,
-  StatusWriter,
   TranscriptAuthor,
   TranscriptMessage,
   TranscriptReader,
@@ -22,7 +21,6 @@ const EXPLAIN_RULES = `You are answering follow-up questions about a run you per
 export class ExplainResponder implements ConversationResponder {
   private readonly d: {
     reader: ResourceReader;
-    status: StatusWriter;
     transcripts: TranscriptReader;
     recorders: TranscriptRecorderFactory;
     models: ModelResolver;
@@ -35,10 +33,8 @@ export class ExplainResponder implements ConversationResponder {
     const ns = nsOf(conv);
     const run = await this.d.reader.get<AgentRun>("AgentRun", ns, conv.spec.agentRunRef.name);
     if (!run?.status?.transcriptRef) throw new Error("the original run has no transcript");
+    if (!conv.status?.transcriptRef) throw new Error("conversation is not ready yet (transcript not opened)");
     const recorder = await this.d.recorders.forConversation(conv);
-    if (!conv.status?.transcriptRef) {
-      conv = await this.d.status.updateStatus({ ...conv, status: { transcriptRef: recorder.ref, messageCount: 0 } });
-    }
     const original = await this.d.transcripts.read(run.status.transcriptRef);
     const history = await this.d.transcripts.read(recorder.ref);
     await recorder.record({ role: "user", author, content: humanMessage });
@@ -64,11 +60,6 @@ export class ExplainResponder implements ConversationResponder {
       answer = deterministicExplanation(run, original);
     }
     await recorder.record({ role: "assistant", author: agentAuthor, content: answer, meta: model ? { model: model.model } : { mode: "deterministic" } });
-    const fresh = (await this.d.reader.get<Conversation>("Conversation", ns, conv.metadata.name))!;
-    await this.d.status.updateStatus({
-      ...fresh,
-      status: { ...fresh.status, messageCount: history.length + 2, lastMessageAt: new Date().toISOString() },
-    });
     const all = await this.d.transcripts.read(recorder.ref);
     return all[all.length - 1];
   }

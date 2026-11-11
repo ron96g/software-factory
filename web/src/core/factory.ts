@@ -22,6 +22,7 @@ import { automatedGate, decisionGate, humanApprovalGate } from "./workflow/gates
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { createApprovalController, createClarificationController } from "./runtime/controllers/human-gates.ts";
+import { createConversationController } from "./runtime/controllers/conversation.ts";
 import { DefaultContextFactory } from "./agents/context-factory.ts";
 import { DefaultPromptBuilder } from "./agents/prompt-builder.ts";
 import { ExecutorChain, LLMExecutor, SkillHandlerExecutor } from "./agents/executors.ts";
@@ -108,9 +109,10 @@ export async function createFactory(o: FactoryOptions) {
   // ── controllers ──────────────────────────────────────────────────────
   const manager = new ControllerManager(store, o.log);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates }));
-  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders }));
+  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor }));
   manager.register(createClarificationController({ reader: store, status: store, clock }));
   manager.register(createApprovalController({ reader: store, status: store }));
+  manager.register(createConversationController({ reader: store, status: store, recorders }));
 
   // ── sources ──────────────────────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();
@@ -126,7 +128,7 @@ export async function createFactory(o: FactoryOptions) {
     compiler,
     syncer,
     transcripts,
-    responder: new ExplainResponder({ reader: store, status: store, transcripts, recorders, models }),
+    responder: new ExplainResponder({ reader: store, transcripts, recorders, models }),
   });
 
   return {

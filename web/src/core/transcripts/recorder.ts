@@ -49,7 +49,11 @@ class BoundRecorder implements TranscriptRecorder {
     this.redactor = redactor;
   }
   async record(m: NewTranscriptMessage): Promise<void> {
-    await this.writer.append(this.ref, { ...m, content: this.redactor.redact(m.content) });
+    await this.writer.append(this.ref, {
+      ...m,
+      content: this.redactor.redact(m.content),
+      meta: m.meta ? (JSON.parse(this.redactor.redact(JSON.stringify(m.meta))) as typeof m.meta) : undefined,
+    });
   }
 }
 

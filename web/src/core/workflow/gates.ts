@@ -1,13 +1,5 @@
 import type { EventRecorder, GateCheckLookup, GateDecision, GateEvaluator } from "../ports/index.ts";
-import type { GateRoute } from "../model/kinds.ts";
-
-const routeToDecision = (r: GateRoute | undefined, fallback: GateDecision): GateDecision => {
-  if (!r) return fallback;
-  if (r.next) return { action: "goto", stage: r.next };
-  if (r.end) return { action: "end", phase: r.end === "Done" ? "Done" : "Closed", reason: r.end };
-  if (r.block) return { action: "block", questions: [] };
-  return fallback;
-};
+import { routeToDecision } from "../model/routes.ts";
 
 /** Routes on the outcome of the stage's last agent run (`status.lastOutcome`). */
 export const decisionGate: GateEvaluator = {
@@ -51,4 +43,3 @@ export function automatedGate(checks: GateCheckLookup, events: EventRecorder): G
   };
 }
 
-export { routeToDecision };
