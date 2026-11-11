@@ -20,8 +20,9 @@ All diagrams in artifacts must be Mermaid code blocks. Cite code as repo:path:li
 const TOOLS_CONTRACT = (ctx: ExecutionContext) => {
   const outputs = ctx.run.spec.outputs.map((o) => o.name);
   return `## Working mode
-You work inside an isolated sandbox containing the repository workspace. Use the tools to inspect files, make changes
-and run commands (for example the tests). Work in small steps and verify your changes by running the relevant tests.
+You work on the work item's repository workspace (a pinned copy of the code) through the tools listed to you.
+Ground your work in the actual code: search and read the relevant files before drawing conclusions, and cite code as
+repo:path:line. If you have write/run tools, work in small steps and verify changes by running the relevant tests.
 When you are done, call the \`finish\` tool exactly once with:
 - summary: what you changed and why
 - artifacts: [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}]${outputs.includes("source-code") ? " (the diff is attached automatically)" : ""}

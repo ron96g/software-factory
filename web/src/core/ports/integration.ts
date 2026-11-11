@@ -4,7 +4,7 @@
  */
 import type { ModelProvider, Repository, Source, Workspace } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
-import type { SandboxArtifacts, SandboxExec, SandboxFiles } from "./sandbox.ts";
+import type { FileReader, FileWriter, SandboxArtifacts, SandboxExec } from "./sandbox.ts";
 
 // ── Generic registry (adapter lookup by `type`) ─────────────────────────
 
@@ -161,17 +161,33 @@ export interface AgentToolInfo {
   readonly name: string;
   readonly readOnly: boolean;
   readonly description: string;
-  /** True for tools that only exist inside a sandbox (ADR-0019). */
-  readonly requiresSandbox?: boolean;
-  /** Sandbox capabilities the tool is bound to. Nothing else is passed to `bind` (ISP). */
+  /** Capabilities the tool is bound to. Nothing else is passed to `bind` (ISP). */
   readonly capabilities?: readonly (keyof ToolCapabilities)[];
 }
 
-/** Sandbox capabilities a tool may be bound to; each tool takes only what it needs (ISP). */
+/** Code search over the item's workspaces; hits cite `repo:path:line`. */
+export interface CodeSearcher {
+  searchCode(query: string, options?: { glob?: string; maxHits?: number }): Promise<CodeHit[]>;
+}
+
+/**
+ * Capabilities a tool may be bound to; each tool takes only what it needs (ISP).
+ * `read` and `search` come from the workspace (no sandbox needed); `exec`, `write`, `artifacts` only from a sandbox.
+ */
 export interface ToolCapabilities {
+  read?: FileReader;
+  search?: CodeSearcher;
+  write?: FileWriter;
   exec?: SandboxExec;
-  files?: SandboxFiles;
   artifacts?: SandboxArtifacts;
+}
+
+/** Capabilities that require a sandbox runtime (ADR-0019). */
+export const SANDBOX_CAPABILITIES: readonly (keyof ToolCapabilities)[] = ["write", "exec", "artifacts"];
+
+/** Read-only, path-guarded access to the item's Ready workspaces (ADR-0021), without a sandbox. */
+export interface WorkspaceReaderFactory {
+  forWorkspaces(workspaces: Workspace[]): FileReader & CodeSearcher;
 }
 
 export interface BoundTool {

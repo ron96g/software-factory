@@ -35,11 +35,18 @@ export interface SandboxExec {
   exec(command: string, options?: ExecOptions): Promise<ExecResult>;
 }
 
-export interface SandboxFiles {
+/** Read-only file access (sandbox or a plain workspace). */
+export interface FileReader {
   readFile(path: string): Promise<string>;
-  writeFile(path: string, content: string): Promise<void>;
   listFiles(glob?: string): Promise<string[]>;
 }
+
+/** Write access, only ever provided by a sandbox (ADR-0019). */
+export interface FileWriter {
+  writeFile(path: string, content: string): Promise<void>;
+}
+
+export type SandboxFiles = FileReader & FileWriter;
 
 export interface SandboxArtifacts {
   /** Unified diff of the workspace against its starting point. */

@@ -12,6 +12,7 @@ spec:
   skillRefs:
     - name: unit-decomposition
     - name: domain-driven-design
+  tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)
   humanCounterpart: { role: tech-lead }
 ---
 

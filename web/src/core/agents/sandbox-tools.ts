@@ -13,10 +13,27 @@ const need = <T>(cap: T | undefined, what: string): T => {
 
 const tool = (info: Omit<AgentTool, "bind">, bind: (caps: ToolCapabilities) => BoundTool): AgentTool => ({ ...info, bind });
 
-/** Sandbox-bound agent tools (ADR-0019). Each binds only the capability it uses (ISP). */
+/**
+ * Agent tools. Each binds only the capability it declares (ISP). `read`/`search` work on the plain workspace;
+ * `write`/`exec`/`artifacts` require a sandbox (ADR-0019).
+ */
 export const SANDBOX_TOOLS: AgentTool[] = [
-  tool({ name: "list_files", readOnly: true, requiresSandbox: true, capabilities: ["files"], description: "List workspace files" }, (caps) => {
-    const files = need(caps.files, "files");
+  tool({ name: "search_code", readOnly: true, capabilities: ["search"], description: "Search the workspace code" }, (caps) => {
+    const search = need(caps.search, "search");
+    return {
+      schema: {
+        name: "search_code",
+        description: "Search the workspace for a literal string (case-insensitive). Returns repo:path:line matches.",
+        parameters: { type: "object", properties: { query: { type: "string" }, glob: { type: "string" } }, required: ["query"] },
+      },
+      invoke: async (a) => {
+        const hits = await search.searchCode(str(a.query, "query"), { glob: typeof a.glob === "string" ? a.glob : undefined, maxHits: 40 });
+        return clip(hits.map((h) => `${h.repository}:${h.path}:${h.line}: ${h.text}`).join("\n") || "(no matches)");
+      },
+    };
+  }),
+  tool({ name: "list_files", readOnly: true, capabilities: ["read"], description: "List workspace files" }, (caps) => {
+    const files = need(caps.read, "read");
     return {
       schema: {
         name: "list_files",
@@ -26,8 +43,8 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       invoke: async (a) => clip((await files.listFiles(typeof a.glob === "string" ? a.glob : undefined)).join("\n") || "(no files)"),
     };
   }),
-  tool({ name: "read_file", readOnly: true, requiresSandbox: true, capabilities: ["files"], description: "Read a workspace file" }, (caps) => {
-    const files = need(caps.files, "files");
+  tool({ name: "read_file", readOnly: true, capabilities: ["read"], description: "Read a workspace file" }, (caps) => {
+    const files = need(caps.read, "read");
     return {
       schema: {
         name: "read_file",
@@ -37,8 +54,8 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       invoke: async (a) => clip(await files.readFile(str(a.path, "path"))),
     };
   }),
-  tool({ name: "write_file", readOnly: false, requiresSandbox: true, capabilities: ["files"], description: "Create or overwrite a workspace file" }, (caps) => {
-    const files = need(caps.files, "files");
+  tool({ name: "write_file", readOnly: false, capabilities: ["write"], description: "Create or overwrite a workspace file" }, (caps) => {
+    const files = need(caps.write, "write");
     return {
       schema: {
         name: "write_file",
@@ -52,7 +69,7 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       },
     };
   }),
-  tool({ name: "run", readOnly: false, requiresSandbox: true, capabilities: ["exec"], description: "Run a shell command in the sandbox" }, (caps) => {
+  tool({ name: "run", readOnly: false, capabilities: ["exec"], description: "Run a shell command in the sandbox" }, (caps) => {
     const exec = need(caps.exec, "exec");
     return {
       schema: {
@@ -66,7 +83,7 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       },
     };
   }),
-  tool({ name: "git_diff", readOnly: true, requiresSandbox: true, capabilities: ["artifacts"], description: "Show the workspace diff" }, (caps) => {
+  tool({ name: "git_diff", readOnly: true, capabilities: ["artifacts"], description: "Show the workspace diff" }, (caps) => {
     const artifacts = need(caps.artifacts, "artifacts");
     return {
       schema: { name: "git_diff", description: "Show the diff of all changes made so far.", parameters: { type: "object", properties: {} } },

@@ -43,10 +43,11 @@ export class LLMExecutor implements AgentExecutor {
     this.tools = tools;
   }
   canExecute(ctx: ExecutionContext): boolean {
-    // JSON mode: only context-provided read-only tools; sandbox tools need the tool loop (ADR-0019).
+    // JSON mode fallback: read-only tools are optional here (context providers supply code hits instead);
+    // agents that need write/exec tools must use the tool loop with a sandbox (ADR-0019).
     return !!ctx.model && (ctx.agent.spec.tools ?? []).every((t) => {
       const tool = this.tools.get(t);
-      return !!tool && tool.readOnly && !tool.requiresSandbox;
+      return !!tool && tool.readOnly;
     });
   }
   async execute(ctx: ExecutionContext): Promise<AgentResult> {

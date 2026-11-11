@@ -13,6 +13,7 @@ spec:
     - name: human-clarification
   delegates:
     - agentRef: { name: code-researcher }
+  tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)
   humanCounterpart: { role: product-owner }
 ---
 

@@ -13,6 +13,9 @@ import {
   type PromptBuilder,
   type ResourceReader,
   type ToolCapabilities,
+  type WorkspaceReaderFactory,
+  type Sandbox,
+  SANDBOX_CAPABILITIES,
   type ToolLoopMessage,
   type ToolSchema,
 } from "../ports/index.ts";
@@ -39,32 +42,42 @@ export interface ToolLoopDeps {
   prompts: PromptBuilder;
   tools: Lookup<AgentTool>;
   environments: ExecutionEnvironmentSelector;
+  readers: WorkspaceReaderFactory;
   maxSteps?: number;
 }
 
 /**
- * Agentic tool loop inside a sandbox (ADR-0019). Every model turn, tool call and tool result is recorded (rule 14).
- * Runs only when: the model supports tool calling, the agent has a sandboxRef, a sandbox runtime is available,
- * and every declared tool is registered and bindable.
+ * Agentic tool loop (ADR-0019/0021). Every model turn, tool call and tool result is recorded (rule 14).
+ * Capabilities are assembled from what the agent's tools declare:
+ *  - only `read`/`search` → the item's workspace, read-only, no sandbox needed (analysis agents);
+ *  - any of `write`/`exec`/`artifacts` → a sandbox (needs sandboxRef + an available runtime).
  */
-export class SandboxToolLoopExecutor implements AgentExecutor {
-  readonly name = "sandbox-tool-loop";
+export class ToolLoopExecutor implements AgentExecutor {
+  readonly name = "tool-loop";
   private readonly d: ToolLoopDeps;
   constructor(d: ToolLoopDeps) {
     this.d = d;
   }
 
+  private neededCapabilities(ctx: ExecutionContext): Set<keyof ToolCapabilities> {
+    return new Set((ctx.agent.spec.tools ?? []).flatMap((t) => [...(this.d.tools.get(t)?.capabilities ?? [])]));
+  }
+
+  private needsSandbox(ctx: ExecutionContext): boolean {
+    const caps = this.neededCapabilities(ctx);
+    return SANDBOX_CAPABILITIES.some((c) => caps.has(c));
+  }
+
   canExecute(ctx: ExecutionContext): boolean {
     const tools = ctx.agent.spec.tools ?? [];
-    return (
+    const base =
       !!ctx.model &&
       canCallTools(ctx.model.client) &&
-      !!ctx.agent.spec.sandboxRef &&
-      !!ctx.sandbox?.available &&
       tools.length > 0 &&
       !tools.includes(FINISH.name) && // reserved protocol tool
-      tools.every((t) => !!this.d.tools.get(t)?.bind)
-    );
+      tools.every((t) => !!this.d.tools.get(t)?.bind);
+    if (!base) return false;
+    return this.needsSandbox(ctx) ? !!ctx.agent.spec.sandboxRef && !!ctx.sandbox?.available : ctx.workspaces.length > 0;
   }
 
   async execute(ctx: ExecutionContext): Promise<AgentResult> {
@@ -72,6 +85,15 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
     const sys = { type: "system" as const, id: "tool-loop" };
     const agentAuthor = { type: "agent" as const, id: ctx.agent.metadata.name };
+    const reader = ctx.workspaces.length ? this.d.readers.forWorkspaces(ctx.workspaces) : undefined;
+
+    if (!this.needsSandbox(ctx)) {
+      const prompt = this.d.prompts.build(ctx, "tools");
+      await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
+      await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
+      await ctx.transcript.record({ role: "note", author: sys, content: `read-only workspace access: ${ctx.workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10)}`).join(", ")}` });
+      return this.loop(ctx, prompt, { read: reader, search: reader }, async () => "");
+    }
 
     const profile = await resolveRef<SandboxProfile>(this.d.reader, "SandboxProfile", ctx.agent.spec.sandboxRef!, nsOf(ctx.agent));
     if (!profile) throw new Error(`sandbox profile "${ctx.agent.spec.sandboxRef!.name}" not found`);
@@ -93,16 +115,49 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
         content: `WARNING: runtime "${health.runtime}" is unsandboxed (isolation ${health.isolation}); profile minimum "${required}" waived by explicit opt-in (ADR-0020).`,
       });
     }
-    const sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
+    const sandbox: Sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
     await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name})` });
     try {
-      const all: ToolCapabilities = { exec: sandbox, files: sandbox, artifacts: sandbox };
+      return await this.loop(ctx, prompt, { read: sandbox, write: sandbox, exec: sandbox, artifacts: sandbox, search: reader }, () => sandbox.diff());
+    } catch (e) {
+      await ctx.transcript.record({ role: "note", author: sys, content: `tool loop failed: ${e instanceof Error ? e.message : String(e)}` });
+      throw e;
+    } finally {
+      try {
+        await sandbox.dispose();
+        await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} disposed` });
+      } catch (e) {
+        // never mask the original error; the cleanup controller removes orphans
+        await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} dispose failed: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    }
+  }
+
+  private async loop(
+    ctx: ExecutionContext,
+    prompt: { system: string; user: string },
+    all: ToolCapabilities,
+    diff: () => Promise<string>,
+  ): Promise<AgentResult> {
+    const model = ctx.model!;
+    if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
+    const sys = { type: "system" as const, id: "tool-loop" };
+    const agentAuthor = { type: "agent" as const, id: ctx.agent.metadata.name };
+    {
       const bound = new Map<string, BoundTool>();
+      const unavailable: string[] = [];
       for (const name of ctx.agent.spec.tools ?? []) {
         const tool = this.d.tools.get(name)!;
+        if ((tool.capabilities ?? []).some((c) => !all[c])) {
+          unavailable.push(name); // e.g. search_code without a workspace: offered tools shrink, nothing fails
+          continue;
+        }
         // ISP: a tool receives only the capabilities it declares.
         const caps: ToolCapabilities = Object.fromEntries((tool.capabilities ?? []).map((c) => [c, all[c]]));
         bound.set(name, tool.bind!(caps));
+      }
+      if (unavailable.length) {
+        await ctx.transcript.record({ role: "note", author: sys, content: `tools not available in this run (missing capability): ${unavailable.join(", ")}` });
       }
       const schemas = [...[...bound.values()].map((b) => b.schema), FINISH];
       const messages: ToolLoopMessage[] = [
@@ -129,7 +184,7 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
         for (const call of reply.toolCalls) {
           await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
           if (call.name === "finish") {
-            return await this.finish(ctx, call.arguments, sandbox.diff.bind(sandbox), { model, promptHash: promptHash(prompt), steps: step });
+            return await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step });
           }
           let result: string;
           const tool = bound.get(call.name);
@@ -143,17 +198,6 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
         }
       }
       throw new Error(`tool loop did not finish within ${maxSteps} steps`);
-    } catch (e) {
-      await ctx.transcript.record({ role: "note", author: sys, content: `tool loop failed: ${e instanceof Error ? e.message : String(e)}` });
-      throw e;
-    } finally {
-      try {
-        await sandbox.dispose();
-        await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} disposed` });
-      } catch (e) {
-        // never mask the original error; the cleanup controller (S4) removes orphans
-        await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} dispose failed: ${e instanceof Error ? e.message : String(e)}` });
-      }
     }
   }
 

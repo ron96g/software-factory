@@ -10,7 +10,7 @@ spec:
   role: QA / Verification Engineer
   skillRefs:
     - name: verification
-  tools: [list_files, read_file, run]   # sandbox tools, no write access
+  tools: [search_code, list_files, read_file, run]   # sandbox tools, no write access
   humanCounterpart: { role: tech-lead }
 ---
 

@@ -86,7 +86,7 @@ test("S3: developer agent fixes code and runs tests in the sandbox via the tool 
     assert.ok(detail, "verify step finished");
 
     const dev = detail.runs.find((r) => r.spec.step === "write-code")!;
-    assert.equal(dev.status?.provenance?.executor, "sandbox-tool-loop");
+    assert.equal(dev.status?.provenance?.executor, "tool-loop");
     assert.equal(dev.status?.provenance?.executionEnvironment, "in-memory@test");
     const code = detail.artifacts.find((a) => a.spec.artifactTypeRef.name === "source-code")!;
     assert.match(code.spec.content, /\+export const sum = \(a, b\) => a \+ b;/);
@@ -99,7 +99,7 @@ test("S3: developer agent fixes code and runs tests in the sandbox via the tool 
     assert.ok(t.some((m) => /disposed/.test(m.content)), "sandbox disposed");
 
     const ver = detail.runs.find((r) => r.spec.step === "verify-against-spec")!;
-    assert.equal(ver.status?.provenance?.executor, "sandbox-tool-loop");
+    assert.equal(ver.status?.provenance?.executor, "tool-loop");
     assert.ok(detail.artifacts.some((a) => a.spec.artifactTypeRef.name === "verification-report" && /pass/.test(a.spec.content)));
 
     assert.ok(sandboxes.sandboxes.length >= 2 && sandboxes.sandboxes.every((s) => s.disposed), "one sandbox per run, all disposed");

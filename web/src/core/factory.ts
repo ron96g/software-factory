@@ -44,7 +44,8 @@ import { HostEnvironment } from "./adapters/sandbox/host.ts";
 import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
-import { SandboxToolLoopExecutor } from "./agents/tool-loop.ts";
+import { ToolLoopExecutor } from "./agents/tool-loop.ts";
+import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 
 /** Composition-root convenience alias; consumers depend on the individual ports. */
@@ -155,7 +156,7 @@ export async function createFactory(o: FactoryOptions) {
   });
   const prompts = new DefaultPromptBuilder();
   const executor = new ExecutorChain([
-    new SandboxToolLoopExecutor({ reader: store, prompts, tools, environments }),
+    new ToolLoopExecutor({ reader: store, prompts, tools, environments, readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()) }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
     new SimulatedExecutor(),
