@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
-import { deriveGateEvidence } from "./app/gate-evidence.ts";
+import { deriveGateEvidence, parseVerdict } from "./app/gate-evidence.ts";
 import { createFactory } from "./factory.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 import type { AgentRun, FactoryEvent } from "./model/kinds.ts";
@@ -16,6 +16,18 @@ const run = (name: string, step: string, outcome: string, outcomes = ["pass", "p
   }) as unknown as AgentRun;
 const ev = (reason: string, message: string, t: string): FactoryEvent =>
   ({ kind: "Event", metadata: { name: t, creationTimestamp: t }, spec: { reason, message, type: reason === "CheckFailed" ? "Warning" : "Normal" } }) as unknown as FactoryEvent;
+
+test("X5: verdicts stated only in text count (older runs / agents ignoring the outcome field)", () => {
+  assert.equal(parseVerdict("Verdict: FAIL (coverage)\nThe spec's quality gate…"), "fail");
+  assert.equal(parseVerdict("**Verdict:** partial"), "partial");
+  assert.equal(parseVerdict("so the verdict is FAIL on coverage."), "fail");
+  assert.equal(parseVerdict("## Verdict\n\n**PASS**"), "pass");
+  assert.equal(parseVerdict("all good"), undefined);
+  const legacy = { kind: "AgentRun", metadata: { name: "x-verify-0-r7" }, spec: { stage: "verify", step: "verify-against-spec", agentRef: { name: "verifier" } }, status: { phase: "Succeeded", result: { summary: "Verification: tsc is clean. The verdict is FAIL on coverage." } } } as unknown as AgentRun;
+  const e = deriveGateEvidence({ runs: [legacy], events: [], clarifications: [] });
+  assert.equal(e.status, "blocking");
+  assert.match(e.items[0].label, /fail \(from report text\)/);
+});
 
 test("X5: failures recorded before the latest code change are downgraded (stale)", () => {
   const dev = { kind: "AgentRun", metadata: { name: "x-implement-0-r6" }, spec: { stage: "implement", step: "write-code", agentRef: { name: "developer" }, outputs: [{ name: "source-code" }] }, status: { phase: "Succeeded", finishedAt: "2026-01-01T00:00:05Z" } } as unknown as AgentRun;

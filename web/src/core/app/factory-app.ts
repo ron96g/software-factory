@@ -120,7 +120,7 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    const evidence = deriveGateEvidence({ runs, events, clarifications });
+    const evidence = deriveGateEvidence({ runs, events, clarifications, artifacts });
     return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages };
   }
 
@@ -162,12 +162,13 @@ export class FactoryApp
     if (decision === "approve") {
       // ADR-0027: failing evidence can't be approved by accident — enforced here, not only in the UI.
       const owned = { kind: "WorkItem", name: a.spec.workItemRef.name, namespace: this.ns };
-      const [runs, events, clarifications] = await Promise.all([
+      const [runs, events, clarifications, artifacts] = await Promise.all([
         this.d.reader.list<AgentRun>("AgentRun", { namespace: this.ns, ownedBy: owned }),
         this.d.reader.list<FactoryEvent>("Event", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: a.spec.workItemRef.name } }),
         this.d.reader.list<Clarification>("Clarification", { namespace: this.ns, ownedBy: owned }),
+        this.d.reader.list<Artifact>("Artifact", { namespace: this.ns, ownedBy: owned }),
       ]);
-      const evidence = deriveGateEvidence({ runs, events, clarifications });
+      const evidence = deriveGateEvidence({ runs, events, clarifications, artifacts });
       if (evidence.status === "blocking") {
         const reasons = evidence.items.filter((i) => i.severity === "blocking").map((i) => i.label).join("; ");
         if (!override) throw new Error(`blocking evidence (${reasons}); approving requires an explicit override with a reason`);

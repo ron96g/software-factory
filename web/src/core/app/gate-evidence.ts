@@ -1,4 +1,4 @@
-import type { AgentRun, Clarification, FactoryEvent } from "../model/kinds.ts";
+import type { AgentRun, Artifact, Clarification, FactoryEvent } from "../model/kinds.ts";
 import type { EvidenceItem, EvidenceSeverity, GateEvidence } from "../ports/index.ts";
 
 /** Outcome → severity. Unknown outcomes are informational (ok). */
@@ -17,7 +17,17 @@ const roundOf = (r: AgentRun) => Number(/-r(\d+)(?:-replay-\d+)?$/.exec(r.metada
  * ADR-0027: pure derivation of gate evidence from the latest round of every step plus check events.
  * Replays never count (they don't change the item).
  */
-export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[] }): GateEvidence {
+const VERDICT_ARTIFACTS = new Set(["verification-report", "code-review-report", "review-report"]);
+
+/** Free-text verdict, e.g. "Verdict: FAIL (coverage)", "**Verdict:** partial", "the verdict is FAIL". */
+export function parseVerdict(text: string | undefined): "pass" | "partial" | "fail" | undefined {
+  const m = text && /\bverdict\b[^a-z]{0,12}(?:is\s+)?\**\s*(pass(?:ed)?|partial|fail(?:ed)?)\b/i.exec(text);
+  if (!m) return undefined;
+  const v = m[1].toLowerCase();
+  return v.startsWith("pass") ? "pass" : v.startsWith("fail") ? "fail" : "partial";
+}
+
+export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[]; artifacts?: Artifact[] }): GateEvidence {
   const items: EvidenceItem[] = [];
   // Evidence recorded before the latest code change is stale (e.g. a check that failed before the developer fixed it).
   const lastCodeChange = input.runs
@@ -38,14 +48,26 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
     if (!prev || roundOf(r) >= roundOf(prev)) latest.set(key, r);
   }
   for (const r of latest.values()) {
-    const outcome = r.status?.result?.outcome;
-    if (!outcome || !r.spec.outcomes?.length) continue; // only structured verdicts/decisions count
+    let outcome = r.spec.outcomes?.length ? r.status?.result?.outcome : undefined;
+    let parsed = false;
+    if (!outcome) {
+      // Fallback: a verdict stated only in text (older runs, or an agent that ignored the outcome field) must still count.
+      // Only report artifacts, and only their beginning (the verdict comes first): research notes may *quote* code
+      // that contains "Verdict: FAIL" and must not count.
+      const reports = (input.artifacts ?? []).filter(
+        (a) => a.spec.producedBy?.agentRunRef.name === r.metadata.name && VERDICT_ARTIFACTS.has(a.spec.artifactTypeRef.name),
+      );
+      const texts = [r.status?.result?.summary, ...reports.map((a) => a.spec.content.slice(0, 600))];
+      outcome = texts.map(parseVerdict).find(Boolean);
+      parsed = !!outcome;
+    }
+    if (!outcome) continue;
     const produced = r.spec.outputs?.some((o) => o.name === "source-code");
     const at = produced ? undefined : r.status?.finishedAt;
     const severity = downgrade(OUTCOME_SEVERITY[outcome] ?? "ok", at);
     items.push({
       severity,
-      label: `${r.spec.agentRef.name} · ${r.spec.step}: ${outcome}${OUTCOME_SEVERITY[outcome] ? staleNote(at) : ""}`,
+      label: `${r.spec.agentRef.name} · ${r.spec.step}: ${outcome}${parsed ? " (from report text)" : ""}${OUTCOME_SEVERITY[outcome] ? staleNote(at) : ""}`,
       detail: r.status?.result?.summary ?? "",
       stage: r.spec.stage,
       runName: r.metadata.name,
