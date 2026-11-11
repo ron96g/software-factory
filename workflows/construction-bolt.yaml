@@ -53,6 +53,7 @@ spec:
             - name: verify-against-spec
               agentRef: { name: verifier }
               skillRefs: [{ name: verification }]
+              outcomes: [pass, partial, fail]    # structured verdict, shown as gate evidence (ADR-0027)
               inputs:  [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }]
               outputs: [{ artifactRef: { name: verification-report } }]
           gate:

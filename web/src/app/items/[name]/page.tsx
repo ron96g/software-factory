@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Drawer,
   Grid,
   Group,
@@ -14,6 +15,7 @@ import {
   Tabs,
   Text,
   Textarea,
+  ThemeIcon,
   Title,
   Tooltip,
 } from "@mantine/core";
@@ -21,7 +23,7 @@ import { IconAlertTriangle, IconCheck, IconChevronLeft, IconGitPullRequest, Icon
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
 import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
-import type { WorkItemDetail } from "@/core/ports/app.ts";
+import type { GateEvidence, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
@@ -89,7 +91,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Alert>
       )}
       {openClar && <ClarificationPanel c={openClar} />}
-      {openAppr && <ApprovalPanel a={openAppr} />}
+      {openAppr && <ApprovalPanel a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
@@ -214,14 +216,17 @@ function StageProgress({ d }: { d: WorkItemDetail }) {
         {d.stages.map((s, i) => {
           const current = i === idx && !done;
           const passed = done || i < idx;
-          const color = PHASE_COLOR[s.lifecyclePhase] ?? "gray";
+          const verdict = d.evidence.items.find((i) => i.stage === s.name && i.severity !== "ok");
+          const color = verdict?.severity === "blocking" ? "red" : verdict?.severity === "warning" ? "yellow" : (PHASE_COLOR[s.lifecyclePhase] ?? "gray");
           return (
-            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}`}>
+            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}${verdict ? ` · ${verdict.label}` : ""}`}>
               <Badge
                 size="lg"
                 color={current && st?.phase === "Blocked" ? "orange" : current && st?.phase === "AwaitingApproval" ? "yellow" : color}
                 variant={current ? "filled" : passed ? "light" : "outline"}
-                leftSection={passed ? <IconCheck size={12} /> : s.gate === "human-approval" ? <IconHandStop size={12} /> : undefined}
+                leftSection={
+                  verdict?.severity === "blocking" ? <IconX size={12} /> : passed ? <IconCheck size={12} /> : s.gate === "human-approval" ? <IconHandStop size={12} /> : undefined
+                }
                 style={{ opacity: passed || current ? 1 : 0.55 }}
               >
                 {s.name}
@@ -272,17 +277,81 @@ function ClarificationPanel({ c }: { c: Clarification }) {
   );
 }
 
-function ApprovalPanel({ a }: { a: Approval }) {
+const SEVERITY = {
+  blocking: { color: "red", icon: IconX, label: "Blocking" },
+  warning: { color: "yellow", icon: IconAlertTriangle, label: "Warning" },
+  ok: { color: "teal", icon: IconCheck, label: "OK" },
+} as const;
+
+function EvidenceList({ evidence, onOpenRun }: { evidence: GateEvidence; onOpenRun: (n: string) => void }) {
+  if (!evidence.items.length) {
+    return (
+      <Text size="sm" c="dimmed">
+        No structured verdicts or checks recorded yet.
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={6}>
+      {evidence.items.map((i, idx) => {
+        const S = SEVERITY[i.severity];
+        return (
+          <Group key={idx} gap={8} wrap="nowrap" align="flex-start">
+            <ThemeIcon size="sm" radius="xl" color={S.color} variant={i.severity === "ok" ? "light" : "filled"}>
+              <S.icon size={12} />
+            </ThemeIcon>
+            <div style={{ minWidth: 0 }}>
+              <Text size="sm" fw={i.severity === "ok" ? 400 : 600}>
+                {i.label}
+                {i.runName && (
+                  <Anchor size="xs" ml={6} onClick={() => onOpenRun(i.runName!)}>
+                    open run
+                  </Anchor>
+                )}
+              </Text>
+              {i.detail && (
+                <Text size="xs" c="dimmed" lineClamp={2}>
+                  {i.detail}
+                </Text>
+              )}
+            </div>
+          </Group>
+        );
+      })}
+    </Stack>
+  );
+}
+
+function ApprovalPanel({ a, evidence, onOpenRun }: { a: Approval; evidence: GateEvidence; onOpenRun: (n: string) => void }) {
   const [comment, setComment] = useState("");
+  const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const blocking = evidence.status === "blocking";
   const decide = async (decision: "approve" | "reject") => {
     setBusy(decision);
-    await act(`/api/approvals/${a.metadata.name}/decide`, { decision, comment }, decision === "approve" ? "Approved" : "Rejected");
+    await act(`/api/approvals/${a.metadata.name}/decide`, { decision, comment, override: decision === "approve" && blocking ? override : undefined }, decision === "approve" ? "Approved" : "Rejected");
     setBusy(null);
   };
+  const color = blocking ? "red" : evidence.status === "warning" ? "yellow" : "teal";
   return (
-    <Alert color="yellow" variant="outline" styles={ALERT_STYLES} title={`Gate: ${a.spec.stage} needs human approval`} icon={<IconHandStop />}>
-      <Stack gap="xs" mt="xs">
+    <Alert color={color} variant="outline" styles={ALERT_STYLES} title={`Gate: ${a.spec.stage} needs human approval`} icon={blocking ? <IconAlertTriangle /> : <IconHandStop />}>
+      <Stack gap="sm" mt="xs">
+        {blocking && (
+          <Alert color="red" variant="filled" icon={<IconX />} title="Failing evidence: do not release by accident">
+            The verification or checks failed. Approving requires an explicit override with a reason, which is recorded.
+          </Alert>
+        )}
+        <Card withBorder p="sm" className="sf-surface">
+          <Group justify="space-between" mb={6}>
+            <Text size="sm" fw={600}>
+              Evidence
+            </Text>
+            <Badge color={color} variant={blocking ? "filled" : "light"}>
+              {SEVERITY[evidence.status].label}
+            </Badge>
+          </Group>
+          <EvidenceList evidence={evidence} onOpenRun={onOpenRun} />
+        </Card>
         {a.spec.approvers.length > 0 && (
           <Text size="sm">
             Approvers: {a.spec.approvers.map((x) => x.role).join(", ")} <Text span size="xs" c="dimmed">(role checks arrive in v0.4)</Text>
@@ -295,13 +364,34 @@ function ApprovalPanel({ a }: { a: Approval }) {
             ))}
           </List>
         ) : null}
-        <Textarea placeholder="Comment (optional)" autosize value={comment} onChange={(e) => setComment(e.currentTarget.value)} />
+        <Textarea
+          placeholder={blocking ? "Reason for approving despite failures (required, min. 10 characters)" : "Comment (optional)"}
+          autosize
+          value={comment}
+          onChange={(e) => setComment(e.currentTarget.value)}
+          error={blocking && override && comment.trim().length < 10 ? "A reason of at least 10 characters is required" : undefined}
+        />
+        {blocking && (
+          <Checkbox
+            color="red"
+            label="I understand the evidence is failing and want to approve anyway"
+            checked={override}
+            onChange={(e) => setOverride(e.currentTarget.checked)}
+          />
+        )}
         <Group justify="flex-end">
-          <Button variant="default" color="red" leftSection={<IconX size={14} />} loading={busy === "reject"} onClick={() => decide("reject")}>
+          <Button variant={blocking ? "filled" : "default"} color="red" leftSection={<IconX size={14} />} loading={busy === "reject"} onClick={() => decide("reject")}>
             Reject
           </Button>
-          <Button color="teal" leftSection={<IconCheck size={14} />} loading={busy === "approve"} onClick={() => decide("approve")}>
-            Approve
+          <Button
+            color={blocking ? "red" : "teal"}
+            variant={blocking ? "outline" : "filled"}
+            leftSection={<IconCheck size={14} />}
+            loading={busy === "approve"}
+            disabled={blocking && (!override || comment.trim().length < 10)}
+            onClick={() => decide("approve")}
+          >
+            {blocking ? "Approve despite failures" : "Approve"}
           </Button>
         </Group>
       </Stack>
@@ -320,6 +410,16 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
           <Accordion.Control>
             <Group gap="xs">
               <Badge variant="light">{a.spec.artifactTypeRef.name}</Badge>
+              {(() => {
+                const outcome = d.runs.find((r) => r.metadata.name === a.spec.producedBy?.agentRunRef.name)?.status?.result?.outcome;
+                if (!outcome) return null;
+                const sev = ({ fail: "red", partial: "yellow", pass: "teal", "changes-requested": "yellow", approve: "teal" } as Record<string, string>)[outcome] ?? "gray";
+                return (
+                  <Badge color={sev} variant={sev === "red" ? "filled" : "light"} size="sm">
+                    {outcome}
+                  </Badge>
+                );
+              })()}
               {a.metadata.labels?.["factory.ai-dlc.io/replay"] && (
                 <Badge variant="outline" color="grape" size="xs">
                   replay

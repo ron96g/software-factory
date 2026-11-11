@@ -37,6 +37,8 @@ export interface StepSpec {
   skillRefs?: Ref[];
   /** Narrows the agent's tools for this step (least privilege); `[]` = no tools. Can't add tools the agent lacks. */
   tools?: string[];
+  /** Allowed outcomes (structured verdict), e.g. `[pass, partial, fail]` (ADR-0027). */
+  outcomes?: string[];
   model?: { tier?: string };
   inputs?: { artifactRef: Ref }[];
   outputs?: { artifactRef: Ref }[];

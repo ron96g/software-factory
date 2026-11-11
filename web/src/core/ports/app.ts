@@ -43,6 +43,8 @@ export interface WorkItemDetail {
   workspaces: Workspace[];
   /** Outbound effects (comments, pull requests) and their delivery status/result. */
   outbox: OutboxMessage[];
+  /** Evidence for human gates, derived from the latest round (ADR-0027). */
+  evidence: GateEvidence;
   events: FactoryEvent[];
   /** Stage names of the compiled workflow, in order (for progress display). */
   stages: { name: string; lifecyclePhase: string; gate?: string }[];
@@ -59,9 +61,29 @@ export interface WorkItemCommands {
   deleteWorkItem(p: Principal, name: string): Promise<void>;
 }
 
+export type EvidenceSeverity = "ok" | "warning" | "blocking";
+
+export interface EvidenceItem {
+  severity: EvidenceSeverity;
+  /** e.g. "Verification verdict", "Check: build". */
+  label: string;
+  detail: string;
+  stage?: string;
+  /** Run that produced it (for linking to the transcript). */
+  runName?: string;
+}
+
+export interface GateEvidence {
+  status: EvidenceSeverity;
+  items: EvidenceItem[];
+}
+
 export interface HumanActions {
   answerClarification(p: Principal, name: string, answers: string[]): Promise<Clarification>;
-  decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string): Promise<Approval>;
+  /**
+   * ADR-0027: approving while the item's evidence is `blocking` requires `override: true` and a reason (comment ≥ 10 chars).
+   */
+  decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean): Promise<Approval>;
 }
 
 export interface SourceActions {

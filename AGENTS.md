@@ -160,6 +160,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X2 | Usable timeline | Fixed-height scrollable (sticky) timeline, filter (key events / all / warnings), compact entries | Long items keep the page short; key events findable at a glance | ✅ |
 | X3 | Structured agent runs | Runs grouped by stage (workflow order) → rounds (latest open, older superseded) → step rows (agent, outcome, duration, executor, summary); replays nested | The current state and history of runs are understandable without opening transcripts | ✅ |
 | X4 | Ask about the work item | `Conversation.purpose` (`explain` run · `explain-item` whole item), responders registered by purpose, item responder grounded in all runs/artifacts/human input/events; "Ask about this item" chat | "What did the product owner do?" answered without opening the PO run | ✅ (ADR-0026) |
+| X5 | Clear gates | Structured verdicts (`StepSpec.outcomes`, verifier `pass/partial/fail`), gate evidence (ok/warning/blocking) at every gate, server-enforced override with reason when blocking, verdict badges on artifacts + stage chips (ADR-0027) | A failed verification can't be approved by accident; the reason is visible at the gate | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

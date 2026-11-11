@@ -233,6 +233,7 @@ export async function createFactory(o: FactoryOptions) {
     environments,
     models,
     controllerHealth: reconcileErrors,
+    events,
     responders,
   });
 

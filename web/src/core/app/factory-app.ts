@@ -26,6 +26,7 @@ import type {
   ExecutionEnvironmentSelector,
   ModelResolver,
   ControllerHealth,
+  EventRecorder,
   ItemConversationActions,
   Lookup,
   KindLookup,
@@ -44,6 +45,7 @@ import type {
   WorkItemQueries,
 } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
+import { deriveGateEvidence } from "./gate-evidence.ts";
 
 export interface FactoryAppDeps {
   reader: ResourceReader;
@@ -58,6 +60,8 @@ export interface FactoryAppDeps {
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
   controllerHealth: ControllerHealth;
+  /** Audit trail for human overrides (ADR-0027). */
+  events?: EventRecorder;
 }
 
 const slug = (s: string) =>
@@ -116,7 +120,8 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, events, stages };
+    const evidence = deriveGateEvidence({ runs, events, clarifications });
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages };
   }
 
   async createWorkItem(p: Principal, input: NewWorkItemInput): Promise<WorkItem> {
@@ -150,10 +155,27 @@ export class FactoryApp
     return this.d.writer.update({ ...c, spec: { ...c.spec, answers: cleaned, answeredBy: p.id } });
   }
 
-  async decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string): Promise<Approval> {
+  async decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean): Promise<Approval> {
     const a = await this.d.reader.get<Approval>("Approval", this.ns, name);
     if (!a) throw new Error(`approval ${name} not found`);
     if (a.spec.decision) throw new Error("already decided");
+    if (decision === "approve") {
+      // ADR-0027: failing evidence can't be approved by accident — enforced here, not only in the UI.
+      const owned = { kind: "WorkItem", name: a.spec.workItemRef.name, namespace: this.ns };
+      const [runs, events, clarifications] = await Promise.all([
+        this.d.reader.list<AgentRun>("AgentRun", { namespace: this.ns, ownedBy: owned }),
+        this.d.reader.list<FactoryEvent>("Event", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: a.spec.workItemRef.name } }),
+        this.d.reader.list<Clarification>("Clarification", { namespace: this.ns, ownedBy: owned }),
+      ]);
+      const evidence = deriveGateEvidence({ runs, events, clarifications });
+      if (evidence.status === "blocking") {
+        const reasons = evidence.items.filter((i) => i.severity === "blocking").map((i) => i.label).join("; ");
+        if (!override) throw new Error(`blocking evidence (${reasons}); approving requires an explicit override with a reason`);
+        if (!comment || comment.trim().length < 10) throw new Error("an override needs a reason (at least 10 characters)");
+        const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, a.spec.workItemRef.name);
+        if (wi) await this.d.events?.warning(wi, "ApprovedDespiteFailures", `${a.spec.stage} approved by ${p.id} despite: ${reasons}. Reason: ${comment.trim()}`);
+      }
+    }
     return this.d.writer.update({ ...a, spec: { ...a.spec, decision, decidedBy: p.id, comment } });
   }
 
