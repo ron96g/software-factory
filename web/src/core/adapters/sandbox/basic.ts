@@ -35,7 +35,7 @@ export class InMemorySandboxEnvironment implements ExecutionEnvironment {
     return { runtime: this.runtime, available: true, isolation: "container", version: "test", message: "in-memory fake (tests only)" };
   }
   async prepare(spec: SandboxSpec): Promise<Sandbox> {
-    const s = new InMemorySandbox(`mem-${spec.run.metadata.name}`, { ...this.seed }, this.handlers);
+    const s = new InMemorySandbox(`mem-${spec.run?.metadata.name ?? spec.workspaces[0]?.metadata.name ?? "check"}`, { ...this.seed }, this.handlers);
     this.sandboxes.push(s);
     return s;
   }

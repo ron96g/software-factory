@@ -3,10 +3,11 @@
  * Gate types and automated checks are extension points (Strategy + Registry).
  */
 import type { Ref } from "../model/resource.ts";
-import type { GateSpec, StepSpec, WorkItem } from "../model/kinds.ts";
+import type { GateSpec, StageSpec, StepSpec, WorkItem } from "../model/kinds.ts";
 
 export interface CompiledStage {
   name: string;
+  publish?: StageSpec["publish"];
   /** AI-DLC phase (inception / construction / operations). */
   lifecyclePhase: string;
   /** Workflow that declared the stage (sub-workflows are inlined). */
@@ -34,11 +35,13 @@ export interface WorkflowCompiler {
 /** What should happen once a stage's steps are done. */
 export type GateDecision =
   | { action: "advance" }
-  | { action: "goto"; stage: string }
+  | { action: "goto"; stage: string; /** Stage whose failed-check budget this retry consumes (ADR-0023). */ retryOf?: string }
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
   | { action: "await-approval" }
   | { action: "block"; questions: string[] }
-  | { action: "fail"; reason: string };
+  | { action: "fail"; reason: string }
+  /** Checks still running in the background; re-evaluate later (never block a reconcile). */
+  | { action: "wait"; retryAfterMs: number };
 
 export interface GateContext {
   workItem: WorkItem;

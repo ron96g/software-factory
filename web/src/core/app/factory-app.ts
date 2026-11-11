@@ -8,6 +8,7 @@ import type {
   Source,
   WorkItem,
   Workspace,
+  OutboxMessage,
 } from "../model/kinds.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
@@ -90,13 +91,14 @@ export class FactoryApp
     const workItem = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
     if (!workItem) return null;
     const owned = { kind: "WorkItem", name, namespace: this.ns };
-    const [runs, artifacts, clarifications, approvals, conversations, workspaces, events] = await Promise.all([
+    const [runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, events] = await Promise.all([
       this.d.reader.list<AgentRun>("AgentRun", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Artifact>("Artifact", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Clarification>("Clarification", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Approval>("Approval", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Conversation>("Conversation", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Workspace>("Workspace", { namespace: this.ns, ownedBy: owned }),
+      this.d.reader.list<OutboxMessage>("OutboxMessage", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<FactoryEvent>("Event", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: name } }),
     ]);
     let stages: WorkItemDetail["stages"] = [];
@@ -108,7 +110,7 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, events, stages };
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, events, stages };
   }
 
   async createWorkItem(p: Principal, input: NewWorkItemInput): Promise<WorkItem> {

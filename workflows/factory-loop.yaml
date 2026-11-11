@@ -91,6 +91,8 @@ spec:
     - name: operations
       stages:
         - name: ship
+          publish:                 # ADR-0023: commit + push factory/<item>, open a draft PR (via the outbox)
+            pullRequest: { draft: true }
           steps:
             - name: release
               agentRef: { name: release-manager }

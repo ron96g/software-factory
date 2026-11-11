@@ -17,7 +17,7 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconCheck, IconChevronLeft, IconHandStop, IconX } from "@tabler/icons-react";
+import { IconAlertTriangle, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX } from "@tabler/icons-react";
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
 import type { AgentRun, Approval, Clarification } from "@/core/model/kinds.ts";
@@ -133,6 +133,22 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
                         {w.status.path}
                       </Text>
                     )}
+                    {d.outbox
+                      .filter((m) => m.spec.action === "open-pull-request" && m.spec.payload.workspace === w.metadata.name)
+                      .map((m) => (
+                        <Group key={m.metadata.name} gap={6}>
+                          <IconGitPullRequest size={14} />
+                          {typeof m.status?.result?.url === "string" ? (
+                            <Anchor href={m.status.result.url} target="_blank" size="sm" fw={500}>
+                              Draft PR #{String(m.status.result.number)}
+                            </Anchor>
+                          ) : (
+                            <Text size="xs" c={m.status?.phase === "Failed" ? "red" : "dimmed"}>
+                              PR {m.status?.phase === "Failed" ? `failed: ${m.status.lastError ?? ""}` : `pending${m.status?.attempts ? ` (attempt ${m.status.attempts}${m.status.lastError ? `: ${m.status.lastError}` : ""})` : "…"}`}
+                            </Text>
+                          )}
+                        </Group>
+                      ))}
                     {w.status?.message && (
                       <Text size="xs" c="red">
                         {w.status.message}

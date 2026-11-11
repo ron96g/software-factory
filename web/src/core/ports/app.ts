@@ -12,6 +12,7 @@ import type {
   Source,
   WorkItem,
   Workspace,
+  OutboxMessage,
 } from "../model/kinds.ts";
 import type { Resource } from "../model/resource.ts";
 import type { TranscriptMessage } from "./transcripts.ts";
@@ -39,6 +40,8 @@ export interface WorkItemDetail {
   approvals: Approval[];
   conversations: Conversation[];
   workspaces: Workspace[];
+  /** Outbound effects (comments, pull requests) and their delivery status/result. */
+  outbox: OutboxMessage[];
   events: FactoryEvent[];
   /** Stage names of the compiled workflow, in order (for progress display). */
   stages: { name: string; lifecyclePhase: string; gate?: string }[];

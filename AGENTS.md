@@ -148,7 +148,7 @@ text in Jira comments.
 | S5c | Real checks + draft PR | `build`/`unit-tests` gate checks in the workspace, push branch + draft PR through the outbox | End-to-end PR from a work item | ⏳ next |
 | U1 | Navigation | Left navbar with entities (work items, definitions, workspaces); generic resource list/detail views | Every kind browsable from the UI | ✅ |
 
-Known v0.3 limits: workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
+Known v0.3 limits: a reconcile that keeps failing is only visible in the server log (no Warning event yet); workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
 #### Later increments

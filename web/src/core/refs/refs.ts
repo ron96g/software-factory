@@ -37,7 +37,7 @@ export function* walkRefs(node: unknown, path = ""): Generator<{ field: string; 
     for (let i = 0; i < node.length; i++) yield* walkRefs(node[i], `${path}[${i}]`);
   } else if (node && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
-      if (k in REF_FIELDS) {
+      if (k in REF_FIELDS && v !== undefined && v !== null) {
         for (const ref of Array.isArray(v) ? v : [v]) yield { field: k, ref, path: `${path}.${k}` };
       }
       yield* walkRefs(v, `${path}.${k}`);

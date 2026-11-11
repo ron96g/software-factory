@@ -203,18 +203,25 @@ export interface AgentTool extends AgentToolInfo {
 
 // ── Outbox (outbound side effects) ───────────────────────────────────────
 
-/** Delivers one outbox action type (e.g. "comment") to a source. */
+export interface OutboxDelivery {
+  /** Resolved source, when the message targets a source item. */
+  source?: Source;
+  externalId?: string;
+  payload: Record<string, unknown>;
+}
+
+/** Delivers one outbox action type (e.g. "comment", "open-pull-request"). May return a result (e.g. `{ url }`). */
 export interface OutboxHandler {
   readonly action: string;
-  deliver(source: Source, externalId: string, payload: Record<string, unknown>): Promise<void>;
+  deliver(msg: OutboxDelivery): Promise<Record<string, unknown> | void>;
 }
 
 export interface OutboundMessage {
   /** Deterministic idempotency key (becomes the OutboxMessage name). Enqueueing twice is a no-op. */
   key: string;
   namespace: string;
-  source: string;
-  externalId: string;
+  source?: string;
+  externalId?: string;
   action: string;
   payload: Record<string, unknown>;
   /** Owner for cascade delete (usually the WorkItem). */
@@ -259,4 +266,32 @@ export interface WorkspaceCleaner {
 /** Level-triggered cleanup: removes workspace files whose resource no longer exists. Returns removed paths. */
 export interface WorkspaceSweeper {
   sweep(live: { workItem: string; repository: string }[]): Promise<string[]>;
+}
+
+// ── Checks & publishing (ADR-0023) ──────────────────────────────────────
+
+/** Runs a command in a workspace through the selected sandbox runtime. */
+export interface CommandRunner {
+  run(workspace: Workspace, repositories: Repository[], command: string, timeoutMs?: number): Promise<{ exitCode: number; output: string; durationMs: number }>;
+}
+
+/** Commits the workspace's changes and pushes its branch. Idempotent (no-op commit if nothing changed). */
+export interface BranchPublisher {
+  publish(ws: Workspace, repo: Repository, message: string): Promise<{ branch: string; commit: string; pushed: boolean }>;
+}
+
+export interface PullRequestInput {
+  head: string;
+  base: string;
+  title: string;
+  body: string;
+  draft: boolean;
+}
+
+/** A code host (GitHub, GitLab, …), selected by the repository's git URL. */
+export interface CodeHost {
+  readonly type: string;
+  matches(repo: Repository): boolean;
+  /** Opens a PR, or returns the existing open PR for the same head branch. */
+  openPullRequest(repo: Repository, input: PullRequestInput): Promise<{ url: string; number: number; created: boolean }>;
 }

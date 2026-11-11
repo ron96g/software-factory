@@ -49,6 +49,10 @@ metadata:
 spec:
   local:
     path: .                  # relative to the factory root (MVP: local checkouts only, ADR-0008)
+  git:                       # ADR-0023: branches are pushed here and draft PRs opened
+    url: https://github.com/ron96g/software-factory.git
+    defaultBranch: master
+    secretRef: { name: github-token }
   index:
     enabled: true
     type: ripgrep
@@ -57,6 +61,9 @@ spec:
     docs: [README.md, docs/architecture.md]
     owners: [{ role: tech-lead, team: platform }]
   sandboxRef: { name: node-build }
+  checks:                    # ADR-0023: commands for the automated gate, run in the workspace
+    build: cd web && npx tsc --noEmit -p .
+    unit-tests: cd web && npm test --silent
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
     setup:
       - cd web && npm ci --no-audit --no-fund --loglevel=error

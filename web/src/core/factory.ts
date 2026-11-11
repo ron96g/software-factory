@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { BranchPublisher, CodeHost, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -19,7 +19,12 @@ import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from 
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
-import { automatedGate, decisionGate, humanApprovalGate } from "./workflow/gates.ts";
+import { decisionGate, humanApprovalGate } from "./workflow/gates.ts";
+import { automatedGate } from "./workflow/checks.ts";
+import { SandboxCommandRunner } from "./agents/command-runner.ts";
+import { GitBranchPublisher } from "./adapters/workspaces/git-publish.ts";
+import { GithubCodeHost } from "./adapters/codehosts/github.ts";
+import { pullRequestHandler } from "./runtime/publish.ts";
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { createApprovalController, createClarificationController } from "./runtime/controllers/human-gates.ts";
@@ -58,6 +63,10 @@ export interface FactoryOptions {
   workspacesDir?: string;
   /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
   workspaceBackend?: WorkspaceBackend;
+  /** Publishing overrides (ADR-0023), e.g. fakes in tests. */
+  publisher?: BranchPublisher;
+  codeHosts?: CodeHost[];
+  checkPollMs?: number;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
@@ -166,7 +175,10 @@ export async function createFactory(o: FactoryOptions) {
   const compiler = new DefaultWorkflowCompiler(store);
   const checks = new Registry<GateCheck>();
   const gates = new Registry<GateEvaluator>();
-  for (const g of [decisionGate, humanApprovalGate, automatedGate(checks, events)]) gates.register(g.type, g);
+  const runner = new SandboxCommandRunner(store, environments);
+  for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, pollMs: o.checkPollMs })]) {
+    gates.register(g.type, g);
+  }
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();
@@ -178,6 +190,12 @@ export async function createFactory(o: FactoryOptions) {
   const outboxHandlers = new Registry<OutboxHandler>();
   const comment = commentHandler(connectors);
   outboxHandlers.register(comment.action, comment);
+  const pr = pullRequestHandler({
+    reader: store,
+    publisher: o.publisher ?? new GitBranchPublisher(secrets),
+    codeHosts: o.codeHosts ?? [new GithubCodeHost(secrets, o.fetch)],
+  });
+  outboxHandlers.register(pr.action, pr);
 
   // ── controllers ──────────────────────────────────────────────────────
   const manager = new ControllerManager(store, o.log);

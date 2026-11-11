@@ -131,6 +131,24 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     }
   }
 
+  /** ADR-0023: entering a `publish` stage enqueues one pull request per Ready workspace (idempotent per round). */
+  async function publishPullRequests(wi: WorkItem, stage: CompiledStage) {
+    if (!stage.publish?.pullRequest) return;
+    const list = await d.reader.list<Workspace>("Workspace", {
+      namespace: nsOf(wi),
+      ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) },
+    });
+    for (const ws of list.filter((w) => w.status?.phase === "Ready")) {
+      await d.outbox.enqueue({
+        key: `${wi.metadata.name}-${stage.name}-r${wi.status?.round ?? 0}-pr-${ws.spec.repositoryRef.name}`.slice(0, 200),
+        namespace: nsOf(wi),
+        action: "open-pull-request",
+        payload: { workspace: ws.metadata.name, workItem: wi.metadata.name, title: wi.spec.title, draft: stage.publish.pullRequest.draft ?? true },
+        owner: ownerRef(wi),
+      });
+    }
+  }
+
   /** "ready" | "waiting" | failure message */
   async function workspacesState(wi: WorkItem): Promise<"ready" | "waiting" | string> {
     const list = await d.reader.list<Workspace>("Workspace", {
@@ -167,8 +185,13 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       case "goto": {
         const target = wf.stage(decision.stage);
         if (!target) return write(wi, { phase: "Failed", message: `unknown stage ${decision.stage}` }, "Failed", `unknown stage ${decision.stage}`);
-        return write(wi, enterStage(wf, target, round), "StageStarted", `${target.name} (back from ${stage.name})`);
+        const checkFailures = decision.retryOf
+          ? { ...wi.status?.checkFailures, [decision.retryOf]: (wi.status?.checkFailures?.[decision.retryOf] ?? 0) + 1 }
+          : wi.status?.checkFailures;
+        return write(wi, { ...enterStage(wf, target, round), checkFailures }, "StageStarted", `${target.name} (back from ${stage.name}${decision.retryOf ? ", checks failed" : ""})`);
       }
+      case "wait":
+        return { requeueAfterMs: decision.retryAfterMs };
       case "end":
         return write(wi, { phase: decision.phase, message: decision.reason, blockedBy: undefined }, decision.phase, decision.reason);
       case "block":
@@ -242,6 +265,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         }
 
         const stepIdx = st.step ?? 0;
+        if (stepIdx === 0) await publishPullRequests(wi, stage); // level-triggered; enqueue is idempotent
         if (stepIdx < stage.steps.length) {
           const step = stage.steps[stepIdx];
           const rn = runName(wi, stage.name, stepIdx, st.round!);

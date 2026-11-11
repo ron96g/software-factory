@@ -61,6 +61,8 @@ export interface GateSpec {
 export interface StageSpec {
   name: string;
   mode?: string;
+  /** ADR-0023: on entering the stage, publish the item's workspaces (outbox). */
+  publish?: { pullRequest?: { draft?: boolean } };
   steps?: StepSpec[];
   gate?: GateSpec;
   workflowRef?: Ref;
@@ -98,6 +100,8 @@ export interface RepositorySpec {
   observability?: Record<string, unknown>;
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
+  /** ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`. */
+  checks?: Record<string, string>;
   /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
   workspace?: { baseRef?: string; setup?: string[] };
 }
@@ -162,6 +166,8 @@ export interface WorkItemStatus {
   classification?: Classification;
   lastOutcome?: string;
   blockedBy?: { kind: "Clarification" | "Approval"; name: string };
+  /** Failed automated-gate attempts per stage (ADR-0023 retry budget). */
+  checkFailures?: Record<string, number>;
   message?: string;
   conditions?: Condition[];
 }
@@ -290,13 +296,16 @@ export interface EventSpec {
 export type FactoryEvent = Resource<EventSpec>;
 
 export interface OutboxMessageSpec {
-  sourceRef: Ref;
-  externalId: string;
+  /** Set for effects on a source item (comments); absent e.g. for pull requests (ADR-0023). */
+  sourceRef?: Ref;
+  externalId?: string;
   action: string; // e.g. "comment"
   payload: Record<string, unknown>;
 }
 export interface OutboxMessageStatus {
   phase: "Pending" | "Delivered" | "Failed";
+  /** Handler result, e.g. `{ url }` of an opened pull request. */
+  result?: Record<string, unknown>;
   attempts?: number;
   lastError?: string;
   nextAttemptAt?: string;

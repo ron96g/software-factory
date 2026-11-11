@@ -36,9 +36,14 @@ export class StoreOutbox implements Outbox {
         name: m.key,
         namespace: m.namespace,
         ownerReferences: m.owner ? [m.owner] : [],
-        labels: { "factory.ai-dlc.io/source": m.source },
+        labels: { "factory.ai-dlc.io/action": m.action, ...(m.source ? { "factory.ai-dlc.io/source": m.source } : {}) },
       },
-      spec: { sourceRef: { name: m.source }, externalId: m.externalId, action: m.action, payload: m.payload },
+      spec: {
+        ...(m.source ? { sourceRef: { name: m.source } } : {}),
+        ...(m.externalId ? { externalId: m.externalId } : {}),
+        action: m.action,
+        payload: m.payload,
+      },
       status: { phase: "Pending", attempts: 0 },
     };
     try {
@@ -53,7 +58,8 @@ export class StoreOutbox implements Outbox {
 export function commentHandler(connectors: Lookup<SourceConnector>): OutboxHandler {
   return {
     action: "comment",
-    async deliver(source: Source, externalId: string, payload: Record<string, unknown>) {
+    async deliver({ source, externalId, payload }) {
+      if (!source || !externalId) throw new Error("comment needs a source item");
       const c = connectors.get(source.spec.type);
       if (!c || !canComment(c)) throw new Error(`source type "${source.spec.type}" cannot publish comments`);
       await c.postComment(source, externalId, `${String(payload.body ?? "")}\n\n${FACTORY_COMMENT_MARKER}`);
@@ -88,13 +94,20 @@ export function createOutboxController(d: {
 
       const attempts = (msg.status.attempts ?? 0) + 1;
       try {
-        const source = await resolveRef<Source>(d.reader, "Source", msg.spec.sourceRef, namespace);
-        if (!source) throw new Error(`source ${msg.spec.sourceRef.name} not found`);
+        let source: Source | undefined;
+        if (msg.spec.sourceRef) {
+          source = (await resolveRef<Source>(d.reader, "Source", msg.spec.sourceRef, namespace)) ?? undefined;
+          if (!source) throw new Error(`source ${msg.spec.sourceRef.name} not found`);
+        }
         const handler = d.handlers.get(msg.spec.action);
         if (!handler) throw new Error(`no outbox handler for action "${msg.spec.action}"`);
-        await handler.deliver(source, msg.spec.externalId, msg.spec.payload);
-        await d.status.updateStatus({ ...msg, status: { phase: "Delivered", attempts } });
-        await d.events.normal(msg, "Delivered", `${msg.spec.action} → ${msg.spec.sourceRef.name}#${msg.spec.externalId}`);
+        const result = (await handler.deliver({ source, externalId: msg.spec.externalId, payload: msg.spec.payload })) ?? undefined;
+        await d.status.updateStatus({ ...msg, status: { phase: "Delivered", attempts, result: result ? JSON.parse(d.redactor.redact(JSON.stringify(result))) : undefined } });
+        await d.events.normal(
+          msg,
+          "Delivered",
+          `${msg.spec.action}${msg.spec.sourceRef ? ` → ${msg.spec.sourceRef.name}#${msg.spec.externalId}` : ""}${result && typeof result.url === "string" ? ` · ${result.url}` : ""}`,
+        );
       } catch (e) {
         if (isStoreError(e, "Conflict")) return { requeueAfterMs: 0 };
         const lastError = d.redactor.redact(e instanceof Error ? e.message : String(e));

@@ -44,6 +44,7 @@ export class DefaultWorkflowCompiler implements WorkflowCompiler {
           lifecyclePhase: phaseOverride ?? phase.name,
           origin: wf.metadata.name,
           mode: st.mode,
+          publish: st.publish,
           steps: st.steps ?? [],
           gate: st.gate,
         });

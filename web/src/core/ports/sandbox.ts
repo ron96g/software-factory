@@ -9,7 +9,8 @@ export type IsolationLevel = "none" | "process" | "container" | "microvm";
 export const ISOLATION_RANK: Record<IsolationLevel, number> = { none: 0, process: 1, container: 2, microvm: 3 };
 
 export interface SandboxSpec {
-  run: AgentRun;
+  /** The agent run, if the sandbox serves one (checks run without a run). */
+  run?: AgentRun;
   profile: SandboxProfile;
   repositories: Repository[];
   /** Ready workspaces of the work item (ADR-0021); the sandbox operates in them. */
