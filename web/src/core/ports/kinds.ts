@@ -2,8 +2,8 @@
  * Kind registry and admission chain.
  * New kinds plug in by registering a `KindInfo` plus any mutators/validators.
  */
-import type { Resource } from "../model/resource";
-import type { ResourceReader } from "./store";
+import type { Resource } from "../model/resource.ts";
+import type { ResourceReader } from "./store.ts";
 
 export type KindScope = "definition" | "runtime";
 

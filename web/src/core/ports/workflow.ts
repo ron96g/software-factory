@@ -2,8 +2,8 @@
  * Workflow ports: compile declarative Workflows into a flat stage list and evaluate gates.
  * Gate types and automated checks are extension points (Strategy + Registry).
  */
-import type { Ref } from "../model/resource";
-import type { GateSpec, StepSpec, WorkItem } from "../model/kinds";
+import type { Ref } from "../model/resource.ts";
+import type { GateSpec, StepSpec, WorkItem } from "../model/kinds.ts";
 
 export interface CompiledStage {
   name: string;

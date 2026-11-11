@@ -2,13 +2,13 @@
  * Typed spec/status shapes per kind.
  * Definitions mirror the YAML/Markdown in the repo. Runtime kinds live in the store.
  */
-import type { Condition, DocumentResource, Ref, Resource } from "./resource";
+import type { Condition, DocumentResource, Ref, Resource } from "./resource.ts";
 
 // ── Definitions ──────────────────────────────────────────────────────────
 
 export interface AgentSpec {
   role: string;
-  model?: { tier?: string };
+  model?: { tier?: string; providerRef?: Ref };
   skillRefs?: Ref[];
   delegates?: { agentRef: Ref }[];
   tools?: string[];
@@ -94,6 +94,15 @@ export interface RepositorySpec {
   observability?: Record<string, unknown>;
 }
 export type Repository = Resource<RepositorySpec>;
+
+export interface ModelProviderSpec {
+  type: string; // "openai-compatible" | "anthropic" | …
+  baseUrl?: string;
+  secretRef?: Ref;
+  models: Record<string, string>; // tier → model
+  default?: boolean;
+}
+export type ModelProvider = Resource<ModelProviderSpec>;
 
 // ── Runtime ──────────────────────────────────────────────────────────────
 

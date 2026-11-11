@@ -1,8 +1,8 @@
 /**
  * Control-plane ports: queue, controllers, events, clock.
  */
-import type { ObjectKey, Resource } from "../model/resource";
-import type { WatchEvent } from "./store";
+import type { ObjectKey, Resource } from "../model/resource.ts";
+import type { WatchEvent } from "./store.ts";
 
 export interface Clock {
   now(): Date;

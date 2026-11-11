@@ -2,7 +2,7 @@
  * Storage ports, segregated by capability (ISP).
  * Consumers depend only on what they use, e.g. the prompt builder takes a `ResourceReader`.
  */
-import type { ObjectKey, Resource } from "../model/resource";
+import type { ObjectKey, Resource } from "../model/resource.ts";
 
 export interface ListOptions {
   /** Omitted means all namespaces (cluster-wide list). Authz decorators narrow this later. */
@@ -57,12 +57,17 @@ export interface StoreRouter {
 
 // ── Errors (part of the contract) ────────────────────────────────────────
 
+export type StoreErrorCode = "NotFound" | "AlreadyExists" | "Conflict" | "ReadOnly" | "Invalid";
+
 export class StoreError extends Error {
-  constructor(
-    message: string,
-    readonly code: "NotFound" | "AlreadyExists" | "Conflict" | "ReadOnly" | "Invalid",
-    readonly details?: string[],
-  ) {
+  readonly code: StoreErrorCode;
+  readonly details?: string[];
+  constructor(message: string, code: StoreErrorCode, details?: string[]) {
     super(message);
+    this.code = code;
+    this.details = details;
   }
 }
+
+export const isStoreError = (e: unknown, code?: StoreErrorCode): e is StoreError =>
+  e instanceof StoreError && (code === undefined || e.code === code);

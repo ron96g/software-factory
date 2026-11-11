@@ -2,8 +2,8 @@
  * Transcript & conversation ports (ADR-0012).
  * Transcripts are append-only message logs, stored outside resource documents.
  */
-import type { AgentRun, Conversation } from "../model/kinds";
-import type { Ref } from "../model/resource";
+import type { AgentRun, Conversation } from "../model/kinds.ts";
+import type { Ref } from "../model/resource.ts";
 
 export type TranscriptRole = "system" | "user" | "assistant" | "tool-call" | "tool-result" | "note";
 

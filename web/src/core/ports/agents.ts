@@ -14,8 +14,8 @@ import type {
   Repository,
   Skill,
   WorkItem,
-} from "../model/kinds";
-import type { TranscriptRecorder } from "./transcripts";
+} from "../model/kinds.ts";
+import type { TranscriptRecorder } from "./transcripts.ts";
 
 /** A named block of context made available to the agent. */
 export interface ContextSection {

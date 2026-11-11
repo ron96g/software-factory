@@ -2,8 +2,8 @@
  * Integration ports (Ports & Adapters). Each capability is its own interface (ISP),
  * so a connector only implements what its external system supports.
  */
-import type { Repository, Source } from "../model/kinds";
-import type { Ref } from "../model/resource";
+import type { ModelProvider, Repository, Source } from "../model/kinds.ts";
+import type { Ref } from "../model/resource.ts";
 
 // ── Generic registry (adapter lookup by `type`) ─────────────────────────
 
@@ -106,6 +106,50 @@ export interface CompletionRequest {
 
 export interface LLMClient {
   complete(req: CompletionRequest): Promise<string>;
+}
+
+// ── Tool calling (ADR-0014): separate capability, not every client supports it ─
+
+export interface ToolSchema {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>; // JSON Schema
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ToolCallingLLM {
+  completeWithTools(req: CompletionRequest & { tools: ToolSchema[] }): Promise<{ text?: string; toolCalls: ToolCall[] }>;
+}
+
+/** Builds a client for a ModelProvider definition. Registered by `ModelProvider.spec.type`. */
+export interface LLMClientFactory {
+  create(provider: ModelProvider, apiKey: string | undefined): LLMClient;
+}
+
+export interface ResolvedModel {
+  provider: string;
+  providerType: string;
+  model: string;
+  tier: string;
+  client: LLMClient;
+}
+
+/** Maps a tier (+ optional explicit provider) to a concrete client & model. Undefined when none is configured. */
+export interface ModelResolver {
+  resolve(input: { namespace: string; tier?: string; providerRef?: Ref }): Promise<ResolvedModel | undefined>;
+}
+
+// ── Agent tools (ADR-0016): registered, read-only in the MVP ─────────────
+
+export interface AgentToolInfo {
+  readonly name: string;
+  readonly readOnly: boolean;
+  readonly description: string;
 }
 
 // ── Outbox (outbound side effects) ───────────────────────────────────────
