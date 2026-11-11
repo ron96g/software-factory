@@ -207,7 +207,7 @@ export async function createFactory(o: FactoryOptions) {
   manager.register(
     createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
   );
-  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor }));
+  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor, transcripts }));
   manager.register(createClarificationController({ reader: store, status: store, clock }));
   manager.register(createApprovalController({ reader: store, status: store }));
   manager.register(createConversationController({ reader: store, status: store, recorders }));
