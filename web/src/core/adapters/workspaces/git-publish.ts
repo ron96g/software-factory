@@ -20,6 +20,7 @@ export class GitBranchPublisher implements BranchPublisher {
     if (!dir) throw new Error(`workspace ${ws.metadata.name} has no path`);
     const url = repo.spec.git?.url;
     if (!url) throw new Error(`repository ${repo.metadata.name} has no spec.git.url to push to`);
+    if (!/^https?:\/\//.test(url)) throw new Error(`repository ${repo.metadata.name}: only https git URLs are supported for pushing (got ${url})`);
     const token = this.secrets.resolve(repo.spec.git?.secretRef);
     const env = {
       PATH: process.env.PATH,

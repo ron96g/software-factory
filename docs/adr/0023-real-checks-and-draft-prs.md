@@ -33,3 +33,12 @@ end in a reviewable pull request whose checks actually ran.
 ## Consequences
 End-to-end: a work item produces a verified branch and a draft PR. Pushing needs a token with write access
 (`Repository.spec.git.secretRef`).
+
+## Addendum (architecture review of S5c)
+- The verifier's verdict (LLM output) is **advisory**. It's quoted in the PR body, and the human `ship` gate decides. Enforcing it
+  later would be a registered `GateCheck` (e.g. `verification-verdict`) with no core change.
+- Check results are cached in memory per (item, stage, round), so **checks re-run after a restart**. Infrastructure errors
+  (`CheckError`) are not cached and don't consume the retry budget. Check output is redacted before it's recorded.
+- The `host` runtime keeps workspaces in `<repo>/.workspaces` (gitignored, outside the web app; `FACTORY_WORKSPACES_DIR`
+  overrides it), so Next.js and `tsc` never see workspace copies of the code.
+- Only https git URLs can be pushed. The token travels in an `http.<origin>.extraheader` set via environment variables.

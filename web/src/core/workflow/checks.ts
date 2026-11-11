@@ -1,6 +1,6 @@
 import type { Repository, Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
-import type { CommandRunner, EventRecorder, GateCheckLookup, GateContext, GateDecision, GateEvaluator, ResourceReader } from "../ports/index.ts";
+import type { CommandRunner, EventRecorder, GateCheckLookup, GateContext, GateDecision, GateEvaluator, Redactor, ResourceReader } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 
 type Result = { passed: boolean; message: string };
@@ -15,6 +15,7 @@ export function automatedGate(d: {
   events: EventRecorder;
   reader: ResourceReader;
   runner: CommandRunner;
+  redactor: Redactor;
   pollMs?: number;
 }): GateEvaluator {
   const running = new Map<string, Promise<void>>();
@@ -24,16 +25,17 @@ export function automatedGate(d: {
   async function runCommand(key: string, ctx: GateContext, ws: Workspace, repos: Repository[], name: string, command: string) {
     try {
       const r = await d.runner.run(ws, repos, command);
-      const tail = r.output.slice(-1500);
+      const tail = d.redactor.redact(r.output.slice(-1500)); // ADR-0015: command output can echo env/config
       const passed = r.exitCode === 0;
       results.set(key, { passed, message: `${ws.spec.repositoryRef.name}: \`${command}\` → exit ${r.exitCode} (${r.durationMs} ms)\n${tail}` });
       const msg = `${name} on ${ws.spec.repositoryRef.name}: exit ${r.exitCode} in ${r.durationMs} ms${passed ? "" : `\n${tail}`}`;
       if (passed) await d.events.normal(ctx.workItem, "CheckPassed", msg);
       else await d.events.warning(ctx.workItem, "CheckFailed", msg);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      results.set(key, { passed: false, message });
-      await d.events.warning(ctx.workItem, "CheckFailed", `${name}: ${message}`);
+      // Infrastructure errors (no sandbox, workspace gone) are not check failures: don't cache, so they re-run
+      // instead of consuming the retry budget.
+      const message = d.redactor.redact(e instanceof Error ? e.message : String(e));
+      await d.events.warning(ctx.workItem, "CheckError", `${name}: ${message}`);
     }
   }
 
@@ -43,9 +45,9 @@ export function automatedGate(d: {
       const wi = ctx.workItem;
       const ns = nsOf(wi);
       const base = `${ns}/${wi.metadata.name}/${ctx.stage.name}/r${wi.status?.round ?? 0}`;
-      const workspaces = (await d.reader.list<Workspace>("Workspace", { namespace: ns, ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: ns } })).filter(
-        (w) => w.status?.phase === "Ready",
-      );
+      const all = await d.reader.list<Workspace>("Workspace", { namespace: ns, ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: ns } });
+      if (all.some((w) => w.status?.phase !== "Ready")) return { action: "wait", retryAfterMs: d.pollMs ?? 2000 };
+      const workspaces = all;
       const repos = (
         await Promise.all(workspaces.map((w) => resolveRef<Repository>(d.reader, "Repository", w.spec.repositoryRef, ns)))
       ).filter((r): r is Repository => !!r);
@@ -85,7 +87,10 @@ export function automatedGate(d: {
         }
       }
       if (pending) return { action: "wait", retryAfterMs: d.pollMs ?? 2000 };
+      // Decided: drop this round's cache entries (bounded memory).
+      for (const k of [...results.keys(), ...warned]) if (k.startsWith(`${base}/`)) (results.delete(k), warned.delete(k));
       if (!failures.length) return { action: "advance" };
+      // The retry budget (status.checkFailures) is counted by the WorkItem controller (it owns status).
       const retry = (ctx.gate.onFailure as { retry?: { next?: string; maxAttempts?: number } } | undefined)?.retry;
       const attempts = (wi.status?.checkFailures?.[ctx.stage.name] ?? 0) + 1;
       const reason = failures.join("\n\n");

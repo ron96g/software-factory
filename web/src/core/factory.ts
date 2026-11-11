@@ -177,7 +177,7 @@ export async function createFactory(o: FactoryOptions) {
   const checks = new Registry<GateCheck>();
   const gates = new Registry<GateEvaluator>();
   const runner = new SandboxCommandRunner(store, environments);
-  for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, pollMs: o.checkPollMs })]) {
+  for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, redactor, pollMs: o.checkPollMs })]) {
     gates.register(g.type, g);
   }
 
