@@ -50,17 +50,12 @@ permissions:
   - action: shell
     resource: "rg *"
     effect: allow
+  # The shell scanner checks each subcommand of `cd web && …` separately, so `cd` needs its own rule.
   - action: shell
-    resource: "cd * && npx tsc --noEmit*"
+    resource: "cd *"
     effect: allow
   - action: shell
-    resource: "cd * && npm test*"
-    effect: allow
-  - action: shell
-    resource: "cd * && npm run typecheck*"
-    effect: allow
-  - action: shell
-    resource: "cd * && .venv/bin/python tools/validate.py*"
+    resource: "npm --prefix web test*"
     effect: allow
 ---
 
