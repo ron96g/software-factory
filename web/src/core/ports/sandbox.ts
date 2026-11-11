@@ -2,7 +2,7 @@
  * Sandbox ports (ADR-0019). Capabilities are segregated so tools depend only on what they use (ISP).
  * Runtime adapters (podman, docker, kubernetes, remote, none) implement ExecutionEnvironment.
  */
-import type { AgentRun, Repository, SandboxProfile } from "../model/kinds.ts";
+import type { AgentRun, Repository, SandboxProfile, Workspace } from "../model/kinds.ts";
 
 export type IsolationLevel = "none" | "process" | "container" | "microvm";
 
@@ -12,6 +12,8 @@ export interface SandboxSpec {
   run: AgentRun;
   profile: SandboxProfile;
   repositories: Repository[];
+  /** Ready workspaces of the work item (ADR-0021); the sandbox operates in them. */
+  workspaces: Workspace[];
 }
 
 export interface ExecOptions {

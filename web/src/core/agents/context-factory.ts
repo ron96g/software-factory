@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Artifact, Clarification, Repository, Skill, WorkItem } from "../model/kinds.ts";
+import type { Agent, AgentRun, Artifact, Clarification, Repository, Skill, WorkItem, Workspace } from "../model/kinds.ts";
 import type { Ref } from "../model/resource.ts";
 import { nsOf } from "../model/meta.ts";
 import type {
@@ -67,6 +67,8 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       if (repo) repositories.push(repo);
     }
 
+    const workspaces = (await reader.list<Workspace>("Workspace", { namespace: ns, ownedBy: owned })).filter((w) => w.status?.phase === "Ready");
+
     const model = await this.d.models.resolve({
       namespace: ns,
       tier: run.spec.modelTier ?? agent.spec.model?.tier ?? "reasoning",
@@ -83,6 +85,7 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       inputs,
       clarifications,
       repositories,
+      workspaces,
       sections: [],
       transcript: await this.d.recorders.forRun(run),
       model,

@@ -7,6 +7,7 @@ import type {
   FactoryEvent,
   Source,
   WorkItem,
+  Workspace,
 } from "../model/kinds.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
@@ -19,6 +20,8 @@ import type {
   RunReplayer,
   SystemHealth,
   SystemQueries,
+  BrowsableKind,
+  ResourceBrowser,
   ExecutionEnvironmentSelector,
   ModelResolver,
   KindLookup,
@@ -68,7 +71,8 @@ export class FactoryApp
     ConversationActions,
     DefinitionQueries,
     ReplayActions,
-    SystemQueries
+    SystemQueries,
+    ResourceBrowser
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -86,12 +90,13 @@ export class FactoryApp
     const workItem = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
     if (!workItem) return null;
     const owned = { kind: "WorkItem", name, namespace: this.ns };
-    const [runs, artifacts, clarifications, approvals, conversations, events] = await Promise.all([
+    const [runs, artifacts, clarifications, approvals, conversations, workspaces, events] = await Promise.all([
       this.d.reader.list<AgentRun>("AgentRun", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Artifact>("Artifact", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Clarification>("Clarification", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Approval>("Approval", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Conversation>("Conversation", { namespace: this.ns, ownedBy: owned }),
+      this.d.reader.list<Workspace>("Workspace", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<FactoryEvent>("Event", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: name } }),
     ]);
     let stages: WorkItemDetail["stages"] = [];
@@ -103,7 +108,7 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, events, stages };
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, events, stages };
   }
 
   async createWorkItem(p: Principal, input: NewWorkItemInput): Promise<WorkItem> {
@@ -122,6 +127,10 @@ export class FactoryApp
         repositoryRefs: input.repositoryRefs?.length ? input.repositoryRefs.map((name) => ({ name })) : undefined,
       },
     });
+  }
+
+  async deleteWorkItem(_p: Principal, name: string): Promise<void> {
+    await this.d.writer.delete("WorkItem", this.ns, name);
   }
 
   async answerClarification(p: Principal, name: string, answers: string[]): Promise<Clarification> {
@@ -184,6 +193,34 @@ export class FactoryApp
     if (!c) throw new Error(`conversation ${name} not found`);
     if (!text.trim()) throw new Error("message is empty");
     return this.d.responder.respond(c, text.trim(), { type: "human", id: p.id });
+  }
+
+  private kindByPlural(plural: string) {
+    const info = this.d.kinds.byPlural(plural);
+    if (!info) throw new Error(`unknown resource type ${plural}`);
+    return info;
+  }
+
+  async browsableKinds(_p: Principal): Promise<BrowsableKind[]> {
+    return Promise.all(
+      this.d.kinds.all().map(async (k) => ({
+        kind: k.kind,
+        plural: k.plural,
+        scope: k.scope,
+        count: (await this.d.reader.list(k.kind, k.scope === "runtime" ? { namespace: this.ns } : {})).length,
+      })),
+    );
+  }
+
+  async listResources(_p: Principal, plural: string): Promise<Resource[]> {
+    const k = this.kindByPlural(plural);
+    const list = await this.d.reader.list(k.kind, k.scope === "runtime" ? { namespace: this.ns } : {});
+    return list.sort((a, b) => (b.metadata.creationTimestamp ?? b.metadata.name).localeCompare(a.metadata.creationTimestamp ?? a.metadata.name));
+  }
+
+  async getResource(_p: Principal, plural: string, name: string): Promise<Resource | null> {
+    const k = this.kindByPlural(plural);
+    return this.d.reader.get(k.kind, k.scope === "runtime" ? this.ns : SYSTEM_NAMESPACE, name);
   }
 
   async systemHealth(_p: Principal): Promise<SystemHealth> {

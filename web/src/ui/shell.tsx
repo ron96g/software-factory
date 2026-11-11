@@ -4,6 +4,7 @@ import { IconBox, IconBrain, IconMoon, IconSun, IconTopologyStar3 } from "@table
 import Link from "next/link";
 import type { SystemHealth } from "@/core/ports/app.ts";
 import { useLive, useLiveStatus } from "./api.ts";
+import { Navbar } from "./navbar.tsx";
 
 function HealthBadges() {
   const { data } = useLive<SystemHealth>("/api/system/health", () => false);
@@ -42,7 +43,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const { setColorScheme } = useMantineColorScheme();
   const scheme = useComputedColorScheme("light");
   return (
-    <AppShell header={{ height: 52 }} padding="lg">
+    <AppShell header={{ height: 52 }} navbar={{ width: 230, breakpoint: "sm" }} padding="lg">
       <AppShell.Header className="sf-header">
         <Group h="100%" px="lg" justify="space-between">
           <UnstyledButton component={Link} href="/">
@@ -84,6 +85,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </Group>
         </Group>
       </AppShell.Header>
+      <AppShell.Navbar className="sf-header">
+        <Navbar />
+      </AppShell.Navbar>
       <AppShell.Main>{children}</AppShell.Main>
     </AppShell>
   );

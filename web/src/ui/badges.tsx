@@ -11,6 +11,8 @@ const PHASE_COLORS: Record<string, MantineColor> = {
   Closed: "gray",
   Failed: "red",
   Pending: "gray",
+  Preparing: "blue",
+  Ready: "teal",
   Succeeded: "teal",
 };
 

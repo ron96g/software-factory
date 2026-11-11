@@ -11,6 +11,7 @@ import type {
   FactoryEvent,
   Source,
   WorkItem,
+  Workspace,
 } from "../model/kinds.ts";
 import type { Resource } from "../model/resource.ts";
 import type { TranscriptMessage } from "./transcripts.ts";
@@ -37,6 +38,7 @@ export interface WorkItemDetail {
   clarifications: Clarification[];
   approvals: Approval[];
   conversations: Conversation[];
+  workspaces: Workspace[];
   events: FactoryEvent[];
   /** Stage names of the compiled workflow, in order (for progress display). */
   stages: { name: string; lifecyclePhase: string; gate?: string }[];
@@ -49,6 +51,8 @@ export interface WorkItemQueries {
 
 export interface WorkItemCommands {
   createWorkItem(p: Principal, input: NewWorkItemInput): Promise<WorkItem>;
+  /** Deletes the item and everything it owns (runs, artifacts, workspaces …). */
+  deleteWorkItem(p: Principal, name: string): Promise<void>;
 }
 
 export interface HumanActions {
@@ -89,4 +93,18 @@ export interface SystemHealth {
 
 export interface SystemQueries {
   systemHealth(p: Principal): Promise<SystemHealth>;
+}
+
+export interface BrowsableKind {
+  kind: string;
+  plural: string;
+  scope: "definition" | "runtime";
+  count: number;
+}
+
+/** Generic, read-only browsing of every registered kind (UI navigation). */
+export interface ResourceBrowser {
+  browsableKinds(p: Principal): Promise<BrowsableKind[]>;
+  listResources(p: Principal, plural: string): Promise<Resource[]>;
+  getResource(p: Principal, plural: string, name: string): Promise<Resource | null>;
 }

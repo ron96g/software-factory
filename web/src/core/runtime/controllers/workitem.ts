@@ -1,4 +1,4 @@
-import type { Approval, Clarification, Source, WorkItem, WorkItemStatus } from "../../model/kinds.ts";
+import type { Approval, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
 import {
@@ -12,6 +12,7 @@ import {
   type GateEvaluatorLookup,
   type InitialKeys,
   type Outbox,
+  type WorkspaceSupport,
   type ResourceReader,
   type ResourceWriter,
   type StatusWriter,
@@ -32,6 +33,8 @@ export interface WorkItemControllerDeps {
   compiler: WorkflowCompiler;
   gates: GateEvaluatorLookup;
   outbox: Outbox;
+  /** Which repositories can get a Workspace (ADR-0021). */
+  workspaces: WorkspaceSupport;
 }
 
 export const runName = (wi: WorkItem, stage: string, step: number, round: number) =>
@@ -103,6 +106,42 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     });
   }
 
+  /** ADR-0021: one Workspace per supported repository, created once when the item starts. Idempotent names. */
+  async function ensureWorkspaces(wi: WorkItem) {
+    for (const ref of wi.spec.repositoryRefs ?? []) {
+      const repo = await resolveRef<Repository>(d.reader, "Repository", ref, nsOf(wi));
+      if (!repo || !d.workspaces.supports(repo)) continue;
+      await createChild<Workspace>({
+        apiVersion: API_VERSION,
+        kind: "Workspace",
+        metadata: {
+          name: `${wi.metadata.name}-${repo.metadata.name}`.slice(0, 200),
+          namespace: nsOf(wi),
+          ownerReferences: [ownerRef(wi)],
+          labels: { "factory.ai-dlc.io/workitem": wi.metadata.name, "factory.ai-dlc.io/repository": repo.metadata.name },
+        },
+        spec: {
+          workItemRef: { name: wi.metadata.name },
+          repositoryRef: { name: repo.metadata.name },
+          baseRef: repo.spec.workspace?.baseRef,
+          branch: `factory/${wi.metadata.name}`,
+          setup: repo.spec.workspace?.setup,
+        },
+      });
+    }
+  }
+
+  /** "ready" | "waiting" | failure message */
+  async function workspacesState(wi: WorkItem): Promise<"ready" | "waiting" | string> {
+    const list = await d.reader.list<Workspace>("Workspace", {
+      namespace: nsOf(wi),
+      ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) },
+    });
+    const failed = list.find((w) => w.status?.phase === "Failed");
+    if (failed) return `workspace ${failed.metadata.name} failed: ${failed.status?.message ?? ""}`;
+    return list.every((w) => w.status?.phase === "Ready") ? "ready" : "waiting";
+  }
+
   async function block(wi: WorkItem, stage: CompiledStage, questions: string[]) {
     const st = wi.status!;
     const name = `${wi.metadata.name}-${stage.name}-r${st.round}`;
@@ -159,7 +198,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
 
   return {
     name: "workitem",
-    watches: ["WorkItem", "AgentRun", "Clarification", "Approval"],
+    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () => (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "")).map(keyOf),
     resyncMs: 60_000,
@@ -173,6 +212,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
 
         if (!wi.status?.phase || wi.status.phase === "New") {
+          await ensureWorkspaces(wi);
           const first = wf.stages[0];
           return write(wi, enterStage(wf, first, 1), "StageStarted", `${first.name} (${first.lifecyclePhase})`);
         }
@@ -207,6 +247,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           const rn = runName(wi, stage.name, stepIdx, st.round!);
           const run = await d.reader.get("AgentRun", namespace, rn);
           if (!run) {
+            const ws = await workspacesState(wi);
+            if (ws === "waiting") return; // re-triggered by the Workspace watch
+            if (ws !== "ready") return write(wi, { phase: "Failed", message: ws }, "Failed", ws);
             const last = stepIdx === stage.steps.length - 1;
             await createChild({
               apiVersion: API_VERSION,

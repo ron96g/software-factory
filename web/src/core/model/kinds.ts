@@ -96,6 +96,8 @@ export interface RepositorySpec {
   observability?: Record<string, unknown>;
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
+  /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
+  workspace?: { baseRef?: string; setup?: string[] };
 }
 export type Repository = Resource<RepositorySpec>;
 
@@ -211,6 +213,8 @@ export interface RunProvenance {
   replayOf?: Ref;
   /** Sandbox runtime used or attempted, e.g. "none", "podman@5.5" (ADR-0019). */
   executionEnvironment?: string;
+  /** Code state the agent saw: repository → commit (ADR-0021). */
+  workspaces?: Record<string, string>;
 }
 
 export interface ConversationSpec {
@@ -294,3 +298,26 @@ export interface OutboxMessageStatus {
   nextAttemptAt?: string;
 }
 export type OutboxMessage = Resource<OutboxMessageSpec, OutboxMessageStatus>;
+
+// ── Workspace (ADR-0021) ─────────────────────────────────────────────────
+
+export interface WorkspaceSpec {
+  workItemRef: Ref;
+  repositoryRef: Ref;
+  /** Git ref to fork from; default: the repository checkout's HEAD. */
+  baseRef?: string;
+  branch: string;
+  setup?: string[];
+}
+
+export interface WorkspaceStatus {
+  phase: "Pending" | "Preparing" | "Ready" | "Failed";
+  path?: string;
+  baseCommit?: string;
+  headCommit?: string;
+  preparedBy?: string;
+  message?: string;
+  /** Output of the setup commands (truncated). */
+  setupLog?: string;
+}
+export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;

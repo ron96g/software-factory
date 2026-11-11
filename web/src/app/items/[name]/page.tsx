@@ -110,6 +110,51 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
+          {d.workspaces.length > 0 && (
+            <Card className="sf-surface" mb="md">
+              <Title order={5} mb="sm">
+                Workspace
+              </Title>
+              <Stack gap="sm">
+                {d.workspaces.map((w) => (
+                  <Stack key={w.metadata.name} gap={2}>
+                    <Group gap={6}>
+                      <Anchor component={Link} href={`/resources/workspaces/${w.metadata.name}`} size="sm" fw={500}>
+                        {w.spec.repositoryRef.name}
+                      </Anchor>
+                      <PhaseBadge phase={w.status?.phase ?? "Pending"} size="xs" />
+                    </Group>
+                    <Text size="xs" ff="monospace">
+                      {w.spec.branch}
+                      {w.status?.baseCommit && ` · base ${w.status.baseCommit.slice(0, 10)}`}
+                    </Text>
+                    {w.status?.path && (
+                      <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: "break-all" }}>
+                        {w.status.path}
+                      </Text>
+                    )}
+                    {w.status?.message && (
+                      <Text size="xs" c="red">
+                        {w.status.message}
+                      </Text>
+                    )}
+                    {w.status?.setupLog && (
+                      <Accordion variant="contained" chevronPosition="left">
+                        <Accordion.Item value="log">
+                          <Accordion.Control>
+                            <Text size="xs">Setup log</Text>
+                          </Accordion.Control>
+                          <Accordion.Panel>
+                            <div className="sf-transcript-msg">{w.status.setupLog}</div>
+                          </Accordion.Panel>
+                        </Accordion.Item>
+                      </Accordion>
+                    )}
+                  </Stack>
+                ))}
+              </Stack>
+            </Card>
+          )}
           <Card className="sf-surface">
             <Title order={5} mb="sm">
               Timeline

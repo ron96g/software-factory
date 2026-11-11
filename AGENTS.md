@@ -143,7 +143,10 @@ text in Jira comments.
 | S2 | Runtime selection & `none` | Registry + `auto` selection by health and minimum isolation, `none` adapter, provenance + UI health badge, explicit fallback reason | Without a runtime: analysis works; construction is simulated with a visible reason | ✅ |
 | S3 | Tool-call loop | `ToolCallingLLM` adapters, agent tool loop (recorded), sandbox-bound tools (`run`, `read_file`, `write_file`, `git_diff`) | Developer agent edits code and runs tests in the fake sandbox | ✅ |
 | S4 | First real adapter | `host` (ADR-0020, explicit opt-in, unsandboxed, per-item Git worktree); container/kubernetes adapters later | Real run on the dev machine | ✅ host · ☐ isolated adapters |
-| S5 | Git workspace, real checks, PR via outbox | Short-lived token clone, branch per item, `build`/`unit-tests` checks, draft PR through the outbox | End-to-end PR from a work item | ☐ |
+| S5a | Workspace resource (ADR-0021) | `Workspace` kind + controller, `WorkspacePreparer`/`WorkspaceCleaner` ports, host worktree adapter, setup commands, items wait for Ready, code search + sandboxes use the workspace, provenance `repo@commit` | All agents of an item see the same pinned code state; workspace visible + cleaned up | ⏳ |
+| S5b | Read-only code tools for analysis agents | `read_file`/`list_files`/`search_code` on the workspace for triager, architect, reviewer | Reviewer reads surrounding code, not only the diff | ☐ |
+| S5c | Real checks + draft PR | `build`/`unit-tests` gate checks in the workspace, push branch + draft PR through the outbox | End-to-end PR from a work item | ☐ |
+| U1 | Navigation | Left navbar with entities (work items, definitions, workspaces); generic resource list/detail views | Every kind browsable from the UI | ⏳ |
 
 Known v0.3 limits: with `host`, runs of one item share a Git worktree (branch `factory/<item>`); other runtimes start fresh until S5; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).

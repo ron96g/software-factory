@@ -57,3 +57,6 @@ spec:
     docs: [README.md, docs/architecture.md]
     owners: [{ role: tech-lead, team: platform }]
   sandboxRef: { name: node-build }
+  workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
+    setup:
+      - cd web && npm ci --no-audit --no-fund --loglevel=error

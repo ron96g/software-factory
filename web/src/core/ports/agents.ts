@@ -14,6 +14,7 @@ import type {
   Repository,
   Skill,
   WorkItem,
+  Workspace,
 } from "../model/kinds.ts";
 import type { TranscriptRecorder } from "./transcripts.ts";
 import type { ResolvedModel } from "./integration.ts";
@@ -37,6 +38,8 @@ export interface ExecutionContext {
   inputs: Artifact[];
   clarifications: Clarification[];
   repositories: Repository[];
+  /** Ready workspaces of the work item: the single code state all agents see (ADR-0021). */
+  workspaces: Workspace[];
   /** Filled by context providers. */
   sections: ContextSection[];
   /** ADR-0012: every executor MUST record its interaction here. */

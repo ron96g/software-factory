@@ -93,7 +93,7 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
         content: `WARNING: runtime "${health.runtime}" is unsandboxed (isolation ${health.isolation}); profile minimum "${required}" waived by explicit opt-in (ADR-0020).`,
       });
     }
-    const sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories });
+    const sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
     await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name})` });
     try {
       const all: ToolCapabilities = { exec: sandbox, files: sandbox, artifacts: sandbox };

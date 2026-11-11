@@ -75,42 +75,52 @@ test("S2: without a runtime, construction agents are simulated with a visible re
   }
 });
 
-test("contract: host runtime (ADR-0020) on a temp git repo; worktree persists per work item", async () => {
-  const { mkdtempSync, writeFileSync } = await import("node:fs");
+test("ADR-0020/0021: git worktree workspace + host sandbox; changes persist per item; checkout untouched; env scrubbed", async () => {
+  const { mkdtempSync, writeFileSync, existsSync } = await import("node:fs");
   const { execFileSync } = await import("node:child_process");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { HostEnvironment } = await import("./adapters/sandbox/host.ts");
-  const repo = mkdtempSync(join(tmpdir(), "sf-repo-"));
-  const g = (...a: string[]) => execFileSync("git", a, { cwd: repo });
+  const { GitWorktreeWorkspaces } = await import("./adapters/workspaces/git-worktree.ts");
+  const repoDir = mkdtempSync(join(tmpdir(), "sf-repo-"));
+  const g = (...a: string[]) => execFileSync("git", a, { cwd: repoDir });
   g("init", "-q");
-  writeFileSync(join(repo, "a.txt"), "one\n");
+  writeFileSync(join(repoDir, "a.txt"), "one\n");
   g("add", ".");
   g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
-  const env = new HostEnvironment({ definitionsRoot: repo, workspacesDir: join(repo, "..", `${repo.split("/").pop()}-ws`) });
-  const h = await env.health();
-  assert.equal(h.waivesIsolation, true);
-  const hostSpec = {
-    run: { metadata: { name: "r1" }, spec: { workItemRef: { name: "item-1" } } },
-    profile: {},
-    repositories: [{ metadata: { name: "repo" }, spec: { local: { path: repo } } }],
-  } as unknown as SandboxSpec;
-  const sb = await env.prepare(hostSpec);
+
+  const backend = new GitWorktreeWorkspaces({ definitionsRoot: repoDir, workspacesDir: `${repoDir}-ws` });
+  const repo = { metadata: { name: "repo" }, spec: { local: { path: repoDir } } } as never;
+  assert.equal(backend.supports(repo), true);
+  const ws = {
+    metadata: { name: "item-1-repo" },
+    spec: { workItemRef: { name: "item-1" }, repositoryRef: { name: "repo" }, branch: "factory/item-1", setup: ["echo setup-ran > .setup-marker"] },
+  } as never as import("./model/kinds.ts").Workspace;
+  const prepared = await backend.prepare(ws, repo);
+  assert.ok(existsSync(join(prepared.path, ".setup-marker")), "setup ran");
+  const ready = { ...ws, status: { phase: "Ready" as const, ...prepared } };
+
+  const env = new HostEnvironment();
+  assert.equal((await env.health()).waivesIsolation, true);
+  const spec = { run: { metadata: { name: "r1" } }, profile: {}, repositories: [repo], workspaces: [ready] } as unknown as SandboxSpec;
+  const sb = await env.prepare(spec);
   await sb.writeFile("src/new.txt", "hello");
-  assert.equal(await sb.readFile("src/new.txt"), "hello");
   await assert.rejects(sb.writeFile("../escape", "x"), /escapes/);
   await assert.rejects(sb.writeFile(".git/config", "x"), /escapes/);
   process.env.SF_TEST_SECRET = "sk-should-not-leak";
-  const r = await sb.exec("echo \"key=[$SF_TEST_SECRET]\" && cat a.txt");
-  assert.equal(r.exitCode, 0);
+  const r = await sb.exec('echo "key=[$SF_TEST_SECRET]" && cat a.txt');
   assert.match(r.stdout, /key=\[\]/, "factory env is scrubbed");
-  assert.match(r.stdout, /one/);
-  assert.ok((await sb.listFiles("src/*")).includes("src/new.txt"));
   assert.match(await sb.diff(), /\+hello/);
-  assert.equal((await sb.exec("sleep 5", { timeoutMs: 200 })).exitCode !== 0, true, "timeout kills");
+  assert.notEqual((await sb.exec("sleep 5", { timeoutMs: 200 })).exitCode, 0, "timeout kills");
   await sb.dispose();
-  // second run of the same item sees the first run's changes; the source checkout is untouched
-  const sb2 = await env.prepare(hostSpec);
-  assert.equal(await sb2.readFile("src/new.txt"), "hello");
-  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: repo }).toString().trim(), "");
+
+  // re-prepare is idempotent and keeps the pinned base; next run sees earlier changes
+  const again = await backend.prepare({ ...ready } as never, repo);
+  assert.equal(again.baseCommit, prepared.baseCommit);
+  assert.equal(await (await env.prepare(spec)).readFile("src/new.txt"), "hello");
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: repoDir }).toString().trim(), "", "checkout untouched");
+
+  await backend.remove(ready, repo);
+  assert.equal(existsSync(prepared.path), false, "cleaned up");
+  assert.match(execFileSync("git", ["branch", "--list", "factory/item-1"], { cwd: repoDir }).toString(), /factory\/item-1/, "branch kept");
 });

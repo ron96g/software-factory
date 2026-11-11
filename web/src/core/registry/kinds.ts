@@ -12,6 +12,7 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "WorkItem", plural: "workitems", scope: "runtime" },
   { kind: "AgentRun", plural: "agentruns", scope: "runtime" },
   { kind: "Artifact", plural: "artifacts", scope: "runtime" },
+  { kind: "Workspace", plural: "workspaces", scope: "runtime" },
   { kind: "Clarification", plural: "clarifications", scope: "runtime" },
   { kind: "Approval", plural: "approvals", scope: "runtime" },
   { kind: "Conversation", plural: "conversations", scope: "runtime" },

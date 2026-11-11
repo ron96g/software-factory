@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentTool, Clock, ExecutionEnvironment, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -41,6 +41,8 @@ import { DefaultRunReplayer } from "./agents/replayer.ts";
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { HostEnvironment } from "./adapters/sandbox/host.ts";
+import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
+import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { SandboxToolLoopExecutor } from "./agents/tool-loop.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
@@ -50,6 +52,8 @@ export interface FactoryOptions {
   definitionsRoot: string;
   /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
   workspacesDir?: string;
+  /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
+  workspaceBackend?: WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
@@ -109,13 +113,7 @@ export async function createFactory(o: FactoryOptions) {
   const sandboxEnvs = new Registry<ExecutionEnvironment>();
   sandboxEnvs.register("none", new NoSandboxEnvironment());
   // ADR-0020: registered, but only used when FACTORY_SANDBOX_RUNTIME=host (never part of `auto`).
-  sandboxEnvs.register(
-    "host",
-    new HostEnvironment({
-      definitionsRoot: o.definitionsRoot,
-      workspacesDir: o.workspacesDir ?? join(o.databasePath === ":memory:" ? tmpdir() : dirname(o.databasePath), "workspaces"),
-    }),
-  );
+  sandboxEnvs.register("host", new HostEnvironment());
   for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
   const env = o.env ?? process.env;
   const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [
@@ -125,6 +123,23 @@ export async function createFactory(o: FactoryOptions) {
     "remote",
     ...(o.sandboxes ?? []).map((e) => e.runtime),
   ]);
+
+  // ── workspaces (ADR-0021): backend follows the runtime; isolated runtimes will clone into volumes ──
+  const noWorkspaces: WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport = {
+    supports: () => false,
+    prepare: async () => {
+      throw new Error("no workspace backend for this runtime");
+    },
+    remove: async () => {},
+  };
+  const workspaceBackend =
+    o.workspaceBackend ??
+    (env.FACTORY_SANDBOX_RUNTIME === "host"
+      ? new GitWorktreeWorkspaces({
+          definitionsRoot: o.definitionsRoot,
+          workspacesDir: o.workspacesDir ?? join(o.databasePath === ":memory:" ? tmpdir() : dirname(o.databasePath), "workspaces"),
+        })
+      : noWorkspaces);
 
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
   const contexts = new DefaultContextFactory({
@@ -161,7 +176,10 @@ export async function createFactory(o: FactoryOptions) {
 
   // ── controllers ──────────────────────────────────────────────────────
   const manager = new ControllerManager(store, o.log);
-  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox }));
+  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend }));
+  manager.register(
+    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, redactor }),
+  );
   manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor }));
   manager.register(
     createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),

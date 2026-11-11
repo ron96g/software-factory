@@ -1,6 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Repository } from "../model/kinds.ts";
 import type { CodeSearch, ContextProvider, ContextSection, ExecutionContext, WorkspaceProvider } from "../ports/index.ts";
+
+/** ADR-0021: the item's Ready workspace for this repository, else the repository checkout. */
+async function rootFor(ctx: ExecutionContext, repo: Repository, workspaces: WorkspaceProvider): Promise<string> {
+  const ws = ctx.workspaces.find((w) => w.spec.repositoryRef.name === repo.metadata.name && w.status?.path);
+  return ws ? ws.status!.path! : workspaces.checkout(repo);
+}
 
 const STOP = new Set(
   "the a an and or but for with from into onto this that these those have has had will would should could can cannot not no yes are was were been be is it its our your their there here when what which who how why where please need needs want wants make made add adds allow allows able use using used new also than then them they you we i me my to of in on at by as if so do does done".split(
@@ -38,7 +45,7 @@ export function codeSearchProvider(workspaces: WorkspaceProvider, search: CodeSe
       await ctx.transcript.record({ role: "tool-call", author: sys, content: JSON.stringify({ terms }), meta: { tool: "code-search" } });
       for (const repo of ctx.repositories) {
         try {
-          const root = await workspaces.checkout(repo);
+          const root = await rootFor(ctx, repo, workspaces);
           const hits = await search.search(repo, root, { terms });
           await ctx.transcript.record({
             role: "tool-result",
@@ -74,7 +81,7 @@ export function repositoryDocsProvider(workspaces: WorkspaceProvider, maxChars =
       for (const repo of ctx.repositories) {
         for (const doc of repo.spec.context?.docs ?? []) {
           try {
-            const root = await workspaces.checkout(repo);
+            const root = await rootFor(ctx, repo, workspaces);
             const text = await readFile(join(root, doc), "utf8");
             out.push({ title: `${repo.metadata.name}:${doc}`, content: text.slice(0, maxChars), source: "repository-docs" });
           } catch {

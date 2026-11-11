@@ -2,7 +2,7 @@
  * Integration ports (Ports & Adapters). Each capability is its own interface (ISP),
  * so a connector only implements what its external system supports.
  */
-import type { ModelProvider, Repository, Source } from "../model/kinds.ts";
+import type { ModelProvider, Repository, Source, Workspace } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
 import type { SandboxArtifacts, SandboxExec, SandboxFiles } from "./sandbox.ts";
 
@@ -212,3 +212,28 @@ export interface Outbox {
 
 /** Marker appended to every comment the factory writes, so inbound sync ignores its own comments. */
 export const FACTORY_COMMENT_MARKER = "<!-- software-factory -->";
+
+// ── Workspaces (ADR-0021) ───────────────────────────────────────────────
+
+export interface PreparedWorkspace {
+  path: string;
+  baseCommit: string;
+  headCommit: string;
+  preparedBy: string;
+  setupLog?: string;
+}
+
+/** Whether this backend can provide workspaces for a repository (e.g. needs a local path). */
+export interface WorkspaceSupport {
+  supports(repo: Repository): boolean;
+}
+
+/** Creates (or re-attaches to) the files of a Workspace, pins its base commit, runs setup. Idempotent. */
+export interface WorkspacePreparer {
+  prepare(ws: Workspace, repo: Repository): Promise<PreparedWorkspace>;
+}
+
+/** Removes the files of a deleted Workspace. Idempotent. */
+export interface WorkspaceCleaner {
+  remove(ws: Workspace, repo: Repository | null): Promise<void>;
+}
