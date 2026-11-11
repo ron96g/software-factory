@@ -31,6 +31,7 @@ export class ExplainResponder implements ConversationResponder {
 
   async respond(conv: Conversation, humanMessage: string, author: TranscriptAuthor): Promise<TranscriptMessage> {
     const ns = nsOf(conv);
+    if (!conv.spec.agentRunRef) throw new Error("an explain conversation needs agentRunRef");
     const run = await this.d.reader.get<AgentRun>("AgentRun", ns, conv.spec.agentRunRef.name);
     if (!run?.status?.transcriptRef) throw new Error("the original run has no transcript");
     if (!conv.status?.transcriptRef) throw new Error("conversation is not ready yet (transcript not opened)");

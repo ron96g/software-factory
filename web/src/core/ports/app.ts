@@ -114,3 +114,8 @@ export interface ResourceBrowser {
   listResources(p: Principal, plural: string): Promise<Resource[]>;
   getResource(p: Principal, plural: string, name: string): Promise<Resource | null>;
 }
+
+/** X4: a read-only conversation about the whole work item (all runs, artifacts, human input, events). */
+export interface ItemConversationActions {
+  startItemConversation(p: Principal, workItem: string): Promise<Conversation>;
+}

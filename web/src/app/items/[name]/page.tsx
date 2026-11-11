@@ -13,7 +13,6 @@ import {
   Tabs,
   Text,
   Textarea,
-  Timeline,
   Title,
   Tooltip,
 } from "@mantine/core";
@@ -26,6 +25,13 @@ import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
 import { RunDrawer } from "@/ui/run-inspector.tsx";
+import { EventTimeline } from "@/ui/event-timeline.tsx";
+import { RunList } from "@/ui/run-list.tsx";
+import { ChatPanel } from "@/ui/run-inspector.tsx";
+import { Drawer } from "@mantine/core";
+import { IconMessageQuestion } from "@tabler/icons-react";
+import type { Conversation } from "@/core/model/kinds.ts";
+import { act as postAct } from "@/ui/api.ts";
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
 const PHASE_COLOR: Record<string, string> = { inception: "indigo", construction: "cyan", operations: "teal", build: "cyan" };
@@ -34,6 +40,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const { name } = use(params);
   const { data: d, error } = useLive<WorkItemDetail>(`/api/workitems/${name}`, (n) => n.workItem === name || n.name === name);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
 
   if (error) return <Alert color="red" title="Error">{error}</Alert>;
   if (!d) return <Text c="dimmed">Loading…</Text>;
@@ -51,7 +58,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Group>
       </Anchor>
 
-      <Group justify="space-between" align="flex-start">
+      <Group justify="space-between" align="flex-start" wrap="nowrap">
         <div>
           <Group gap="sm">
             <Title order={2}>{wi.spec.title}</Title>
@@ -72,6 +79,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             {" · "}workflow {wi.spec.workflowRef?.name} · repos {(wi.spec.repositoryRefs ?? []).map((r) => r.name).join(", ") || "–"}
           </Text>
         </div>
+        <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)} style={{ flexShrink: 0 }}>
+          Ask about this item
+        </Button>
       </Group>
 
       <StageProgress d={d} />
@@ -98,7 +108,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
                 <Artifacts d={d} />
               </Tabs.Panel>
               <Tabs.Panel value="runs" pt="md">
-                <Runs runs={d.runs} onOpen={setOpenRun} />
+                <RunList d={d} onOpen={setOpenRun} />
               </Tabs.Panel>
               <Tabs.Panel value="description" pt="md">
                 <MarkdownView>{wi.spec.description || "_No description._"}</MarkdownView>
@@ -109,7 +119,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             </Tabs>
           </Card>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 4 }}>
+        <Grid.Col span={{ base: 12, md: 4 }} style={{ position: "sticky", top: 68, alignSelf: "flex-start" }}>
           {d.workspaces.length > 0 && (
             <Card className="sf-surface" mb="md">
               <Title order={5} mb="sm">
@@ -171,33 +181,19 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
               </Stack>
             </Card>
           )}
-          <Card className="sf-surface">
-            <Title order={5} mb="sm">
-              Timeline
-            </Title>
-            <Timeline bulletSize={14} lineWidth={2}>
-              {[...d.events].reverse().slice(0, 60).map((e) => (
-                <Timeline.Item
-                  key={e.metadata.name}
-                  color={e.spec.type === "Warning" ? "red" : "indigo"}
-                  title={
-                    <Text size="sm" fw={500}>
-                      {e.spec.reason} <Text span size="xs" c="dimmed">{e.spec.involvedObject.kind}</Text>
-                    </Text>
-                  }
-                >
-                  <Text size="xs" c="dimmed" lineClamp={3}>
-                    {e.spec.message}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {timeAgo(e.metadata.creationTimestamp)}
-                  </Text>
-                </Timeline.Item>
-              ))}
-            </Timeline>
-          </Card>
+          <EventTimeline events={d.events} />
         </Grid.Col>
       </Grid>
+
+      <Drawer opened={askOpen} onClose={() => setAskOpen(false)} position="right" size="xl" title={<Text fw={600}>Ask about this work item</Text>}>
+        <ChatPanel
+          existing={d.conversations.filter((c) => c.spec.purpose === "explain-item")}
+          start={() => postAct<Conversation>(`/api/workitems/${name}/conversations`, {})}
+          placeholder="e.g. What did the product owner decide, and why?"
+          intro="Answers come from this item's record: every agent run, artifact, human input and key event. Read-only."
+          suggestions={["Summarise what happened so far", "What did the product owner do?", "Which open questions or risks remain?", "Why did the item go back to an earlier stage?"]}
+        />
+      </Drawer>
 
       <RunDrawer
         run={run}
@@ -344,63 +340,6 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
         </Accordion.Item>
       ))}
     </Accordion>
-  );
-}
-
-/** Runs grouped as a tree via parentRunRef (delegation, ADR-0012). */
-function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void }) {
-  // Tree: delegations (parentRunRef) and replays (replayOf) nest under their origin.
-  const roots = runs.filter((r) => !r.spec.parentRunRef && !r.spec.replayOf);
-  const children = (n: string) => runs.filter((r) => r.spec.parentRunRef?.name === n || r.spec.replayOf?.name === n);
-  const Row = ({ r, depth }: { r: AgentRun; depth: number }) => (
-    <>
-      <Group justify="space-between" className="sf-row" p="xs" pl={8 + depth * 24} onClick={() => onOpen(r.metadata.name)} style={{ borderRadius: 8 }}>
-        <Group gap="sm">
-          <PhaseBadge phase={r.status?.phase} size="xs" />
-          <Text size="sm" fw={500}>
-            {r.spec.agentRef.name}
-          </Text>
-          {r.spec.replayOf && (
-            <Badge size="xs" variant="outline" color="grape">
-              replay
-            </Badge>
-          )}
-          <Text size="sm" c="dimmed">
-            {r.spec.stage} / {r.spec.step}
-          </Text>
-          <Tooltip label="round: increments each time a stage is (re-)entered">
-            <Badge size="xs" variant="light" color="gray">
-              {/-(r\d+)(?:-replay-\d+)?$/.exec(r.metadata.name)?.[1] ?? ""}
-            </Badge>
-          </Tooltip>
-          {r.status?.result?.outcome && (
-            <Badge size="xs" variant="light" color={r.status.result.outcome === "accept" ? "teal" : "orange"}>
-              {r.status.result.outcome}
-            </Badge>
-          )}
-          <Badge size="xs" variant="outline">
-            {r.status?.provenance?.executor ?? r.status?.executor ?? "…"}
-          </Badge>
-        </Group>
-        <Text size="xs" c="dimmed" lineClamp={1} maw={420}>
-          {r.status?.result?.summary ?? r.status?.message ?? ""}
-        </Text>
-      </Group>
-      {children(r.metadata.name).map((c) => (
-        <Row key={c.metadata.name} r={c} depth={depth + 1} />
-      ))}
-    </>
-  );
-  if (!runs.length) return <Text c="dimmed" size="sm">No runs yet.</Text>;
-  return (
-    <Stack gap={2}>
-      {[...roots].reverse().map((r) => (
-        <Row key={r.metadata.name} r={r} depth={0} />
-      ))}
-      <Text size="xs" c="dimmed" mt="xs">
-        Click a run to inspect its transcript and provenance, or to ask the agent why it did something.
-      </Text>
-    </Stack>
   );
 }
 

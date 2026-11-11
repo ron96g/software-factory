@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { BranchPublisher, CodeHost, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -39,6 +39,7 @@ import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
 import { DefaultModelResolver } from "./agents/model-resolver.ts";
 import { ExplainResponder } from "./agents/explain-responder.ts";
+import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
 import { GithubConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
@@ -217,6 +218,10 @@ export async function createFactory(o: FactoryOptions) {
 
   const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events });
 
+  const responders = new Registry<ConversationResponder>();
+  responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));
+  responders.register("explain-item", new ItemExplainResponder({ reader: store, transcripts, recorders, models }));
+
   const app = new FactoryApp({
     reader: store,
     writer: store,
@@ -228,7 +233,7 @@ export async function createFactory(o: FactoryOptions) {
     environments,
     models,
     controllerHealth: reconcileErrors,
-    responder: new ExplainResponder({ reader: store, transcripts, recorders, models }),
+    responders,
   });
 
   return {

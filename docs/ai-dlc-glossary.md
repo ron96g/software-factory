@@ -85,7 +85,7 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Provenance** | What a run used (model, definition versions, inputs, answers). It makes runs explainable and re-runnable. |
 | **Replay: inspect** | Step through a recorded transcript exactly as it happened. |
 | **Replay: re-run** | Create a new AgentRun from an old run's provenance and compare the results. The original is never changed. |
-| **Conversation** | A follow-up chat with the agent of a past run ("why did you…?"). Explain mode makes no changes. |
+| **Conversation** | A read-only follow-up chat. `purpose: explain` asks the agent of one run ("why did you…?"); `purpose: explain-item` asks about the whole work item across all agents (ADR-0026). |
 | **Outbox** | Persisted queue (`OutboxMessage`) for effects in external systems, e.g. posting questions to GitHub or Jira. Delivered with retries, and each message is idempotent. |
 | **Echo suppression** | The factory marks its own comments, so syncing replies back never treats them as human answers. |
 | **Answer at source** | A human reply on the original issue (GitHub or Jira) that answers an open clarification and resumes the item. |

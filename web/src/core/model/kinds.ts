@@ -233,9 +233,11 @@ export interface RunProvenance {
 
 export interface ConversationSpec {
   workItemRef: Ref;
-  agentRunRef: Ref;
-  agentRef: Ref;
-  purpose: "explain";
+  /** Set for `explain` (one run); absent for `explain-item` (the whole work item, X4). */
+  agentRunRef?: Ref;
+  agentRef?: Ref;
+  /** Selects the registered ConversationResponder. */
+  purpose: "explain" | "explain-item";
   startedBy?: string;
 }
 export interface ConversationStatus {

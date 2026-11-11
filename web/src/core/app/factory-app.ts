@@ -26,6 +26,8 @@ import type {
   ExecutionEnvironmentSelector,
   ModelResolver,
   ControllerHealth,
+  ItemConversationActions,
+  Lookup,
   KindLookup,
   NewWorkItemInput,
   Principal,
@@ -50,7 +52,8 @@ export interface FactoryAppDeps {
   compiler: WorkflowCompiler;
   syncer: SourceSyncer;
   transcripts: TranscriptReader;
-  responder: ConversationResponder;
+  /** Responders by `Conversation.spec.purpose` (registry, X4). */
+  responders: Lookup<ConversationResponder>;
   replayer: RunReplayer;
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
@@ -75,7 +78,8 @@ export class FactoryApp
     DefinitionQueries,
     ReplayActions,
     SystemQueries,
-    ResourceBrowser
+    ResourceBrowser,
+    ItemConversationActions
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -187,6 +191,27 @@ export class FactoryApp
     return created;
   }
 
+  async startItemConversation(p: Principal, workItem: string): Promise<Conversation> {
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, workItem);
+    if (!wi) throw new Error(`work item ${workItem} not found`);
+    const created = await this.d.writer.create<Conversation>({
+      apiVersion: API_VERSION,
+      kind: "Conversation",
+      metadata: { name: "", generateName: `${workItem.slice(0, 50)}-ask-`, namespace: this.ns, ownerReferences: [ownerRef(wi)] },
+      spec: { workItemRef: { name: workItem }, purpose: "explain-item", startedBy: p.id },
+    });
+    return this.awaitTranscript(created);
+  }
+
+  private async awaitTranscript(created: Conversation): Promise<Conversation> {
+    for (let i = 0; i < 100; i++) {
+      const c = await this.d.reader.get<Conversation>("Conversation", this.ns, created.metadata.name);
+      if (c?.status?.transcriptRef) return c;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return created;
+  }
+
   async conversationMessages(_p: Principal, name: string): Promise<TranscriptMessage[]> {
     const c = await this.d.reader.get<Conversation>("Conversation", this.ns, name);
     return c?.status?.transcriptRef ? this.d.transcripts.read(c.status.transcriptRef) : [];
@@ -196,7 +221,9 @@ export class FactoryApp
     const c = await this.d.reader.get<Conversation>("Conversation", this.ns, name);
     if (!c) throw new Error(`conversation ${name} not found`);
     if (!text.trim()) throw new Error("message is empty");
-    return this.d.responder.respond(c, text.trim(), { type: "human", id: p.id });
+    const responder = this.d.responders.get(c.spec.purpose);
+    if (!responder) throw new Error(`no responder for conversation purpose "${c.spec.purpose}"`);
+    return responder.respond(c, text.trim(), { type: "human", id: p.id });
   }
 
   /** MVP: one runtime namespace + factory-system. v0.4 derives these from the principal's squads (ADR-0009/0011). */

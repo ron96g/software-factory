@@ -1,5 +1,5 @@
 "use client";
-import { Accordion, Badge, Box, Button, Code, Divider, Drawer, Group, Paper, ScrollArea, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Tooltip } from "@mantine/core";
+import { Accordion, Badge, Box, Button, Code, Divider, Drawer, Group, Loader, Paper, ScrollArea, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Tooltip } from "@mantine/core";
 import { IconArrowsDiff, IconMessageQuestion, IconNote, IconRefresh, IconRobot, IconSend, IconSettings, IconTool, IconUser } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { AgentRun, Artifact, Conversation } from "@/core/model/kinds.ts";
@@ -156,7 +156,7 @@ export function RunDrawer({
         ) : tab === "transcript" ? (
           <TranscriptMessages messages={transcript ?? []} />
         ) : (
-          <ExplainChat run={run} existing={conversations.filter((c) => c.spec.agentRunRef.name === run.metadata.name)} />
+          <ExplainChat run={run} existing={conversations.filter((c) => c.spec.agentRunRef?.name === run.metadata.name)} />
         )}
       </Stack>
     </Drawer>
@@ -164,6 +164,30 @@ export function RunDrawer({
 }
 
 function ExplainChat({ run, existing }: { run: AgentRun; existing: Conversation[] }) {
+  return (
+    <ChatPanel
+      existing={existing}
+      start={() => act<Conversation>("/api/conversations", { runName: run.metadata.name })}
+      placeholder={`Ask ${run.spec.agentRef.name} why it did something…`}
+      intro="Explain mode (ADR-0012): the agent answers from its recorded transcript and provenance. It can't change anything."
+    />
+  );
+}
+
+/** Generic, read-only chat over a Conversation (run- or item-scoped). */
+export function ChatPanel({
+  existing,
+  start,
+  placeholder,
+  intro,
+  suggestions = [],
+}: {
+  existing: Conversation[];
+  start: () => Promise<Conversation | undefined>;
+  placeholder: string;
+  intro: string;
+  suggestions?: string[];
+}) {
   const [conv, setConv] = useState<string | null>(existing.at(-1)?.metadata.name ?? null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [text, setText] = useState("");
@@ -173,19 +197,19 @@ function ExplainChat({ run, existing }: { run: AgentRun; existing: Conversation[
     if (conv) void api<TranscriptMessage[]>(`/api/conversations/${conv}/messages`).then(setMessages);
   }, [conv]);
 
-  async function send() {
-    if (!text.trim()) return;
+  async function send(q: string) {
+    if (!q.trim()) return;
     setBusy(true);
+    setText("");
+    // Show the question immediately, before the conversation exists or the answer arrives.
+    setMessages((m) => [...m, { seq: -1, at: new Date().toISOString(), role: "user", author: { type: "human", id: "you" }, content: q }]);
     let name = conv;
     if (!name) {
-      const c = await act<Conversation>("/api/conversations", { runName: run.metadata.name });
+      const c = await start();
       name = c?.metadata.name ?? null;
       setConv(name);
     }
     if (name) {
-      const q = text;
-      setText("");
-      setMessages((m) => [...m, { seq: -1, at: new Date().toISOString(), role: "user", author: { type: "human", id: "you" }, content: q }]);
       await act(`/api/conversations/${name}/messages`, { text: q });
       setMessages(await api<TranscriptMessage[]>(`/api/conversations/${name}/messages`));
     }
@@ -195,24 +219,41 @@ function ExplainChat({ run, existing }: { run: AgentRun; existing: Conversation[
   return (
     <Stack>
       <Text size="xs" c="dimmed">
-        Explain mode (ADR-0012): the agent answers using its recorded transcript and provenance. It can&apos;t change anything.
+        {intro}
       </Text>
-      <ScrollArea.Autosize mah={480}>
-        <TranscriptMessages messages={messages} collapseLong={false} />
+      {!messages.length && suggestions.length > 0 && (
+        <Group gap={6}>
+          {suggestions.map((q) => (
+            <Button key={q} size="compact-xs" variant="light" onClick={() => void send(q)} disabled={busy}>
+              {q}
+            </Button>
+          ))}
+        </Group>
+      )}
+      <ScrollArea.Autosize mah="55vh">
+        {messages.length > 0 && <TranscriptMessages messages={messages} collapseLong={false} />}
+        {busy && (
+          <Group gap={6} mt="xs">
+            <Loader size="xs" type="dots" />
+            <Text size="xs" c="dimmed">
+              thinking…
+            </Text>
+          </Group>
+        )}
       </ScrollArea.Autosize>
       <Box>
         <Textarea
-          placeholder={`Ask ${run.spec.agentRef.name} why it did something…`}
+          placeholder={placeholder}
           autosize
           minRows={2}
           value={text}
           onChange={(e) => setText(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send(text);
           }}
         />
         <Group justify="flex-end" mt="xs">
-          <Button size="xs" leftSection={<IconSend size={14} />} loading={busy} onClick={() => void send()}>
+          <Button size="xs" leftSection={<IconSend size={14} />} loading={busy} onClick={() => void send(text)}>
             Ask (Ctrl+Enter)
           </Button>
         </Group>

@@ -153,12 +153,20 @@ text in Jira comments.
 Known v0.3 limits: check failures and human reject comments are not yet fed to the developer as input (only AI code reviews are); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
+#### UX increment (current, replaces v0.4 for now — ADR-0025)
+| # | Item | Scope | Exit criteria | Status |
+|---|---|---|---|---|
+| X1 | Readable Markdown | GFM (tables, task lists, strikethrough, autolinks), styled tables/code/headings, consistent renderer everywhere (artifacts, transcripts, chat, PR-ready content) | Agent tables render as tables in light and dark mode | ✅ |
+| X2 | Usable timeline | Fixed-height scrollable (sticky) timeline, filter (key events / all / warnings), compact entries | Long items keep the page short; key events findable at a glance | ✅ |
+| X3 | Structured agent runs | Runs grouped by stage (workflow order) → rounds (latest open, older superseded) → step rows (agent, outcome, duration, executor, summary); replays nested | The current state and history of runs are understandable without opening transcripts | ✅ |
+| X4 | Ask about the work item | `Conversation.purpose` (`explain` run · `explain-item` whole item), responders registered by purpose, item responder grounded in all runs/artifacts/human input/events; "Ask about this item" chat | "What did the product owner do?" answered without opening the PO run | ✅ (ADR-0026) |
+
 #### Later increments
 | Version | Increment | Highlights |
 |---|---|---|
 | v0.2 | Write-back | ✅ see table above |
 | v0.3 | Construction for real | see table above (ADR-0019); Bolt fan-out per Unit moves to v1.0 |
-| v0.4 | Auth & squads | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
+| v0.4 | Auth & squads (**postponed**, ADR-0025) | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
 | v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011), delegation as tool calls (loop itself moved to v0.3, ADR-0019) |
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
 | v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself, Bolt fan-out per Unit |
