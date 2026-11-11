@@ -1,6 +1,6 @@
 # ADR-0020: Explicit, unsandboxed `host` runtime for local development
 
-- **Status:** Accepted (amends ADR-0019 §5 "no host execution")
+- **Status:** Accepted (amends ADR-0019 §5 "no host execution"). The lazy per-item worktree is superseded by the Workspace resource in ADR-0021; the safeguards remain.
 - **Date:** 2026-11-11
 - **Deciders:** project owner
 

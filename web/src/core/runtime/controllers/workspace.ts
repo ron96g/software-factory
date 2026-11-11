@@ -10,6 +10,7 @@ import {
   type StatusWriter,
   type WorkspaceCleaner,
   type WorkspacePreparer,
+  type WorkspaceSweeper,
 } from "../../ports/index.ts";
 import { resolveRef } from "../../refs/refs.ts";
 
@@ -23,8 +24,11 @@ export function createWorkspaceController(d: {
   events: EventRecorder;
   preparer: WorkspacePreparer;
   cleaner: WorkspaceCleaner;
+  sweeper: WorkspaceSweeper;
   redactor: Redactor;
+  sweepMs?: number;
 }): Controller & InitialKeys {
+  const SWEEP = "sweep/all";
   const inFlight = new Set<string>();
   const deleted = new Map<string, Workspace>();
 
@@ -39,14 +43,18 @@ export function createWorkspaceController(d: {
       }
       const p = await d.preparer.prepare(cur, repo);
       const latest = (await d.reader.get<Workspace>("Workspace", nsOf(ws), ws.metadata.name))!;
-      const ready = await d.status.updateStatus({ ...latest, status: { phase: "Ready", ...p, setupLog: p.setupLog ? d.redactor.redact(p.setupLog) : latest.status?.setupLog } });
+      const ready = await d.status.updateStatus({ ...latest, status: { phase: "Ready", ...p, setupLog: p.setupLog ? d.redactor.redact(p.setupLog) : undefined } });
       await d.events.normal(ready, "Ready", `${p.path} @ ${p.baseCommit.slice(0, 10)}`);
     } catch (e) {
       const message = d.redactor.redact(e instanceof Error ? e.message : String(e));
-      const latest = await d.reader.get<Workspace>("Workspace", nsOf(ws), ws.metadata.name);
-      if (latest) {
-        await d.status.updateStatus({ ...latest, status: { ...latest.status, phase: "Failed", message } });
-        await d.events.warning(latest, "Failed", message);
+      try {
+        const latest = await d.reader.get<Workspace>("Workspace", nsOf(ws), ws.metadata.name);
+        if (latest) {
+          await d.status.updateStatus({ ...latest, status: { ...latest.status, phase: "Failed", message } });
+          await d.events.warning(latest, "Failed", message);
+        }
+      } catch (inner) {
+        if (!isStoreError(inner)) throw inner; // conflict/not found: the next reconcile/resync observes the state
       }
     } finally {
       inFlight.delete(key);
@@ -61,18 +69,27 @@ export function createWorkspaceController(d: {
       if (e.type === "DELETED") deleted.set(key, e.object as Workspace);
       return [key];
     },
-    initialKeys: async () =>
-      (await d.reader.list<Workspace>("Workspace")).filter((w) => w.status?.phase !== "Ready" && w.status?.phase !== "Failed").map(keyOf),
+    // Level-triggered cleanup (sweep) at startup and periodically; the DELETED event is only a fast path.
+    initialKeys: async () => [
+      SWEEP,
+      ...(await d.reader.list<Workspace>("Workspace")).filter((w) => w.status?.phase !== "Ready" && w.status?.phase !== "Failed").map(keyOf),
+    ],
+    resyncMs: d.sweepMs ?? 10 * 60_000,
 
     async reconcile(key) {
+      if (key === SWEEP) {
+        const live = (await d.reader.list<Workspace>("Workspace")).map((w) => ({ workItem: w.spec.workItemRef.name, repository: w.spec.repositoryRef.name }));
+        await d.sweeper.sweep(live);
+        return;
+      }
       const { namespace, name } = parseKey(key);
       const ws = await d.reader.get<Workspace>("Workspace", namespace, name);
       if (!ws) {
         const gone = deleted.get(key);
         if (!gone) return;
-        deleted.delete(key);
         const repo = await resolveRef<Repository>(d.reader, "Repository", gone.spec.repositoryRef, namespace);
-        await d.cleaner.remove(gone, repo);
+        await d.cleaner.remove(gone, repo); // throws → manager retries with backoff
+        deleted.delete(key);
         return;
       }
       if (ws.status?.phase === "Ready" || ws.status?.phase === "Failed" || inFlight.has(key)) return;

@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -47,13 +47,16 @@ import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { SandboxToolLoopExecutor } from "./agents/tool-loop.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 
+/** Composition-root convenience alias; consumers depend on the individual ports. */
+type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport & WorkspaceSweeper;
+
 export interface FactoryOptions {
   /** Repo root containing agents/, skills/, workflows/, … */
   definitionsRoot: string;
   /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
   workspacesDir?: string;
   /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
-  workspaceBackend?: WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport;
+  workspaceBackend?: WorkspaceBackend;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
@@ -125,8 +128,9 @@ export async function createFactory(o: FactoryOptions) {
   ]);
 
   // ── workspaces (ADR-0021): backend follows the runtime; isolated runtimes will clone into volumes ──
-  const noWorkspaces: WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport = {
+  const noWorkspaces: WorkspaceBackend = {
     supports: () => false,
+    sweep: async () => [],
     prepare: async () => {
       throw new Error("no workspace backend for this runtime");
     },
@@ -178,7 +182,7 @@ export async function createFactory(o: FactoryOptions) {
   const manager = new ControllerManager(store, o.log);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend }));
   manager.register(
-    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, redactor }),
+    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor }),
   );
   manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor }));
   manager.register(

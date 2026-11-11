@@ -72,3 +72,30 @@ stateDiagram-v2
 | Current agent | agent of the latest running `AgentRun` |
 
 Actions: **New item** (manual), **Sync now** (per source), **Answer** (unblocks an item), **Approve / Reject** (gates).
+
+## Workspaces (ADR-0021)
+
+Each work item gets one **Workspace** per linked repository: a pinned copy of the code that every agent of the item sees.
+Analysis agents search it, and construction agents read, write and run commands in it (through a sandbox runtime).
+
+```mermaid
+stateDiagram-v2
+  [*] --> Pending: WorkItem starts (WorkItem controller creates it)
+  Pending --> Preparing: Workspace controller picks it up
+  Preparing --> Ready: worktree/clone created, base commit pinned, setup completed
+  Preparing --> Failed: setup or checkout failed (item fails with the reason)
+  Ready --> [*]: WorkItem deleted (cascade) → files removed (event + periodic sweep)
+```
+
+```mermaid
+flowchart LR
+  WI[WorkItem] -- owns --> WS[Workspace<br/>branch factory/&lt;item&gt;<br/>base commit pinned]
+  WS -- prepared by --> P["WorkspacePreparer<br/>(host: git worktree)"]
+  WS --> CS[code search · repository docs]
+  WS --> SB["Sandbox runtime<br/>(host / container / k8s)"]
+  SB --> DEV[developer · verifier tools]
+  CS --> AN[analysis agents]
+```
+
+- Agent runs wait until all of the item's workspaces are `Ready`. Provenance records `repository → commit`.
+- Workspaces fork from the **committed** HEAD (or `Repository.spec.workspace.baseRef`). Uncommitted local changes are not visible.

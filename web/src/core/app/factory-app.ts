@@ -195,6 +195,11 @@ export class FactoryApp
     return this.d.responder.respond(c, text.trim(), { type: "human", id: p.id });
   }
 
+  /** MVP: one runtime namespace + factory-system. v0.4 derives these from the principal's squads (ADR-0009/0011). */
+  private nsFor(scope: "definition" | "runtime"): string {
+    return scope === "runtime" ? this.ns : SYSTEM_NAMESPACE;
+  }
+
   private kindByPlural(plural: string) {
     const info = this.d.kinds.byPlural(plural);
     if (!info) throw new Error(`unknown resource type ${plural}`);
@@ -207,20 +212,20 @@ export class FactoryApp
         kind: k.kind,
         plural: k.plural,
         scope: k.scope,
-        count: (await this.d.reader.list(k.kind, k.scope === "runtime" ? { namespace: this.ns } : {})).length,
+        count: (await this.d.reader.list(k.kind, { namespace: this.nsFor(k.scope) })).length,
       })),
     );
   }
 
   async listResources(_p: Principal, plural: string): Promise<Resource[]> {
     const k = this.kindByPlural(plural);
-    const list = await this.d.reader.list(k.kind, k.scope === "runtime" ? { namespace: this.ns } : {});
+    const list = await this.d.reader.list(k.kind, { namespace: this.nsFor(k.scope) });
     return list.sort((a, b) => (b.metadata.creationTimestamp ?? b.metadata.name).localeCompare(a.metadata.creationTimestamp ?? a.metadata.name));
   }
 
   async getResource(_p: Principal, plural: string, name: string): Promise<Resource | null> {
     const k = this.kindByPlural(plural);
-    return this.d.reader.get(k.kind, k.scope === "runtime" ? this.ns : SYSTEM_NAMESPACE, name);
+    return this.d.reader.get(k.kind, this.nsFor(k.scope), name);
   }
 
   async systemHealth(_p: Principal): Promise<SystemHealth> {

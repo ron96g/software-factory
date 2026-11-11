@@ -319,5 +319,6 @@ export interface WorkspaceStatus {
   message?: string;
   /** Output of the setup commands (truncated). */
   setupLog?: string;
+  setupCompleted?: boolean;
 }
 export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;

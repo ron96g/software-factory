@@ -221,6 +221,8 @@ export interface PreparedWorkspace {
   headCommit: string;
   preparedBy: string;
   setupLog?: string;
+  /** Setup ran to completion (a crash mid-setup re-runs it). */
+  setupCompleted: boolean;
 }
 
 /** Whether this backend can provide workspaces for a repository (e.g. needs a local path). */
@@ -236,4 +238,9 @@ export interface WorkspacePreparer {
 /** Removes the files of a deleted Workspace. Idempotent. */
 export interface WorkspaceCleaner {
   remove(ws: Workspace, repo: Repository | null): Promise<void>;
+}
+
+/** Level-triggered cleanup: removes workspace files whose resource no longer exists. Returns removed paths. */
+export interface WorkspaceSweeper {
+  sweep(live: { workItem: string; repository: string }[]): Promise<string[]>;
 }

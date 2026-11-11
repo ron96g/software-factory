@@ -122,5 +122,13 @@ test("ADR-0020/0021: git worktree workspace + host sandbox; changes persist per 
 
   await backend.remove(ready, repo);
   assert.equal(existsSync(prepared.path), false, "cleaned up");
+
+  // level-triggered sweep: an orphaned worktree (resource gone, e.g. after a crash) is removed; live ones stay
+  const orphan = await backend.prepare({ ...ws, metadata: { name: "item-2-repo" }, spec: { ...ws.spec, workItemRef: { name: "item-2" }, branch: "factory/item-2", setup: [] } } as never, repo);
+  const live = await backend.prepare({ ...ws, metadata: { name: "item-3-repo" }, spec: { ...ws.spec, workItemRef: { name: "item-3" }, branch: "factory/item-3", setup: [] } } as never, repo);
+  const swept = await backend.sweep([{ workItem: "item-3", repository: "repo" }]);
+  assert.deepEqual(swept, [orphan.path]);
+  assert.equal(existsSync(live.path), true);
+  await assert.rejects(backend.remove({ ...ready, status: { ...ready.status, path: "/etc" } } as never, repo), /outside the workspaces dir/);
   assert.match(execFileSync("git", ["branch", "--list", "factory/item-1"], { cwd: repoDir }).toString(), /factory\/item-1/, "branch kept");
 });

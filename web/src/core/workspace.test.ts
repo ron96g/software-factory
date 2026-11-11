@@ -15,9 +15,10 @@ test("S5a: workspace is created at start, agents wait for Ready, provenance pins
   const removed: string[] = [];
   const backend = {
     supports: () => true,
+    sweep: async () => [],
     async prepare(ws: Workspace): Promise<PreparedWorkspace> {
       await gate; // simulate a slow setup (e.g. npm ci)
-      return { path: ROOT, baseCommit: "abc123def", headCommit: "abc123def", preparedBy: "fake", setupLog: `prepared ${ws.metadata.name}` };
+      return { path: ROOT, baseCommit: "abc123def", headCommit: "abc123def", preparedBy: "fake", setupLog: `prepared ${ws.metadata.name}`, setupCompleted: true };
     },
     async remove(ws: Workspace) {
       removed.push(ws.metadata.name);
@@ -55,6 +56,7 @@ test("S5a: workspace is created at start, agents wait for Ready, provenance pins
 test("S5a: a failed workspace fails the item with a visible reason", async () => {
   const backend = {
     supports: () => true,
+    sweep: async () => [],
     prepare: async (): Promise<PreparedWorkspace> => {
       throw new Error("setup failed: npm ci (exit 1)");
     },

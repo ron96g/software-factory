@@ -28,3 +28,11 @@ the worktree was invisible to the system (no UI, no cleanup), and it had no setu
 ## Consequences
 One visible, reproducible code state per item, plus cleanup. Items wait briefly until setup completes.
 Supersedes the lazy worktree creation in ADR-0020 (the other ADR-0020 safeguards remain).
+
+## Addendum (architecture review of S5a)
+- **Cleanup is level-triggered:** the Workspace controller sweeps (`WorkspaceSweeper`) at startup and every 10 minutes, and
+  removes workspace files without a resource. The DELETED watch event is only a fast path, and a failed removal is retried.
+- `status.setupCompleted`: setup re-runs until it has completed once.
+- Deletion is guarded: only paths strictly inside the workspaces directory are removed.
+- Known limits: a `Failed` workspace is terminal (recover by deleting the work item); repositories added to an item after it
+  started get no workspace; setup commands run unsandboxed, and only when the `host` runtime is selected (operator-authored config).
