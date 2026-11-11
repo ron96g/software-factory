@@ -64,7 +64,9 @@ test("Q1: loop is bounded; after maxAttempts the human gate decides (LoopExhaust
   try {
     assert.equal(d.workItem.status?.retries?.["code-review"], 2);
     assert.equal(d.runs.filter((r) => r.spec.step === "write-code").length, 3);
-    assert.ok(d.events.some((e) => e.spec.reason === "LoopExhausted"));
+    await new Promise((r) => setTimeout(r, 300)); // further reconciles while waiting at the gate
+    const after = (await f.app.getWorkItem(p, d.workItem.metadata.name))!;
+    assert.equal(after.events.filter((e) => e.spec.reason === "LoopExhausted").length, 1, "emitted exactly once");
   } finally {
     await f.stop();
   }

@@ -170,6 +170,8 @@ export interface WorkItemStatus {
   blockedBy?: { kind: "Clarification" | "Approval"; name: string };
   /** Retry budget used per stage: failed checks (ADR-0023) and review→fix loops (Q1). */
   retries?: Record<string, number>;
+  /** `<stage>@r<round>` once a stage loop's budget is used up (LoopExhausted is recorded exactly once). */
+  loopExhausted?: string;
   message?: string;
   conditions?: Condition[];
 }

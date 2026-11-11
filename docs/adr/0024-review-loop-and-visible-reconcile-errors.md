@@ -29,3 +29,7 @@ item looked "Running" forever.
 ## Consequences
 Humans review code whose blocking AI findings have already been addressed, and stuck items explain themselves in their timeline.
 The loop costs extra LLM rounds (bounded by `maxAttempts`).
+
+## Addendum (architecture review)
+- `LoopExhausted` is recorded **exactly once** per stage round, via the status marker `loopExhausted: <stage>@r<round>`.
+- The reporter drops entries for objects that no longer exist, so its memory stays bounded.

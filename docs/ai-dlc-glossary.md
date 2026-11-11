@@ -97,6 +97,8 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Tool loop** | The agent loop in which the LLM calls tools (read/write files, run commands) inside a sandbox until it calls `finish`. Every turn, call and result is recorded. |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
 | **Review→fix loop** | Blocking AI code-review findings send the item back to `implement` (bounded), so humans review already-fixed code (ADR-0024). |
+| **code-review-report** | The AI code review's findings. Blocking ones trigger the review→fix loop and are input for the developer. |
+| **ReconcileFailing / failing badge** | A control loop that keeps failing on an object. It shows up as a Warning event on that object and as a red "N failing" badge in the header. |
 | **Tool narrowing** | A workflow step can restrict its agent's tools (`tools: []` = none). It can never add tools. |
 | **SandboxProfile** | A runtime-neutral sandbox definition: image, limits, network allowlist, minimum isolation. Agents reference it with `sandboxRef`. |
 

@@ -329,7 +329,11 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         if (stage.loop && st.lastOutcome === stage.loop.when.outcome) {
           const used = st.retries?.[stage.name] ?? 0;
           if (used < stage.loop.maxAttempts) return apply(wi, wf, stage, { action: "goto", stage: stage.loop.goto, retryOf: stage.name });
-          await d.events.warning(wi, "LoopExhausted", `${stage.name}: still "${st.lastOutcome}" after ${used} round(s); handing over to the gate`);
+          const marker = `${stage.name}@r${st.round}`;
+          if (st.loopExhausted !== marker) {
+            // Level-triggered: the status marker makes this happen once; the next reconcile proceeds to the gate.
+            return write(wi, { loopExhausted: marker }, "LoopExhausted", `${stage.name}: still "${st.lastOutcome}" after ${used} round(s); handing over to the gate`);
+          }
         }
         const evaluator = stage.gate ? d.gates.get(stage.gate.type) : undefined;
         if (stage.gate && !evaluator) {

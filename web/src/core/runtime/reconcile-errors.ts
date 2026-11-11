@@ -41,6 +41,10 @@ export class EventingReconcileErrorReporter implements ReconcileErrorReporter, C
     const every = this.d.every ?? 10;
     if (f.attempt !== threshold && (f.attempt < threshold || (f.attempt - threshold) % every !== 0)) return;
     const obj = await this.object(f.kind, f.key);
+    if (!obj && f.kind) {
+      this.current.delete(id); // object is gone: nothing left to report on (bounded memory)
+      return;
+    }
     if (obj) await this.d.events.warning(obj, "ReconcileFailing", `${f.controller}: attempt ${f.attempt} failed: ${lastError}`).catch(() => {});
   }
 
