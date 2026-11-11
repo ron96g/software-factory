@@ -295,12 +295,13 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                 outputs: (step.outputs ?? []).map((o) => o.artifactRef),
                 modelTier: step.model?.tier,
                 tools: step.tools,
-                outcomes: step.outcomes?.length
-                  ? step.outcomes // structured verdict declared on the step (ADR-0027)
-                  : !last
-                  ? undefined
-                  : stage.gate?.type === "decision"
-                    ? Object.keys(stage.gate.routes ?? {})
+                // Decision-gate routes win on the last step; otherwise a step-declared verdict applies (ADR-0027).
+                outcomes: last && stage.gate?.type === "decision"
+                  ? Object.keys(stage.gate.routes ?? {})
+                  : step.outcomes?.length
+                    ? step.outcomes
+                    : !last
+                      ? undefined
                     : stage.loop
                       ? ["approve", stage.loop.when.outcome]
                       : undefined,

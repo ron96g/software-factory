@@ -60,8 +60,8 @@ export interface FactoryAppDeps {
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
   controllerHealth: ControllerHealth;
-  /** Audit trail for human overrides (ADR-0027). */
-  events?: EventRecorder;
+  /** Audit trail for human overrides (ADR-0027) — required, an override must never go unlogged. */
+  events: EventRecorder;
 }
 
 const slug = (s: string) =>
@@ -173,10 +173,11 @@ export class FactoryApp
         if (!override) throw new Error(`blocking evidence (${reasons}); approving requires an explicit override with a reason`);
         if (!comment || comment.trim().length < 10) throw new Error("an override needs a reason (at least 10 characters)");
         const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, a.spec.workItemRef.name);
-        if (wi) await this.d.events?.warning(wi, "ApprovedDespiteFailures", `${a.spec.stage} approved by ${p.id} despite: ${reasons}. Reason: ${comment.trim()}`);
+        if (wi) await this.d.events.warning(wi, "ApprovedDespiteFailures", `${a.spec.stage} approved by ${p.id} despite: ${reasons}. Reason: ${comment.trim()}`);
       }
     }
-    return this.d.writer.update({ ...a, spec: { ...a.spec, decision, decidedBy: p.id, comment } });
+    const overridden = decision === "approve" && override === true ? true : undefined;
+    return this.d.writer.update({ ...a, spec: { ...a.spec, decision, decidedBy: p.id, comment, ...(overridden ? { overridden } : {}) } });
   }
 
   async listSources(_p: Principal): Promise<Source[]> {

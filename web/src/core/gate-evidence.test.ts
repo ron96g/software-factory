@@ -76,6 +76,7 @@ test("X5: a failed verification can't be approved by accident (server-enforced o
     await f.app.decideApproval(p, ship, "approve", "Hotfix accepted by the product owner", true);
     const after = (await f.app.getWorkItem(p, wi.metadata.name))!;
     assert.ok(after.events.some((e) => e.spec.reason === "ApprovedDespiteFailures" && /Hotfix accepted/.test(e.spec.message)));
+    assert.equal(after.approvals.find((a) => a.metadata.name === ship)?.spec.overridden, true);
   } finally {
     await f.stop();
   }

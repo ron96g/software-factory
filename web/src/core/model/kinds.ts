@@ -289,6 +289,8 @@ export interface ApprovalSpec {
   decision?: "approve" | "reject";
   decidedBy?: string;
   comment?: string;
+  /** Approved despite blocking evidence (ADR-0027); the comment holds the reason. */
+  overridden?: boolean;
 }
 export interface ApprovalStatus {
   phase: "Pending" | "Approved" | "Rejected";

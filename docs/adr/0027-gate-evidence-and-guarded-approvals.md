@@ -33,3 +33,8 @@ for certain roles in v0.4.
 Verdicts and check results recorded **before the latest code change** (the latest successful run that produces
 `source-code`) are downgraded from blocking to a warning and labelled "outdated: code changed since". Otherwise a check that
 failed before a fix would block the next code-review approval, before the checks could run again.
+
+## Addendum (architecture review)
+- On the last step of a stage with a `decision` gate, the gate's routes define the outcomes; `StepSpec.outcomes` applies elsewhere.
+- An override is stored durably on the approval (`spec.overridden: true`, with the reason in `comment`) **and** as an
+  `ApprovedDespiteFailures` event. The event recorder is a required dependency.
