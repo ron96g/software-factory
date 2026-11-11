@@ -150,7 +150,7 @@ text in Jira comments.
 | Q1 | Review → fix loop | Stage-level `loop` (outcome → goto, bounded): AI code review returns `changes-requested` for blocking findings, the developer gets the review as input and fixes before the human gate | Blocking AI findings are fixed automatically (max N rounds), then humans review | ✅ (ADR-0024) |
 | Q2 | Visible control-loop errors | `ReconcileErrorReporter` port: repeated reconcile failures become Warning events on the object; failing-controller count in system health + UI badge | A stuck item shows why in its timeline | ✅ (ADR-0024) |
 
-Known v0.3 limits: check failures and human reject comments are not yet fed to the developer as input (only AI code reviews are); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
+Known v0.3 limits: failed check output is not yet fed to the developer as input (AI reviews and human gate comments are); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
 #### UX increment (current, replaces v0.4 for now — ADR-0025)
@@ -162,6 +162,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X4 | Ask about the work item | `Conversation.purpose` (`explain` run · `explain-item` whole item), responders registered by purpose, item responder grounded in all runs/artifacts/human input/events; "Ask about this item" chat | "What did the product owner do?" answered without opening the PO run | ✅ (ADR-0026) |
 | X5 | Clear gates | Structured verdicts (`StepSpec.outcomes`, verifier `pass/partial/fail`), gate evidence (ok/warning/blocking) at every gate, server-enforced override with reason when blocking, verdict badges on artifacts + stage chips (ADR-0027) | A failed verification can't be approved by accident; the reason is visible at the gate | ✅ |
 | X6 | Structured clarifications | Header with asking agent + why + progress, one card per question (Markdown, own answer, skip), positional answers, "Ask the agent about these questions" chat | Answering several questions is calm and clear; users can ask back before answering | ✅ |
+| X7 | Gate decisions steer agents | Decided approvals (decision + comment) are agent input ("Human gate decision"); "Approve & let agents decide" delegates open decisions to recommended defaults (documented, no re-asking); reject reasons reach the re-run | A human can delegate open decisions in one click; rejection feedback is acted on | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

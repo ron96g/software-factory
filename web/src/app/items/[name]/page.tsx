@@ -19,7 +19,7 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion } from "@tabler/icons-react";
+import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion } from "@tabler/icons-react";
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
 import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
@@ -377,6 +377,10 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
   );
 }
 
+const DELEGATE_INSTRUCTION =
+  "Delegated by the human: for all open decisions and questions raised at this gate, use the reviewer's recommended option " +
+  "(or the most conservative reasonable default), document each choice under a 'Decisions taken' heading, and do not ask again.";
+
 const SEVERITY = {
   blocking: { color: "red", icon: IconX, label: "Blocking" },
   warning: { color: "yellow", icon: IconAlertTriangle, label: "Warning" },
@@ -479,7 +483,32 @@ function ApprovalPanel({ a, evidence, onOpenRun }: { a: Approval; evidence: Gate
             onChange={(e) => setOverride(e.currentTarget.checked)}
           />
         )}
-        <Group justify="flex-end">
+        <Group justify="space-between">
+          {!blocking ? (
+            <Tooltip
+              multiline
+              w={360}
+              label="Approve and delegate every open decision: agents use the reviewer's recommended option (or a conservative default), document each choice, and don't ask again. Your comment is added."
+            >
+              <Button
+                variant="light"
+                color="teal"
+                leftSection={<IconRobot size={14} />}
+                loading={busy === "delegate"}
+                onClick={async () => {
+                  setBusy("delegate");
+                  const text = [DELEGATE_INSTRUCTION, comment.trim()].filter(Boolean).join("\n\nAdditional notes: ");
+                  await act(`/api/approvals/${a.metadata.name}/decide`, { decision: "approve", comment: text }, "Approved; agents decide open points");
+                  setBusy(null);
+                }}
+              >
+                Approve &amp; let agents decide
+              </Button>
+            </Tooltip>
+          ) : (
+            <span />
+          )}
+          <Group>
           <Button variant={blocking ? "filled" : "default"} color="red" leftSection={<IconX size={14} />} loading={busy === "reject"} onClick={() => decide("reject")}>
             Reject
           </Button>
@@ -493,6 +522,7 @@ function ApprovalPanel({ a, evidence, onOpenRun }: { a: Approval; evidence: Gate
           >
             {blocking ? "Approve despite failures" : "Approve"}
           </Button>
+          </Group>
         </Group>
       </Stack>
     </Alert>

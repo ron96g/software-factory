@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Artifact, Clarification, Repository, Skill, WorkItem, Workspace } from "../model/kinds.ts";
+import type { Agent, AgentRun, Approval, Artifact, Clarification, Repository, Skill, WorkItem, Workspace } from "../model/kinds.ts";
 import type { Ref } from "../model/resource.ts";
 import { nsOf } from "../model/meta.ts";
 import type {
@@ -71,6 +71,7 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       if (repo) repositories.push(repo);
     }
 
+    const approvals = (await reader.list<Approval>("Approval", { namespace: ns, ownedBy: owned })).filter((a) => !!a.spec.decision);
     const workspaces = (await reader.list<Workspace>("Workspace", { namespace: ns, ownedBy: owned })).filter((w) => w.status?.phase === "Ready");
 
     const model = await this.d.models.resolve({
@@ -88,6 +89,7 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       workItem,
       inputs,
       clarifications,
+      approvals,
       repositories,
       workspaces,
       sections: [],

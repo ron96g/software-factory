@@ -61,6 +61,15 @@ export class DefaultPromptBuilder implements PromptBuilder {
           c.spec.questions.map((q, i) => `Q: ${q}\nA: ${c.spec.answers?.[i] ?? c.spec.answers?.join(" ") ?? ""}`).join("\n"),
       );
     }
+    for (const a of ctx.approvals ?? []) {
+      // Human gate decisions (e.g. "use your recommended defaults", or why something was rejected) steer later agents.
+      if (!a.spec.comment?.trim() && a.spec.decision === "approve") continue;
+      parts.push(
+        `## Human gate decision (${a.spec.stage}): ${a.spec.decision?.toUpperCase()}${a.spec.overridden ? " (override despite failing evidence)" : ""}\n` +
+          `${a.spec.comment?.trim() || "(no comment)"}\n` +
+          (a.spec.decision === "reject" ? "Address this feedback first." : "Follow these instructions for any decisions still open."),
+      );
+    }
     for (const s of ctx.sections) parts.push(`## ${s.title} (from ${s.source})\n${s.content}`);
     return { system, user: parts.join("\n\n") };
   }

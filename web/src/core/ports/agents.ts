@@ -8,6 +8,7 @@
 import type {
   Agent,
   AgentRun,
+  Approval,
   Artifact,
   Clarification,
   Classification,
@@ -37,6 +38,8 @@ export interface ExecutionContext {
   workItem: WorkItem;
   inputs: Artifact[];
   clarifications: Clarification[];
+  /** Decided human gate approvals of the item (decision + comment), passed to later agents (X7). */
+  approvals: Approval[];
   repositories: Repository[];
   /** Ready workspaces of the work item: the single code state all agents see (ADR-0021). */
   workspaces: Workspace[];

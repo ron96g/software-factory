@@ -97,6 +97,7 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Tool loop** | The agent loop in which the LLM calls tools (read/write files, run commands) inside a sandbox until it calls `finish`. Every turn, call and result is recorded. |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
 | **Gate evidence** | What a human sees at a gate: structured verdicts (e.g. verifier pass/partial/fail), check results, open questions. Graded ok/warning/blocking (ADR-0027). |
+| **Delegation (at a gate)** | "Approve & let agents decide": open decisions are resolved by agents with the recommended/conservative default, documented under "Decisions taken". Gate comments are input for later agents. |
 | **Override** | Approving despite blocking evidence. It requires an explicit confirmation and a reason, and is recorded as `ApprovedDespiteFailures`. |
 | **Review→fix loop** | Blocking AI code-review findings send the item back to `implement` (bounded), so humans review already-fixed code (ADR-0024). |
 | **code-review-report** | The AI code review's findings. Blocking ones trigger the review→fix loop and are input for the developer. |
