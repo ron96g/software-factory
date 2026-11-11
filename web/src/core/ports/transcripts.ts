@@ -47,6 +47,12 @@ export interface TranscriptReader {
   read(ref: TranscriptRef, options?: { afterSeq?: number; limit?: number }): Promise<TranscriptMessage[]>;
 }
 
+/** Narrow read-model port: aggregate stats without loading message content. */
+export interface TranscriptStats {
+  /** Number of `tool-call` messages per transcript id. Refs without messages map to 0. */
+  toolCallCounts(refs: TranscriptRef[]): Promise<Map<string, number>>;
+}
+
 /** Live tail for the UI (SSE). Kept separate from reading (ISP). */
 export interface TranscriptTail {
   tail(ref: TranscriptRef, listener: (message: TranscriptMessage) => void): () => void;

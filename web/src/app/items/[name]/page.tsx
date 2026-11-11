@@ -98,7 +98,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
                 <Artifacts d={d} />
               </Tabs.Panel>
               <Tabs.Panel value="runs" pt="md">
-                <Runs runs={d.runs} onOpen={setOpenRun} />
+                <Runs runs={d.runs} counts={d.toolCallCounts ?? {}} onOpen={setOpenRun} />
               </Tabs.Panel>
               <Tabs.Panel value="description" pt="md">
                 <MarkdownView>{wi.spec.description || "_No description._"}</MarkdownView>
@@ -332,7 +332,7 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
 }
 
 /** Runs grouped as a tree via parentRunRef (delegation, ADR-0012). */
-function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void }) {
+function Runs({ runs, counts, onOpen }: { runs: AgentRun[]; counts: Record<string, number>; onOpen: (n: string) => void }) {
   // Tree: delegations (parentRunRef) and replays (replayOf) nest under their origin.
   const roots = runs.filter((r) => !r.spec.parentRunRef && !r.spec.replayOf);
   const children = (n: string) => runs.filter((r) => r.spec.parentRunRef?.name === n || r.spec.replayOf?.name === n);
@@ -362,6 +362,9 @@ function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void 
               {r.status.result.outcome}
             </Badge>
           )}
+          <Text size="xs" c="dimmed">
+            {counts[r.metadata.name] ?? 0} {(counts[r.metadata.name] ?? 0) === 1 ? "tool" : "tools"}
+          </Text>
           <Badge size="xs" variant="outline">
             {r.status?.provenance?.executor ?? r.status?.executor ?? "…"}
           </Badge>

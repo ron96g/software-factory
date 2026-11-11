@@ -203,6 +203,7 @@ export async function createFactory(o: FactoryOptions) {
     compiler,
     syncer,
     transcripts,
+    transcriptStats: transcripts,
     replayer: new DefaultRunReplayer(store, store),
     environments,
     models,

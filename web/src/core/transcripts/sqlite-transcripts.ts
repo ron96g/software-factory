@@ -5,13 +5,14 @@ import type {
   NewTranscriptMessage,
   TranscriptMessage,
   TranscriptReader,
+  TranscriptStats,
   TranscriptRef,
   TranscriptTail,
   TranscriptWriter,
 } from "../ports/index.ts";
 
 /** Append-only transcript log (ADR-0012). No update/delete on purpose. */
-export class SqliteTranscriptStore implements TranscriptWriter, TranscriptReader, TranscriptTail {
+export class SqliteTranscriptStore implements TranscriptWriter, TranscriptReader, TranscriptTail, TranscriptStats {
   private readonly db: DatabaseSync;
   private readonly clock: Clock;
   private readonly tails = new Map<string, Set<(m: TranscriptMessage) => void>>();
@@ -65,6 +66,21 @@ export class SqliteTranscriptStore implements TranscriptWriter, TranscriptReader
       content: r.content as string,
       meta: r.meta ? JSON.parse(r.meta as string) : undefined,
     }));
+  }
+
+  async toolCallCounts(refs: TranscriptRef[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>(refs.map((r) => [r.id, 0]));
+    const ids = [...out.keys()];
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const rows = this.db
+        .prepare(
+          `SELECT transcript_id AS id, COUNT(*) AS n FROM transcript_messages WHERE role = 'tool-call' AND transcript_id IN (${chunk.map(() => "?").join(",")}) GROUP BY transcript_id`,
+        )
+        .all(...chunk) as { id: string; n: number }[];
+      for (const r of rows) out.set(r.id, r.n);
+    }
+    return out;
   }
 
   tail(ref: TranscriptRef, listener: (m: TranscriptMessage) => void): () => void {

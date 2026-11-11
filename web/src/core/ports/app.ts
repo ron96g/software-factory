@@ -40,6 +40,8 @@ export interface WorkItemDetail {
   conversations: Conversation[];
   workspaces: Workspace[];
   events: FactoryEvent[];
+  /** Own tool calls per run name (0 when no transcript). Derived at read time. */
+  toolCallCounts: Record<string, number>;
   /** Stage names of the compiled workflow, in order (for progress display). */
   stages: { name: string; lifecyclePhase: string; gate?: string }[];
 }

@@ -34,6 +34,7 @@ import type {
   TranscriptMessage,
   TranscriptQueries,
   TranscriptReader,
+  TranscriptStats,
   WorkflowCompiler,
   WorkItemCommands,
   WorkItemDetail,
@@ -48,6 +49,7 @@ export interface FactoryAppDeps {
   compiler: WorkflowCompiler;
   syncer: SourceSyncer;
   transcripts: TranscriptReader;
+  transcriptStats: TranscriptStats;
   responder: ConversationResponder;
   replayer: RunReplayer;
   environments: ExecutionEnvironmentSelector;
@@ -108,7 +110,11 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, events, stages };
+    const refs = runs.flatMap((r) => (r.status?.transcriptRef ? [r.status.transcriptRef] : []));
+    const byId = refs.length ? await this.d.transcriptStats.toolCallCounts(refs) : new Map<string, number>();
+    const toolCallCounts: Record<string, number> = {};
+    for (const r of runs) toolCallCounts[r.metadata.name] = byId.get(r.status?.transcriptRef?.id ?? "") ?? 0;
+    return { toolCallCounts, workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, events, stages };
   }
 
   async createWorkItem(p: Principal, input: NewWorkItemInput): Promise<WorkItem> {
