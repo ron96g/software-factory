@@ -1,0 +1,67 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: github-issues
+spec:
+  type: github
+  connection:
+    repo: acme/shop
+    secretRef: { name: github-token }
+  sync:
+    mode: webhook            # webhook | poll
+    pollInterval: 5m
+    filter: { labels: [factory] }
+    bidirectional: true      # post clarification questions/status back as comments
+  mapping:
+    title: title
+    description: body
+    externalId: number
+    labels: labels[*].name
+  defaults:
+    workflowRef: { name: factory-loop }
+    repositoryRefs:
+      - name: shop-backend
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: jira-main
+spec:
+  type: jira
+  connection:
+    url: https://acme.atlassian.net
+    project: SHOP
+    secretRef: { name: jira-token }
+  sync:
+    mode: poll
+    pollInterval: 5m
+    filter: { jql: "project = SHOP AND labels = factory" }
+    bidirectional: true
+  mapping:
+    title: fields.summary
+    description: fields.description
+    externalId: key
+    priority: fields.priority.name
+  defaults:
+    workflowRef: { name: factory-loop }
+    repositoryRefs:
+      - name: shop-backend
+      - name: shop-frontend
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: manual
+spec:
+  type: manual               # items created via the dashboard form
+  defaults:
+    workflowRef: { name: factory-loop }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: monitoring-feedback
+spec:
+  type: internal             # signals emitted by the monitor stage (closes the loop)
+  defaults:
+    workflowRef: { name: factory-loop }

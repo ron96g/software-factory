@@ -1,0 +1,49 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: signal }
+spec: { format: markdown, description: "Raw input: manual intent, issue, or monitoring feedback. Carries its source." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: triage-decision }
+spec: { format: yaml, description: "Outcome (accept|needs-info|duplicate|reject), type, priority, size, and rationale." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: research-notes }
+spec: { format: markdown, description: "Code research: summary, affected components (repo:path:line), impact, risks, unknowns." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: spec }
+spec: { format: markdown, description: "Intent, user stories with acceptance criteria, NFRs, and risks." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: units-of-work }
+spec: { format: yaml, collection: true, description: Independently deliverable units derived from the spec. }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: review-report }
+spec: { format: markdown, description: "Findings (blocking / non-blocking) from an AI or human review." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: domain-model }
+spec: { format: markdown, description: Aggregates, entities, events, and bounded contexts for a unit. }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: source-code }
+spec: { format: git-ref, description: Branch/PR with implementation and tests. }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: verification-report }
+spec: { format: yaml, description: "Test results and an acceptance-criteria trace (criterion → test → pass/fail)." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: release }
+spec: { format: yaml, description: "Version, changelog, deployment target, rollout and rollback plan." }

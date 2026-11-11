@@ -1,0 +1,129 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: factory-loop
+  annotations:
+    description: >
+      Continuous AI-DLC loop:
+      input → triage → spec → spec-review → implement → code-review → verify → ship → monitor → (repeat)
+spec:
+  # ── Input: WorkItems are created by these Sources ───────────────────
+  trigger:
+    sourceRefs:
+      - name: manual
+      - name: github-issues
+      - name: jira-main
+      - name: monitoring-feedback      # closes the loop
+    output: { artifactRef: { name: signal } }
+
+  phases:
+    # ── Inception ──────────────────────────────────────────────────────
+    - name: inception
+      stages:
+        - name: classify               # automatic, on create/sync
+          sets: { phase: Classified }
+          steps:
+            - name: auto-classify
+              agentRef: { name: triager }
+              skillRefs: [{ name: work-item-classification }]
+              model: { tier: fast }
+              inputs:  [{ artifactRef: { name: signal } }]
+
+        - name: triage
+          sets: { phase: Triaging }
+          steps:
+            - name: research-impact
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: codebase-research }]
+              inputs:  [{ artifactRef: { name: signal } }]
+              outputs: [{ artifactRef: { name: research-notes } }]
+            - name: triage-signal
+              agentRef: { name: triager }
+              skillRefs: [{ name: issue-triage }, { name: human-clarification }]
+              inputs:  [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
+              outputs: [{ artifactRef: { name: triage-decision } }]
+          gate:
+            type: decision             # routes on triage-decision.outcome
+            routes:
+              accept:     { next: spec }
+              needs-info: { block: human-input }   # → Blocked, resumes triage on answer
+              duplicate:  { end: Closed }
+              reject:     { end: Closed }
+
+        - name: spec
+          steps:
+            - name: write-spec
+              agentRef: { name: product-owner }
+              skillRefs: [{ name: requirements-elicitation }]
+              inputs:  [{ artifactRef: { name: triage-decision } }]
+              outputs: [{ artifactRef: { name: spec } }]
+            - name: decompose-units
+              agentRef: { name: architect }
+              skillRefs: [{ name: unit-decomposition }]
+              inputs:  [{ artifactRef: { name: spec } }]
+              outputs: [{ artifactRef: { name: units-of-work } }]
+
+        - name: spec-review
+          mode: mob                  # Mob Elaboration
+          steps:
+            - name: ai-pre-review
+              agentRef: { name: reviewer }
+              skillRefs: [{ name: spec-review }]
+              inputs:  [{ artifactRef: { name: spec } }, { artifactRef: { name: units-of-work } }]
+              outputs: [{ artifactRef: { name: review-report } }]
+          gate:
+            type: human-approval
+            approvers: [{ role: product-owner }, { role: tech-lead }]
+            onReject: { next: spec }
+
+    # ── Construction ───────────────────────────────────────────────────
+    - name: construction
+      stages:
+        - name: bolts
+          forEach:
+            artifactRef: { name: units-of-work }
+            as: unit
+            parallelism: 3
+          workflowRef: { name: construction-bolt }   # implement → code-review → verify
+
+    # ── Operations ─────────────────────────────────────────────────────
+    - name: operations
+      stages:
+        - name: ship
+          steps:
+            - name: release
+              agentRef: { name: release-manager }
+              skillRefs: [{ name: release-management }]
+              inputs:  [{ artifactRef: { name: verification-report } }, { artifactRef: { name: source-code } }]
+              outputs: [{ artifactRef: { name: release } }]
+          gate:
+            type: human-approval
+            approvers: [{ role: ops-lead }]
+
+        - name: monitor
+          steps:
+            - name: observe
+              agentRef: { name: sre }
+              skillRefs: [{ name: observability }]
+              inputs:  [{ artifactRef: { name: release } }]
+              outputs: [{ artifactRef: { name: signal } }]
+          gate:
+            type: automated
+            checks: [slo-healthy, error-budget]
+            onFailure:
+              rollback: true
+              emit: { sourceRef: { name: monitoring-feedback } }   # new WorkItem incl. research-notes
+
+  # ── Blocking: available to every stage ───────────────────────────────
+  # Any step may raise this gate (via the human-clarification skill).
+  humanInput:
+    sets: { phase: Blocked }
+    channels: [ui, source]             # source = comment back to Jira/GitHub if bidirectional
+    resume: { stage: current, appendTo: context }
+    escalation: { after: 48h, to: { role: product-owner } }
+
+  # ── Repeat ───────────────────────────────────────────────────────────
+  loop:
+    from: monitor
+    to: classify
+    via: { sourceRef: { name: monitoring-feedback } }

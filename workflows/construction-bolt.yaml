@@ -1,0 +1,53 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: construction-bolt
+  annotations:
+    description: One Bolt for a single Unit of Work. implement → code-review → verify
+spec:
+  timebox: 8h
+  inputs:
+    - name: unit
+      artifactRef: { name: units-of-work }
+  phases:
+    - name: build
+      stages:
+        - name: implement
+          steps:
+            - name: domain-model
+              agentRef: { name: architect }
+              skillRefs: [{ name: domain-driven-design }]
+              inputs:  [{ artifactRef: { name: units-of-work } }]
+              outputs: [{ artifactRef: { name: domain-model } }]
+            - name: write-code
+              agentRef: { name: developer }
+              skillRefs: [{ name: test-driven-development }]
+              inputs:  [{ artifactRef: { name: domain-model } }, { artifactRef: { name: spec } }]
+              outputs: [{ artifactRef: { name: source-code } }]
+
+        - name: code-review
+          mode: mob                  # Mob Construction
+          steps:
+            - name: ai-code-review
+              agentRef: { name: reviewer }
+              skillRefs: [{ name: code-review }]
+              inputs:  [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }]
+              outputs: [{ artifactRef: { name: review-report } }]
+          gate:
+            type: human-approval
+            approvers: [{ role: tech-lead }]
+            onReject: { next: implement }
+
+        - name: verify
+          steps:
+            - name: verify-against-spec
+              agentRef: { name: verifier }
+              skillRefs: [{ name: verification }]
+              inputs:  [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }]
+              outputs: [{ artifactRef: { name: verification-report } }]
+          gate:
+            type: automated
+            checks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
+            onFailure:
+              retry: { maxAttempts: 2, next: implement }
+              escalateTo: { role: tech-lead }

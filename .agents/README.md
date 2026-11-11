@@ -1,0 +1,1 @@
+You may self-manage skills that are re-useable and clearly scoped for this project.

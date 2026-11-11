@@ -1,0 +1,41 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Repository
+metadata:
+  name: shop-backend
+  labels:
+    factory.ai-dlc.io/language: go
+spec:
+  git:
+    url: https://github.com/acme/shop-backend.git
+    defaultBranch: main
+    secretRef: { name: github-token }
+  index:
+    enabled: true            # code search / embeddings for code-researcher
+    refreshOn: [push]
+    include: ["**/*.go", "**/*.md", "api/**/*.yaml"]
+    exclude: ["vendor/**"]
+  context:
+    docs: [README.md, docs/architecture.md]
+    owners: [{ role: tech-lead, team: shop-core }]
+  observability:             # lets the SRE/code-researcher map runtime errors → code
+    service: shop-backend
+    logs: { provider: loki, selector: '{app="shop-backend"}' }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Repository
+metadata:
+  name: shop-frontend
+  labels:
+    factory.ai-dlc.io/language: typescript
+spec:
+  git:
+    url: https://github.com/acme/shop-frontend.git
+    defaultBranch: main
+    secretRef: { name: github-token }
+  index:
+    enabled: true
+    refreshOn: [push]
+    include: ["src/**"]
+  context:
+    docs: [README.md]
+    owners: [{ role: tech-lead, team: shop-web }]

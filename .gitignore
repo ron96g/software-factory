@@ -1,0 +1,39 @@
+# Dependencies & build output
+node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
+web/next-env.d.ts
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data (SQLite store, transcripts, workspaces)
+data/
+web/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Tooling caches
+.serena/cache/
+.serena/project.local.yml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*

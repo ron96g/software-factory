@@ -1,0 +1,43 @@
+# Example runtime object. The factory API/store holds these, not Git.
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: WorkItem
+metadata:
+  name: wi-0042
+spec:
+  title: Allow customers to pay with PayPal
+  description: Customers keep asking for PayPal at checkout.
+  sourceRef: { name: jira-main }
+  externalRef: { id: SHOP-1337, url: https://acme.atlassian.net/browse/SHOP-1337 }
+  workflowRef: { name: factory-loop }
+  repositoryRefs:
+    - name: shop-backend
+    - name: shop-frontend
+status:
+  phase: Blocked
+  classification:
+    type: feature
+    priority: P2
+    labels: [payments, checkout]
+    confidence: 0.86
+  currentStep:
+    stage: triage
+    agentRef: { name: triager }
+  blockedBy:
+    gate: human-input
+    assignee: { user: product-owner@acme.com }
+    since: "2026-11-11T17:02:00Z"
+    questions:
+      - Should PayPal be offered in all regions or only the EU?
+      - Is PayPal Express (skip address entry) in scope?
+  artifacts:
+    - artifactRef: { name: research-notes }
+      producedBy: { agentRef: { name: code-researcher } }
+      summary: >
+        Payments go through PaymentProvider interface (shop-backend:internal/payment/provider.go:12).
+        Stripe is the only implementation. Checkout UI hard-codes Stripe Elements
+        (shop-frontend:src/checkout/PaymentStep.tsx:40). Estimated size: M.
+  history:
+    - { phase: New,        at: "2026-11-11T16:58:00Z" }
+    - { phase: Classified, at: "2026-11-11T16:58:05Z" }
+    - { phase: Triaging,   at: "2026-11-11T16:58:06Z" }
+    - { phase: Blocked,    at: "2026-11-11T17:02:00Z" }
