@@ -5,7 +5,7 @@ metadata:
 spec:
   type: github
   connection:
-    repo: acme/shop
+    repo: ron96g/software-factory
     secretRef: { name: github-token }
   sync:
     mode: webhook            # webhook | poll
@@ -20,7 +20,7 @@ spec:
   defaults:
     workflowRef: { name: factory-loop }
     repositoryRefs:
-      - name: shop-backend
+      - name: software-factory
 ---
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: Source

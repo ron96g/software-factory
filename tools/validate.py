@@ -96,6 +96,13 @@ def main():
                         if t not in allowed:
                             errors.append(f"{path}: step {step['name']}: tool '{t}' is not a tool of agent {step['agentRef']['name']}")
 
+    # Per-agent model mappings must name existing agents (ADR-0028).
+    for path, doc in docs:
+        if doc.get("kind") == "ModelProvider":
+            for a in (doc["spec"].get("agentModels") or {}):
+                if a not in agents:
+                    errors.append(f"{path}: agentModels: unknown agent '{a}'")
+
     for e in errors:
         print("ERROR", e)
     print(f"{len(index)} resources, {len(errors)} errors")

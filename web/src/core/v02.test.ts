@@ -35,10 +35,10 @@ function fakeGithub(opts: { failFirstPost?: boolean } = {}) {
   let failed = false;
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const u = new URL(String(url));
-    if (u.pathname === "/repos/acme/shop/issues") {
+    if (u.pathname === "/repos/ron96g/software-factory/issues") {
       return Response.json([{ number: 42, html_url: "https://gh/42", title: "Checkout slow", body: "slow", labels: [], updated_at: "t1" }]);
     }
-    if (u.pathname === "/repos/acme/shop/issues/42/comments" && init?.method === "POST") {
+    if (u.pathname === "/repos/ron96g/software-factory/issues/42/comments" && init?.method === "POST") {
       posts++;
       if (opts.failFirstPost && !failed) {
         failed = true;
@@ -47,7 +47,7 @@ function fakeGithub(opts: { failFirstPost?: boolean } = {}) {
       comments.push({ user: { login: "factory-bot" }, body: JSON.parse(String(init.body)).body, created_at: new Date().toISOString() });
       return Response.json({}, { status: 201 });
     }
-    if (u.pathname === "/repos/acme/shop/issues/42/comments") return Response.json(comments);
+    if (u.pathname === "/repos/ron96g/software-factory/issues/42/comments") return Response.json(comments);
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
   return { fetchImpl, comments, posts: () => posts, reply: (login: string, body: string) => comments.push({ user: { login }, body, created_at: new Date(Date.now() + 5).toISOString() }) };

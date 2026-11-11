@@ -116,6 +116,8 @@ export interface ModelProviderSpec {
   baseUrl?: string;
   secretRef?: Ref;
   models: Record<string, string>; // tier → model
+  /** Optional agent name → model, overrides the tier mapping for that agent (ADR-0028). */
+  agentModels?: Record<string, string>;
   default?: boolean;
 }
 export type ModelProvider = Resource<ModelProviderSpec>;

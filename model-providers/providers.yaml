@@ -41,3 +41,7 @@ spec:
     reasoning: claude-sonnet-5.5
     coding: claude-sonnet-5.5
     fast: claude-haiku-5.5
+  # ADR-0028: optional per-agent models (override the tier for that agent only), e.g.
+  # agentModels:
+  #   developer: gpt-5.1
+  #   reviewer: gemini-3.8-pro

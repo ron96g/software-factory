@@ -134,7 +134,7 @@ test("M3: LLM executor via OpenAI-compatible provider; secret redacted; provenan
 
 test("M4: GitHub sync imports issues as WorkItems (idempotent)", async () => {
   const fakeFetch = (async (url: string) => {
-    assert.match(String(url), /repos\/acme\/shop\/issues\?state=open.*labels=factory/);
+    assert.match(String(url), /repos\/ron96g\/software-factory\/issues\?state=open.*labels=factory/);
     return new Response(
       JSON.stringify([
         { number: 7, html_url: "https://github.com/acme/shop/issues/7", title: "Login broken", body: "500 on login", labels: [{ name: "factory" }], updated_at: "t1" },
@@ -151,8 +151,21 @@ test("M4: GitHub sync imports issues as WorkItems (idempotent)", async () => {
       const items = await f.app.listWorkItems(p);
       assert.equal(items[0].metadata.name, "github-issues-7");
       assert.equal(items[0].spec.externalRef?.url, "https://github.com/acme/shop/issues/7");
-      assert.equal(items[0].spec.repositoryRefs?.[0].name, "shop-backend");
+      assert.equal(items[0].spec.repositoryRefs?.[0].name, "software-factory");
     },
     fakeFetch,
   );
+});
+
+test("ADR-0028: a provider's agentModels override the tier mapping for that agent only", async () => {
+  const { DefaultModelResolver } = await import("./agents/model-resolver.ts");
+  const provider = { kind: "ModelProvider", metadata: { name: "p", namespace: "factory-system" }, spec: { type: "t", models: { reasoning: "big", fast: "small" }, agentModels: { developer: "coder-x" } } };
+  const reader = { list: async () => [provider], get: async () => provider } as never;
+  const r = new DefaultModelResolver(reader, { resolve: () => undefined } as never, { get: () => ({ create: () => ({}) }) } as never);
+  const dev = await r.resolve({ namespace: "default", tier: "reasoning", agent: "developer" });
+  const po = await r.resolve({ namespace: "default", tier: "reasoning", agent: "product-owner" });
+  assert.equal(dev?.model, "coder-x");
+  assert.equal(dev?.selectedBy, "agent");
+  assert.equal(po?.model, "big");
+  assert.equal(po?.selectedBy, "tier");
 });

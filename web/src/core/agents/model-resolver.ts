@@ -17,7 +17,7 @@ export class DefaultModelResolver implements ModelResolver {
     this.factories = factories;
   }
 
-  async resolve(input: { namespace: string; tier?: string; providerRef?: { name: string; namespace?: string } }): Promise<ResolvedModel | undefined> {
+  async resolve(input: { namespace: string; tier?: string; providerRef?: { name: string; namespace?: string }; agent?: string }): Promise<ResolvedModel | undefined> {
     const candidates: ModelProvider[] = [];
     if (input.providerRef) {
       const p = await resolveRef<ModelProvider>(this.reader, "ModelProvider", input.providerRef, input.namespace);
@@ -34,9 +34,10 @@ export class DefaultModelResolver implements ModelResolver {
       const key = this.secrets.resolve(p.spec.secretRef);
       if (p.spec.secretRef && !key) continue;
       const tier = input.tier ?? "reasoning";
-      const model = p.spec.models[tier] ?? p.spec.models.default ?? Object.values(p.spec.models)[0];
+      const perAgent = input.agent ? p.spec.agentModels?.[input.agent] : undefined;
+      const model = perAgent ?? p.spec.models[tier] ?? p.spec.models.default ?? Object.values(p.spec.models)[0];
       if (!model) continue;
-      return { provider: p.metadata.name, providerType: p.spec.type, model, tier, client: factory.create(p, key) };
+      return { provider: p.metadata.name, providerType: p.spec.type, model, tier, selectedBy: perAgent ? "agent" : "tier", client: factory.create(p, key) };
     }
     return undefined;
   }

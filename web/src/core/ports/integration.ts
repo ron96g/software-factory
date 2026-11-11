@@ -147,12 +147,15 @@ export interface ResolvedModel {
   providerType: string;
   model: string;
   tier: string;
+  /** How the model was chosen: per-agent mapping or tier. */
+  selectedBy?: "agent" | "tier";
   client: LLMClient;
 }
 
 /** Maps a tier (+ optional explicit provider) to a concrete client & model. Undefined when none is configured. */
 export interface ModelResolver {
-  resolve(input: { namespace: string; tier?: string; providerRef?: Ref }): Promise<ResolvedModel | undefined>;
+  /** `agent` selects a per-agent model from the provider's `agentModels` (ADR-0028); otherwise the tier decides. */
+  resolve(input: { namespace: string; tier?: string; providerRef?: Ref; agent?: string }): Promise<ResolvedModel | undefined>;
 }
 
 // ── Agent tools (ADR-0016): registered, read-only in the MVP ─────────────

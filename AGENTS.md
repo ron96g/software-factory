@@ -68,7 +68,8 @@ Required reading:
     domain model).
 16. **Secrets are referenced, never stored (ADR-0015).** Only `secretRef: { name }` appears in resources. Values come from
     `SecretResolver`, are redacted everywhere, and are never put into prompts.
-17. **Providers via tiers (ADR-0014).** Agents declare `model.tier`, never a vendor or model name. Providers are
+17. **Providers via tiers (ADR-0014, ADR-0028).** Agents declare `model.tier`, never a vendor or model name; per-agent
+    models are mapped on the `ModelProvider` (`agentModels`). Providers are
     `ModelProvider` definitions resolved through `ModelResolver`.
 18. **No free-form execution on the host (ADR-0016, ADR-0019, ADR-0022).** Shell, file writes, and code execution only run inside an
     `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason.
@@ -163,6 +164,8 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X5 | Clear gates | Structured verdicts (`StepSpec.outcomes`, verifier `pass/partial/fail`), gate evidence (ok/warning/blocking) at every gate, server-enforced override with reason when blocking, verdict badges on artifacts + stage chips (ADR-0027) | A failed verification can't be approved by accident; the reason is visible at the gate | ✅ |
 | X6 | Structured clarifications | Header with asking agent + why + progress, one card per question (Markdown, own answer, skip), positional answers, "Ask the agent about these questions" chat | Answering several questions is calm and clear; users can ask back before answering | ✅ |
 | X7 | Gate decisions steer agents | Decided approvals (decision + comment) are agent input ("Human gate decision"); "Approve & let agents decide" delegates open decisions to recommended defaults (documented, no re-asking); reject reasons reach the re-run | A human can delegate open decisions in one click; rejection feedback is acted on | ✅ |
+| X8 | Per-agent models | `ModelProvider.agentModels` (agent → model) overrides the tier for that agent (ADR-0028) | Different agents run on different models without naming vendors in agent files | ✅ |
+| X9 | Sync from real sources | GitHub source points at `ron96g/software-factory` (label `factory`); dashboard "Sync" imports issues | Labelled issues appear as work items | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

@@ -78,6 +78,7 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       namespace: ns,
       tier: run.spec.modelTier ?? agent.spec.model?.tier ?? "reasoning",
       providerRef: agent.spec.model?.providerRef,
+      agent: agent.metadata.name,
     });
 
     const sandbox = agent.spec.sandboxRef ? (await this.d.environments.select()).health : undefined;
