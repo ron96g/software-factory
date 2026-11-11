@@ -17,7 +17,7 @@ export class RipgrepCodeSearch implements CodeSearch {
       const args = ["--json", "-i", "-F", "--max-count", "3", "--max-filesize", "1M"];
       for (const g of repo.spec.index?.include ?? []) args.push("-g", g);
       for (const g of repo.spec.index?.exclude ?? []) args.push("-g", `!${g}`);
-      for (const g of ["!node_modules", "!.next", "!.venv", "!*.lock", "!package-lock.json", "!.serena"]) args.push("-g", g);
+      for (const g of ["!node_modules", "!.next", "!.venv", "!*.lock", "!package-lock.json", "!.serena", "!.workspaces", "!data"]) args.push("-g", g);
       args.push("--", term, ".");
       const lines = await run(this.bin, args, root);
       let n = 0;

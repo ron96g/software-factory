@@ -151,7 +151,8 @@ export async function createFactory(o: FactoryOptions) {
     (env.FACTORY_SANDBOX_RUNTIME === "host"
       ? new GitWorktreeWorkspaces({
           definitionsRoot: o.definitionsRoot,
-          workspacesDir: o.workspacesDir ?? join(o.databasePath === ":memory:" ? tmpdir() : dirname(o.databasePath), "workspaces"),
+          // Outside the web app, so Next.js/tsc never pick up workspace copies of the code.
+          workspacesDir: o.workspacesDir ?? env.FACTORY_WORKSPACES_DIR ?? join(o.definitionsRoot, ".workspaces"),
         })
       : noWorkspaces);
 

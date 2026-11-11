@@ -12,6 +12,7 @@ __pycache__/
 
 # Runtime data (SQLite store, transcripts, workspaces)
 data/
+.workspaces/
 web/data/
 *.db
 *.db-shm
