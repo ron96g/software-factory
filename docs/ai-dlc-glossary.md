@@ -93,6 +93,7 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Model tier** | A vendor-neutral model class that agents declare instead of a model name. |
 | **secretRef** | A reference to a secret by name. The value is resolved at runtime and never stored (ADR-0015). |
 | **Execution environment / Sandbox** | An isolated place where agents may run commands and write code. Provided by a runtime adapter (podman, docker, kubernetes, remote, or `none`) (ADR-0019). |
+| **Workspace** | The per-item, per-repository copy of the code (host: Git worktree on `factory/<item>`) with a pinned base commit and setup. It is the single code state all agents of an item see (ADR-0021). |
 | **Tool loop** | The agent loop in which the LLM calls tools (read/write files, run commands) inside a sandbox until it calls `finish`. Every turn, call and result is recorded. |
 | **Bound tool** | A tool instance bound to only the sandbox capabilities it declares (`files`, `exec`, `artifacts`). |
 | **SandboxProfile** | A runtime-neutral sandbox definition: image, limits, network allowlist, minimum isolation. Agents reference it with `sandboxRef`. |
