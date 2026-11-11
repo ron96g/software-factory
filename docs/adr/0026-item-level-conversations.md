@@ -21,3 +21,7 @@ product owner do?" or "Why did it go back to implement?", without finding and op
 ## Consequences
 One place to understand an item. Very long items are truncated in the digest (60k characters); the answer says when something
 is outside the record.
+
+## Addendum (architecture review)
+- The digest is passed through the `Redactor` before it reaches the LLM. Human answers and approval comments aren't redacted at write time (ADR-0015).
+- Conversations created before this ADR have no `purpose` and are treated as `explain`.

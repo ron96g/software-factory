@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ConversationResponder,
   ModelResolver,
+  Redactor,
   ResourceReader,
   TranscriptAuthor,
   TranscriptMessage,
@@ -26,7 +27,7 @@ const clip = (s: string | undefined, n: number) => (!s ? "" : s.length > n ? `${
  * key events, so one question can span every agent. Side-effect free apart from the conversation transcript.
  */
 export class ItemExplainResponder implements ConversationResponder {
-  private readonly d: { reader: ResourceReader; transcripts: TranscriptReader; recorders: TranscriptRecorderFactory; models: ModelResolver };
+  private readonly d: { reader: ResourceReader; transcripts: TranscriptReader; recorders: TranscriptRecorderFactory; models: ModelResolver; redactor: Redactor };
   constructor(d: ItemExplainResponder["d"]) {
     this.d = d;
   }
@@ -54,7 +55,8 @@ export class ItemExplainResponder implements ConversationResponder {
     let answer: string;
     if (model) {
       const messages: ChatMessage[] = [
-        { role: "system", content: `${RULES}\n\n${digest(wi, runs, artifacts, clarifications, approvals, events)}` },
+        // Defence in depth (ADR-0015): human answers/comments in the digest are not redacted at write time.
+        { role: "system", content: `${RULES}\n\n${this.d.redactor.redact(digest(wi, runs, artifacts, clarifications, approvals, events))}` },
         ...history.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: humanMessage },
       ];

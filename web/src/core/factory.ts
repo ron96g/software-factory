@@ -220,7 +220,7 @@ export async function createFactory(o: FactoryOptions) {
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));
-  responders.register("explain-item", new ItemExplainResponder({ reader: store, transcripts, recorders, models }));
+  responders.register("explain-item", new ItemExplainResponder({ reader: store, transcripts, recorders, models, redactor }));
 
   const app = new FactoryApp({
     reader: store,

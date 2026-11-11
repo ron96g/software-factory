@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Card,
+  Drawer,
   Grid,
   Group,
   List,
@@ -16,22 +17,18 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX } from "@tabler/icons-react";
+import { IconAlertTriangle, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion } from "@tabler/icons-react";
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
-import type { AgentRun, Approval, Clarification } from "@/core/model/kinds.ts";
+import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
 import type { WorkItemDetail } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
-import { RunDrawer } from "@/ui/run-inspector.tsx";
+import { ChatPanel, RunDrawer } from "@/ui/run-inspector.tsx";
 import { EventTimeline } from "@/ui/event-timeline.tsx";
 import { RunList } from "@/ui/run-list.tsx";
-import { ChatPanel } from "@/ui/run-inspector.tsx";
-import { Drawer } from "@mantine/core";
-import { IconMessageQuestion } from "@tabler/icons-react";
-import type { Conversation } from "@/core/model/kinds.ts";
-import { act as postAct } from "@/ui/api.ts";
+
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
 const PHASE_COLOR: Record<string, string> = { inception: "indigo", construction: "cyan", operations: "teal", build: "cyan" };
@@ -188,7 +185,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       <Drawer opened={askOpen} onClose={() => setAskOpen(false)} position="right" size="xl" title={<Text fw={600}>Ask about this work item</Text>}>
         <ChatPanel
           existing={d.conversations.filter((c) => c.spec.purpose === "explain-item")}
-          start={() => postAct<Conversation>(`/api/workitems/${name}/conversations`, {})}
+          start={() => act<Conversation>(`/api/workitems/${name}/conversations`, {})}
           placeholder="e.g. What did the product owner decide, and why?"
           intro="Answers come from this item's record: every agent run, artifact, human input and key event. Read-only."
           suggestions={["Summarise what happened so far", "What did the product owner do?", "Which open questions or risks remain?", "Why did the item go back to an earlier stage?"]}

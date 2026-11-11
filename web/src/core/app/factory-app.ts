@@ -183,12 +183,7 @@ export class FactoryApp
       spec: { workItemRef: { name: wi.metadata.name }, agentRunRef: { name: runName }, agentRef: run.spec.agentRef, purpose: "explain", startedBy: p.id },
     });
     // The conversation controller opens the transcript; wait briefly so the UI can chat immediately.
-    for (let i = 0; i < 100; i++) {
-      const c = await this.d.reader.get<Conversation>("Conversation", this.ns, created.metadata.name);
-      if (c?.status?.transcriptRef) return c;
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    return created;
+    return this.awaitTranscript(created);
   }
 
   async startItemConversation(p: Principal, workItem: string): Promise<Conversation> {
@@ -221,7 +216,7 @@ export class FactoryApp
     const c = await this.d.reader.get<Conversation>("Conversation", this.ns, name);
     if (!c) throw new Error(`conversation ${name} not found`);
     if (!text.trim()) throw new Error("message is empty");
-    const responder = this.d.responders.get(c.spec.purpose);
+    const responder = this.d.responders.get(c.spec.purpose ?? "explain"); // pre-ADR-0026 conversations had no purpose
     if (!responder) throw new Error(`no responder for conversation purpose "${c.spec.purpose}"`);
     return responder.respond(c, text.trim(), { type: "human", id: p.id });
   }
