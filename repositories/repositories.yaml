@@ -39,3 +39,20 @@ spec:
   context:
     docs: [README.md]
     owners: [{ role: tech-lead, team: shop-web }]
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Repository
+metadata:
+  name: software-factory
+  labels:
+    factory.ai-dlc.io/language: typescript
+spec:
+  local:
+    path: .                  # relative to the factory root (MVP: local checkouts only, ADR-0008)
+  index:
+    enabled: true
+    type: ripgrep
+    include: ["web/src/**", "agents/**", "skills/**", "workflows/**", "docs/**", "*.md"]
+  context:
+    docs: [README.md, docs/architecture.md]
+    owners: [{ role: tech-lead, team: platform }]

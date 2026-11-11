@@ -25,7 +25,8 @@ export interface CompiledWorkflow {
 }
 
 export interface WorkflowCompiler {
-  compile(ref: Ref): Promise<CompiledWorkflow>;
+  /** Resolves `ref` from `namespace` (falling back to factory-system, ADR-0011). */
+  compile(ref: Ref, namespace: string): Promise<CompiledWorkflow>;
 }
 
 // ── Gates ────────────────────────────────────────────────────────────────

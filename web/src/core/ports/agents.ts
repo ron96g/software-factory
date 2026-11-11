@@ -16,6 +16,8 @@ import type {
   WorkItem,
 } from "../model/kinds.ts";
 import type { TranscriptRecorder } from "./transcripts.ts";
+import type { ResolvedModel } from "./integration.ts";
+import type { RunProvenance } from "../model/kinds.ts";
 
 /** A named block of context made available to the agent. */
 export interface ContextSection {
@@ -38,6 +40,8 @@ export interface ExecutionContext {
   sections: ContextSection[];
   /** ADR-0012: every executor MUST record its interaction here. */
   transcript: TranscriptRecorder;
+  /** Resolved LLM for this run (ADR-0014); undefined when no provider is configured. */
+  model?: ResolvedModel;
 }
 
 export interface ExecutionContextFactory {
@@ -76,6 +80,8 @@ export interface AgentResult {
   outcome?: string;
   /** Non-empty → the work item gets blocked with a Clarification. */
   questions?: string[];
+  /** Executor-specific provenance (model used, prompt hash); merged by the AgentRun controller. */
+  provenance?: Partial<RunProvenance>;
 }
 
 export interface AgentExecutor {

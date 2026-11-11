@@ -19,6 +19,7 @@ REF_KINDS = {
     "sourceRef": "Source",
     "sourceRefs": "Source",
     "repositoryRefs": "Repository",
+    "providerRef": "ModelProvider",
 }
 
 
@@ -33,10 +34,10 @@ def load_markdown(path):
 def load_all():
     docs = []
     for path in ROOT.glob("**/*.md"):
-        if path.parent.name in ("agents", "skills"):
+        if path.parent.name in ("agents", "skills") and path.parent.parent == ROOT:
             docs += [(path, d) for d in load_markdown(path)]
     for path in ROOT.glob("**/*.yaml"):
-        if ".venv" in path.parts:
+        if {".venv", "node_modules", ".next", ".serena"} & set(path.parts):
             continue
         docs += [(path, d) for d in yaml.safe_load_all(path.read_text()) if d]
     return docs
