@@ -185,10 +185,10 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       case "goto": {
         const target = wf.stage(decision.stage);
         if (!target) return write(wi, { phase: "Failed", message: `unknown stage ${decision.stage}` }, "Failed", `unknown stage ${decision.stage}`);
-        const checkFailures = decision.retryOf
-          ? { ...wi.status?.checkFailures, [decision.retryOf]: (wi.status?.checkFailures?.[decision.retryOf] ?? 0) + 1 }
-          : wi.status?.checkFailures;
-        return write(wi, { ...enterStage(wf, target, round), checkFailures }, "StageStarted", `${target.name} (back from ${stage.name}${decision.retryOf ? ", checks failed" : ""})`);
+        const retries = decision.retryOf
+          ? { ...wi.status?.retries, [decision.retryOf]: (wi.status?.retries?.[decision.retryOf] ?? 0) + 1 }
+          : wi.status?.retries;
+        return write(wi, { ...enterStage(wf, target, round), retries }, "StageStarted", `${target.name} (back from ${stage.name}${decision.retryOf ? `, retry ${retries![decision.retryOf]}` : ""})`);
       }
       case "wait":
         return { requeueAfterMs: decision.retryAfterMs };
@@ -221,6 +221,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
 
   return {
     name: "workitem",
+    primaryKind: "WorkItem",
     watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () => (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "")).map(keyOf),
@@ -294,7 +295,13 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                 outputs: (step.outputs ?? []).map((o) => o.artifactRef),
                 modelTier: step.model?.tier,
                 tools: step.tools,
-                outcomes: last && stage.gate?.type === "decision" ? Object.keys(stage.gate.routes ?? {}) : undefined,
+                outcomes: !last
+                  ? undefined
+                  : stage.gate?.type === "decision"
+                    ? Object.keys(stage.gate.routes ?? {})
+                    : stage.loop
+                      ? ["approve", stage.loop.when.outcome]
+                      : undefined,
               },
             });
             return;
@@ -318,6 +325,12 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           return write(wi, { ...patch, step: stepIdx + 1 });
         }
 
+        // Q1: bounded loop back (e.g. AI review requested changes) before the stage's gate.
+        if (stage.loop && st.lastOutcome === stage.loop.when.outcome) {
+          const used = st.retries?.[stage.name] ?? 0;
+          if (used < stage.loop.maxAttempts) return apply(wi, wf, stage, { action: "goto", stage: stage.loop.goto, retryOf: stage.name });
+          await d.events.warning(wi, "LoopExhausted", `${stage.name}: still "${st.lastOutcome}" after ${used} round(s); handing over to the gate`);
+        }
         const evaluator = stage.gate ? d.gates.get(stage.gate.type) : undefined;
         if (stage.gate && !evaluator) {
           return apply(wi, wf, stage, { action: "fail", reason: `no evaluator for gate type "${stage.gate.type}"` });

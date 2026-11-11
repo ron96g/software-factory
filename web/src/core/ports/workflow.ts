@@ -8,6 +8,7 @@ import type { GateSpec, StageSpec, StepSpec, WorkItem } from "../model/kinds.ts"
 export interface CompiledStage {
   name: string;
   publish?: StageSpec["publish"];
+  loop?: StageSpec["loop"];
   /** AI-DLC phase (inception / construction / operations). */
   lifecyclePhase: string;
   /** Workflow that declared the stage (sub-workflows are inlined). */
@@ -35,7 +36,7 @@ export interface WorkflowCompiler {
 /** What should happen once a stage's steps are done. */
 export type GateDecision =
   | { action: "advance" }
-  | { action: "goto"; stage: string; /** Stage whose failed-check budget this retry consumes (ADR-0023). */ retryOf?: string }
+  | { action: "goto"; stage: string; /** Stage whose retry budget this consumes (ADR-0023, Q1). */ retryOf?: string }
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
   | { action: "await-approval" }
   | { action: "block"; questions: string[] }

@@ -45,6 +45,7 @@ export class DefaultWorkflowCompiler implements WorkflowCompiler {
           origin: wf.metadata.name,
           mode: st.mode,
           publish: st.publish,
+          loop: st.loop,
           steps: st.steps ?? [],
           gate: st.gate,
         });

@@ -3,7 +3,7 @@ kind: Workflow
 metadata:
   name: construction-bolt
   annotations:
-    description: One Bolt for a single Unit of Work. implement → code-review → verify
+    description: One Bolt for a single Unit of Work. design → implement ⇄ code-review (AI loop) → verify
 spec:
   timebox: 8h
   inputs:
@@ -12,17 +12,23 @@ spec:
   phases:
     - name: build
       stages:
-        - name: implement
+        - name: design
           steps:
             - name: domain-model
               agentRef: { name: architect }
               skillRefs: [{ name: domain-driven-design }]
               inputs:  [{ artifactRef: { name: units-of-work } }]
               outputs: [{ artifactRef: { name: domain-model } }]
+
+        - name: implement             # re-entered by the review loop and failed checks (only write-code re-runs)
+          steps:
             - name: write-code
               agentRef: { name: developer }
               skillRefs: [{ name: test-driven-development }]
-              inputs:  [{ artifactRef: { name: domain-model } }, { artifactRef: { name: spec } }]
+              inputs:
+                - artifactRef: { name: domain-model }
+                - artifactRef: { name: spec }
+                - artifactRef: { name: code-review-report }   # findings to fix on a review loop (absent on the first pass)
               outputs: [{ artifactRef: { name: source-code } }]
 
         - name: code-review
@@ -32,7 +38,11 @@ spec:
               agentRef: { name: reviewer }
               skillRefs: [{ name: code-review }]
               inputs:  [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }]
-              outputs: [{ artifactRef: { name: review-report } }]
+              outputs: [{ artifactRef: { name: code-review-report } }]
+          loop:                       # Q1: blocking AI findings are fixed before humans review
+            when: { outcome: changes-requested }
+            goto: implement
+            maxAttempts: 2
           gate:
             type: human-approval
             approvers: [{ role: tech-lead }]

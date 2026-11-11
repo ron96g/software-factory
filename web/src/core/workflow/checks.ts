@@ -90,9 +90,9 @@ export function automatedGate(d: {
       // Decided: drop this round's cache entries (bounded memory).
       for (const k of [...results.keys(), ...warned]) if (k.startsWith(`${base}/`)) (results.delete(k), warned.delete(k));
       if (!failures.length) return { action: "advance" };
-      // The retry budget (status.checkFailures) is counted by the WorkItem controller (it owns status).
+      // The retry budget (status.retries) is counted by the WorkItem controller (it owns status).
       const retry = (ctx.gate.onFailure as { retry?: { next?: string; maxAttempts?: number } } | undefined)?.retry;
-      const attempts = (wi.status?.checkFailures?.[ctx.stage.name] ?? 0) + 1;
+      const attempts = (wi.status?.retries?.[ctx.stage.name] ?? 0) + 1;
       const reason = failures.join("\n\n");
       if (retry?.next && attempts <= (retry.maxAttempts ?? 1)) return { action: "goto", stage: retry.next, retryOf: ctx.stage.name };
       return { action: "fail", reason: `checks failed after ${attempts} attempt(s):\n${reason}` };

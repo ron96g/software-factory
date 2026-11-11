@@ -61,6 +61,8 @@ export interface GateSpec {
 export interface StageSpec {
   name: string;
   mode?: string;
+  /** Q1: if the stage's last outcome matches, go back to `goto` (bounded by `maxAttempts`) before the gate. */
+  loop?: { when: { outcome: string }; goto: string; maxAttempts: number };
   /** ADR-0023: on entering the stage, publish the item's workspaces (outbox). */
   publish?: { pullRequest?: { draft?: boolean } };
   steps?: StepSpec[];
@@ -166,8 +168,8 @@ export interface WorkItemStatus {
   classification?: Classification;
   lastOutcome?: string;
   blockedBy?: { kind: "Clarification" | "Approval"; name: string };
-  /** Failed automated-gate attempts per stage (ADR-0023 retry budget). */
-  checkFailures?: Record<string, number>;
+  /** Retry budget used per stage: failed checks (ADR-0023) and review→fix loops (Q1). */
+  retries?: Record<string, number>;
   message?: string;
   conditions?: Condition[];
 }

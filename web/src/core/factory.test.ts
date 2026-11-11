@@ -78,7 +78,7 @@ test("M2/M3: full loop on simulated executor incl. block/answer, reject/approve,
     }
     d = await waitFor(phaseIs(f, wi.metadata.name, "Done"), "Done");
     assert.ok(d.events.some((e) => e.spec.reason === "CheckNotImplemented"), "automated checks pass with warning");
-    assert.deepEqual(d.stages.map((s) => s.name), ["classify", "triage", "spec", "spec-review", "implement", "code-review", "verify", "ship", "monitor"]);
+    assert.deepEqual(d.stages.map((s) => s.name), ["classify", "triage", "spec", "spec-review", "design", "implement", "code-review", "verify", "ship", "monitor"]);
   });
 });
 

@@ -130,6 +130,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
 
   return {
     name: "agentrun",
+    primaryKind: "AgentRun",
     watches: ["AgentRun"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>

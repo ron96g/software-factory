@@ -63,6 +63,7 @@ export function createWorkspaceController(d: {
 
   return {
     name: "workspace",
+    primaryKind: "Workspace",
     watches: ["Workspace"],
     keysFor: (e) => {
       const key = keyOf(e.object);

@@ -30,6 +30,11 @@ spec: { format: markdown, description: "Findings (blocking / non-blocking) from 
 ---
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: ArtifactType
+metadata: { name: code-review-report }
+spec: { format: markdown, description: "Code review findings (blocking / non-blocking) with locations; drives the review→fix loop." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
 metadata: { name: domain-model }
 spec: { format: markdown, description: Aggregates, entities, events, and bounded contexts for a unit. }
 ---

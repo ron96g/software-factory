@@ -17,6 +17,7 @@ import type {
 import type { Resource } from "../model/resource.ts";
 import type { TranscriptMessage } from "./transcripts.ts";
 import type { SandboxHealthInfo } from "./sandbox.ts";
+import type { FailingReconcile } from "./runtime.ts";
 
 export interface Principal {
   id: string;
@@ -92,6 +93,8 @@ export interface SystemHealth {
   sandboxCandidates: SandboxHealthInfo[];
   /** Whether any ModelProvider resolves (else agents run deterministic/simulated). */
   llm: { available: boolean; provider?: string; model?: string };
+  /** Reconciles that keep failing (Q2). */
+  failing: FailingReconcile[];
 }
 
 export interface SystemQueries {

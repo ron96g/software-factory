@@ -76,7 +76,7 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
   try {
     const wi = await f.app.createWorkItem(p, { title: "Checks and PR", description: "A long enough description for triage to accept it directly." });
     const d = await drive(f, wi.metadata.name, (x) => x.outbox.some((m) => m.status?.phase === "Delivered"));
-    assert.equal(d.workItem.status?.checkFailures?.verify, 1, "one failed attempt consumed the retry budget");
+    assert.equal(d.workItem.status?.retries?.verify, 1, "one failed attempt consumed the retry budget");
     assert.ok(d.events.some((e) => e.spec.reason === "CheckFailed" && /build/.test(e.spec.message)));
     assert.ok(d.events.some((e) => e.spec.reason === "CheckPassed" && /unit-tests/.test(e.spec.message)));
     assert.ok(d.events.some((e) => e.spec.reason === "CheckNotImplemented" && /security-scan/.test(e.spec.message)));

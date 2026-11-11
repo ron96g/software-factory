@@ -6,6 +6,7 @@ import { isStoreError, type Clock, type Controller, type ResourceReader, type St
 export function createClarificationController(d: { reader: ResourceReader; status: StatusWriter; clock: Clock }): Controller {
   return {
     name: "clarification",
+    primaryKind: "Clarification",
     watches: ["Clarification"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     async reconcile(key) {
@@ -28,6 +29,7 @@ export function createClarificationController(d: { reader: ResourceReader; statu
 export function createApprovalController(d: { reader: ResourceReader; status: StatusWriter }): Controller {
   return {
     name: "approval",
+    primaryKind: "Approval",
     watches: ["Approval"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     async reconcile(key) {

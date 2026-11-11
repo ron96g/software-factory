@@ -18,6 +18,7 @@ import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from "./transcripts/recorder.ts";
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
+import { EventingReconcileErrorReporter } from "./runtime/reconcile-errors.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
 import { decisionGate, humanApprovalGate } from "./workflow/gates.ts";
 import { automatedGate } from "./workflow/checks.ts";
@@ -199,7 +200,8 @@ export async function createFactory(o: FactoryOptions) {
   outboxHandlers.register(pr.action, pr);
 
   // ── controllers ──────────────────────────────────────────────────────
-  const manager = new ControllerManager(store, o.log);
+  const reconcileErrors = new EventingReconcileErrorReporter({ reader: store, events, redactor, clock });
+  const manager = new ControllerManager(store, o.log, reconcileErrors);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend }));
   manager.register(
     createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor }),
@@ -225,6 +227,7 @@ export async function createFactory(o: FactoryOptions) {
     replayer: new DefaultRunReplayer(store, store),
     environments,
     models,
+    controllerHealth: reconcileErrors,
     responder: new ExplainResponder({ reader: store, transcripts, recorders, models }),
   });
 

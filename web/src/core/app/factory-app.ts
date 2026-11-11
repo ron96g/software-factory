@@ -25,6 +25,7 @@ import type {
   ResourceBrowser,
   ExecutionEnvironmentSelector,
   ModelResolver,
+  ControllerHealth,
   KindLookup,
   NewWorkItemInput,
   Principal,
@@ -53,6 +54,7 @@ export interface FactoryAppDeps {
   replayer: RunReplayer;
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
+  controllerHealth: ControllerHealth;
 }
 
 const slug = (s: string) =>
@@ -237,6 +239,7 @@ export class FactoryApp
       sandbox: sel.health,
       sandboxCandidates: sel.candidates,
       llm: m ? { available: true, provider: m.provider, model: m.model } : { available: false },
+      failing: this.d.controllerHealth.failing(),
     };
   }
 

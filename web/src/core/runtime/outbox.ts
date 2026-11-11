@@ -80,6 +80,7 @@ export function createOutboxController(d: {
 }): Controller & InitialKeys {
   return {
     name: "outbox",
+    primaryKind: "OutboxMessage",
     watches: ["OutboxMessage"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>
@@ -142,6 +143,7 @@ export function createClarificationSyncController(d: {
 }): Controller & InitialKeys {
   return {
     name: "clarification-sync",
+    primaryKind: "Clarification",
     watches: ["Clarification"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>

@@ -16,6 +16,7 @@ export function createConversationController(d: {
 }): Controller {
   return {
     name: "conversation",
+    primaryKind: "Conversation",
     watches: ["Conversation"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     async reconcile(key) {

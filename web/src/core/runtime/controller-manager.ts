@@ -1,4 +1,13 @@
-import type { Controller, ControllerRegistrar, ControllerTrigger, InitialKeys, Lifecycle, ResourceWatcher, WorkQueue } from "../ports/index.ts";
+import type {
+  Controller,
+  ControllerRegistrar,
+  ControllerTrigger,
+  InitialKeys,
+  Lifecycle,
+  ReconcileErrorReporter,
+  ResourceWatcher,
+  WorkQueue,
+} from "../ports/index.ts";
 
 type Registered = Controller & Partial<InitialKeys>;
 
@@ -62,12 +71,14 @@ export class ControllerManager implements ControllerRegistrar, ControllerTrigger
   private readonly controllers: { c: Registered; q: KeyedQueue; failures: Map<string, number> }[] = [];
   private readonly watcher: ResourceWatcher;
   private readonly log: (msg: string, err?: unknown) => void;
+  private readonly reporter?: ReconcileErrorReporter;
   private unsubscribe?: () => void;
   private resyncTimers: ReturnType<typeof setInterval>[] = [];
 
-  constructor(watcher: ResourceWatcher, log: (msg: string, err?: unknown) => void = () => {}) {
+  constructor(watcher: ResourceWatcher, log: (msg: string, err?: unknown) => void = () => {}, reporter?: ReconcileErrorReporter) {
     this.watcher = watcher;
     this.log = log;
+    this.reporter = reporter;
   }
 
   register(c: Registered): void {
@@ -75,13 +86,14 @@ export class ControllerManager implements ControllerRegistrar, ControllerTrigger
     const q: KeyedQueue = new KeyedQueue(async (key) => {
       try {
         const res = await c.reconcile(key);
-        failures.delete(key);
+        if (failures.delete(key)) this.reporter?.recovered(c.name, key);
         if (res && res.requeueAfterMs !== undefined) q.addAfter(key, res.requeueAfterMs);
       } catch (e) {
         const n = (failures.get(key) ?? 0) + 1;
         failures.set(key, n);
         const delay = Math.min(100 * 2 ** n, 60_000);
         this.log(`[${c.name}] reconcile ${key} failed (attempt ${n}), retry in ${delay}ms`, e);
+        await this.reporter?.failed({ controller: c.name, kind: c.primaryKind, key, attempt: n, error: e }).catch(() => {});
         q.addAfter(key, delay);
       }
     });

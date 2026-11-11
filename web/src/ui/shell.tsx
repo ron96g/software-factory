@@ -1,13 +1,13 @@
 "use client";
 import { ActionIcon, AppShell, Badge, Group, Stack, Text, Tooltip, UnstyledButton, useComputedColorScheme, useMantineColorScheme } from "@mantine/core";
-import { IconBox, IconBrain, IconMoon, IconSun, IconTopologyStar3 } from "@tabler/icons-react";
+import { IconAlertTriangle, IconBox, IconBrain, IconMoon, IconSun, IconTopologyStar3 } from "@tabler/icons-react";
 import Link from "next/link";
 import type { SystemHealth } from "@/core/ports/app.ts";
 import { useLive, useLiveStatus } from "./api.ts";
 import { Navbar } from "./navbar.tsx";
 
 function HealthBadges() {
-  const { data } = useLive<SystemHealth>("/api/system/health", () => false);
+  const { data, reload } = useLive<SystemHealth>("/api/system/health", (n) => n.kind === "Event");
   if (!data) return null;
   const sb = data.sandbox;
   return (
@@ -29,6 +29,25 @@ function HealthBadges() {
           {sb.waivesIsolation ? `${sb.runtime} · unsandboxed` : sb.available ? sb.runtime : "no sandbox"}
         </Badge>
       </Tooltip>
+      {data.failing.length > 0 && (
+        <Tooltip
+          multiline
+          w={420}
+          label={
+            <Stack gap={4}>
+              {data.failing.slice(0, 6).map((f) => (
+                <Text key={`${f.controller}|${f.key}`} size="xs">
+                  <b>{f.controller}</b> {f.key} · {f.attempts}× · {f.lastError.slice(0, 160)}
+                </Text>
+              ))}
+            </Stack>
+          }
+        >
+          <Badge variant="filled" color="red" leftSection={<IconAlertTriangle size={12} />}>
+            {data.failing.length} failing
+          </Badge>
+        </Tooltip>
+      )}
       <Tooltip label={data.llm.available ? `${data.llm.provider} · ${data.llm.model}` : "No ModelProvider key configured: deterministic/simulated agents"}>
         <Badge variant="light" color={data.llm.available ? "teal" : "gray"} leftSection={<IconBrain size={12} />}>
           {data.llm.available ? data.llm.provider : "no LLM"}

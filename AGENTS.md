@@ -147,8 +147,10 @@ text in Jira comments.
 | S5b | Read-only code tools for analysis agents | `read_file`/`list_files`/`search_code` on the workspace for triager, architect, reviewer | Reviewer reads surrounding code, not only the diff | ✅ |
 | S5c | Real checks + draft PR | `build`/`unit-tests` gate checks in the workspace, push branch + draft PR through the outbox | End-to-end PR from a work item | ✅ (draft PR #1 opened by the factory) |
 | U1 | Navigation | Left navbar with entities (work items, definitions, workspaces); generic resource list/detail views | Every kind browsable from the UI | ✅ |
+| Q1 | Review → fix loop | Stage-level `loop` (outcome → goto, bounded): AI code review returns `changes-requested` for blocking findings, the developer gets the review as input and fixes before the human gate | Blocking AI findings are fixed automatically (max N rounds), then humans review | ✅ (ADR-0024) |
+| Q2 | Visible control-loop errors | `ReconcileErrorReporter` port: repeated reconcile failures become Warning events on the object; failing-controller count in system health + UI badge | A stuck item shows why in its timeline | ✅ (ADR-0024) |
 
-Known v0.3 limits: a reconcile that keeps failing is only visible in the server log (no Warning event yet); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
+Known v0.3 limits: check failures and human reject comments are not yet fed to the developer as input (only AI code reviews are); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
 #### Later increments

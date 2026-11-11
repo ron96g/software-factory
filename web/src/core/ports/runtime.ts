@@ -43,6 +43,8 @@ export interface InitialKeys {
 
 export interface Controller extends Reconciler, WatchMapper {
   readonly name: string;
+  /** Kind that this controller's keys ("namespace/name") refer to; used to attach error events. */
+  readonly primaryKind?: string;
   /** Periodic full resync interval (safety net). */
   readonly resyncMs?: number;
 }
@@ -62,3 +64,33 @@ export interface ControllerTrigger {
 }
 
 export type { ObjectKey };
+
+// ── Visible control-loop errors (Q2) ────────────────────────────────────
+
+export interface ReconcileFailure {
+  controller: string;
+  kind?: string;
+  key: string;
+  attempt: number;
+  error: unknown;
+}
+
+/** Told about every failed and recovered reconcile; decides what becomes visible (events). */
+export interface ReconcileErrorReporter {
+  failed(f: ReconcileFailure): Promise<void>;
+  recovered(controller: string, key: string): void;
+}
+
+export interface FailingReconcile {
+  controller: string;
+  kind?: string;
+  key: string;
+  attempts: number;
+  lastError: string;
+  since: string;
+}
+
+/** Read side: which reconciles are currently failing (system health, UI). */
+export interface ControllerHealth {
+  failing(): FailingReconcile[];
+}
