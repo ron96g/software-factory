@@ -43,7 +43,7 @@ export interface FactoryAppDeps {
 }
 
 const slug = (s: string) =>
-  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "item";
+  s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "") || "item";
 
 /**
  * Use cases behind the API. Every method takes a Principal (ADR-0009); authorization

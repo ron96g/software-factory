@@ -251,7 +251,8 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
   const sorted = useMemo(() => [...d.artifacts].reverse(), [d.artifacts]);
   if (!sorted.length) return <Text c="dimmed" size="sm">No artifacts yet.</Text>;
   return (
-    <Accordion variant="separated" defaultValue={sorted[0]?.metadata.name}>
+    // Re-key on count so the newest artifact opens when new ones arrive.
+    <Accordion key={sorted.length} variant="separated" defaultValue={sorted[0]?.metadata.name}>
       {sorted.map((a) => (
         <Accordion.Item key={a.metadata.name} value={a.metadata.name}>
           <Accordion.Control>
@@ -287,6 +288,16 @@ function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void 
           <Text size="sm" c="dimmed">
             {r.spec.stage} / {r.spec.step}
           </Text>
+          <Tooltip label="round: increments each time a stage is (re-)entered">
+            <Badge size="xs" variant="light" color="gray">
+              {/-r(\d+)$/.exec(r.metadata.name)?.[0].slice(1) ?? ""}
+            </Badge>
+          </Tooltip>
+          {r.status?.result?.outcome && (
+            <Badge size="xs" variant="light" color={r.status.result.outcome === "accept" ? "teal" : "orange"}>
+              {r.status.result.outcome}
+            </Badge>
+          )}
           <Badge size="xs" variant="outline">
             {r.status?.provenance?.executor ?? r.status?.executor ?? "…"}
           </Badge>
