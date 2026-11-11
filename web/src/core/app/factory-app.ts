@@ -151,8 +151,9 @@ export class FactoryApp
     if (!c) throw new Error(`clarification ${name} not found`);
     if (c.spec.answers?.length) throw new Error("already answered");
     // Positional: answer i belongs to question i; skipped questions are explicit so the agent can tell them apart.
+    // "(no answer)" is a legitimate answer ("I don't know"); the agent then proceeds with stated assumptions.
+    if (!Array.isArray(answers) || answers.length === 0) throw new Error("answers are required");
     const cleaned = c.spec.questions.map((_, i) => (answers[i] ?? "").trim() || "(no answer)");
-    if (cleaned.every((a) => a === "(no answer)")) throw new Error("answer at least one question");
     return this.d.writer.update({ ...c, spec: { ...c.spec, answers: cleaned, answeredBy: p.id } });
   }
 

@@ -66,9 +66,31 @@ test("X6: clarification answers are positional; skipped questions are explicit",
     const d = (await f.app.getWorkItem(p, name))!;
     const c = d.clarifications[0];
     assert.equal(c.spec.questions.length, 2);
-    await assert.rejects(f.app.answerClarification(p, c.metadata.name, ["", "  "]), /at least one/);
+    await assert.rejects(f.app.answerClarification(p, c.metadata.name, []), /required/);
     const answered = await f.app.answerClarification(p, c.metadata.name, ["", "Only engineers, P3"]);
     assert.deepEqual(answered.spec.answers, ["(no answer)", "Only engineers, P3"]);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("X6: all questions answered with \"Don't know\" is accepted; the agent is told to proceed with stated assumptions", async () => {
+  const { f, name } = await blockedItem({});
+  try {
+    const c = (await f.app.getWorkItem(p, name))!.clarifications[0];
+    const answered = await f.app.answerClarification(p, c.metadata.name, ["", ""]);
+    assert.deepEqual(answered.spec.answers, ["(no answer)", "(no answer)"]);
+    const { DefaultPromptBuilder } = await import("./agents/prompt-builder.ts");
+    const prompt = new DefaultPromptBuilder().build({
+      run: { spec: { stage: "triage", step: "x", outputs: [] } },
+      agent: { body: "" },
+      skills: [],
+      workItem: { metadata: { name }, spec: { title: "t", sourceRef: { name: "manual" } } },
+      inputs: [],
+      clarifications: [answered],
+      sections: [],
+    } as never);
+    assert.match(prompt.user, /doesn't know\. Proceed with reasonable assumptions/);
   } finally {
     await f.stop();
   }

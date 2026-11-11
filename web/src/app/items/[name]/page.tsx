@@ -247,8 +247,10 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
   const [askOpen, setAskOpen] = useState(false);
   // The run that asked: latest run in this stage whose result carries these questions.
   const asker = [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && r.status?.result?.questions?.length);
-  const done = c.spec.questions.filter((_, i) => skipped[i] || answers[i].trim()).length;
-  const anyAnswer = answers.some((a, i) => !skipped[i] && a.trim());
+  const done = c.spec.questions.filter((_, i) => skipped[i] || answers[i]?.trim()).length;
+  const anyAnswer = answers.some((a, i) => !skipped[i] && a?.trim());
+  // Sendable once every question is handled (answered or explicitly "Don't know"), or at least one is answered.
+  const canSend = anyAnswer || done === c.spec.questions.length;
   const set = <T,>(arr: T[], i: number, v: T) => arr.map((x, j) => (j === i ? v : x));
 
   return (
@@ -336,7 +338,7 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
           <Button
             color="orange"
             loading={busy}
-            disabled={!anyAnswer}
+            disabled={!canSend}
             onClick={async () => {
               setBusy(true);
               await act(`/api/clarifications/${c.metadata.name}/answer`, { answers: answers.map((a, i) => (skipped[i] ? "" : a)) }, "Answers sent. Resuming.");

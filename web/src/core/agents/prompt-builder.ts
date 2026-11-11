@@ -49,6 +49,12 @@ export class DefaultPromptBuilder implements PromptBuilder {
     ];
     if (wi.status?.classification) parts.push(`Current classification: ${JSON.stringify(wi.status.classification)}`);
     for (const a of ctx.inputs) parts.push(`## Input artifact: ${a.spec.artifactTypeRef.name}\n${a.spec.content}`);
+    if (ctx.clarifications.some((c) => c.spec.answers?.some((a) => a === "(no answer)"))) {
+      parts.push(
+        "Note: answers marked \"(no answer)\" mean the human doesn't know. Proceed with reasonable assumptions, state them " +
+          "explicitly (e.g. under an \"Assumptions\" heading), and do not ask the same question again.",
+      );
+    }
     for (const c of ctx.clarifications) {
       parts.push(
         `## Human clarification (${c.spec.stage})\n` +
