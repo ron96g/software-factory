@@ -13,7 +13,8 @@ Read this file completely before you change anything.
 A **software factory** that implements the **AI-DLC** (AI-Driven Development Lifecycle) *as code*:
 
 - **Definitions as code** (in Git): `Agent` and `Skill` as Markdown with YAML frontmatter; `Workflow`, `ArtifactType`,
-  `Source`, and `Repository` as Kubernetes-style custom resources (YAML). They reference each other through typed `*Ref`s.
+  `Source`, `Repository`, and `ModelProvider` as Kubernetes-style custom resources (YAML). They reference each other
+  through typed `*Ref`s.
 - **Runtime** (in a DB): `WorkItem`, `AgentRun`, `Artifact`, `Clarification`, `Approval`, `Conversation`, `Event`, and
   `OutboxMessage`, all modeled as custom resources (`apiVersion / kind / metadata / spec / status`). Agent
   **transcripts** are stored separately in an append-only log (ADR-0012).
@@ -65,6 +66,12 @@ Required reading:
     sequenceDiagram, classDiagram, erDiagram, …). Don't use ASCII or box-drawing art. Directory trees and inline
     `a → b → c` sequences in prose are not diagrams. The same applies to diagrams that agents generate (e.g. a DDD
     domain model).
+16. **Secrets are referenced, never stored (ADR-0015).** Only `secretRef: { name }` appears in resources. Values come from
+    `SecretResolver`, are redacted everywhere, and are never put into prompts.
+17. **Providers via tiers (ADR-0014).** Agents declare `model.tier`, never a vendor or model name. Providers are
+    `ModelProvider` definitions resolved through `ModelResolver`.
+18. **No free-form execution in-process (ADR-0016).** Until the v0.3 sandbox exists, agent tools are registered,
+    read-only handlers. Shell, file writes, and code execution only run inside an `ExecutionEnvironment` sandbox.
 
 ---
 
@@ -110,15 +117,15 @@ human spec-review → **Ready for construction**. Later stages run on the simula
 |---|---|---|---|---|
 | M1 | Store & admission | SQLite (`node:sqlite`), Git definition loader, composite store, admission (Source defaults, ref validation), Event recorder, **append-only transcript store** (ADR-0012). Namespaces `default` / `factory-system` only | CRUD, `resourceVersion` conflicts, owner cascade, transcript append/read tested | ⏳ next |
 | M2 | Control plane | Work queue, controller manager, WorkItem / AgentRun / Clarification / Approval controllers, workflow compiler, `decision` + `human-approval` gates (`automated` passes) | An item flows to Done on the simulated executor, including block/answer and approve/reject | ☐ |
-| M3 | Agent pipeline | Context factory, prompt builder, executor chain (OpenAI-compatible LLM → skill handlers → simulated), code-search context provider (ripgrep on local-path repos), **transcript recording + provenance**, **explain-mode `ConversationResponder`** | Triage attaches `research-notes` with `repo:path:line` citations; every run has a transcript; "why?" gets an answer grounded in that transcript | ☐ |
-| M4 | Sources | `manual` + GitHub `ItemFetcher`, "Sync now", env secret resolver | GitHub issues appear as WorkItems | ☐ |
+| M3 | Agent pipeline | Context factory, prompt builder, executor chain (LLM → skill handlers → simulated), **`ModelProvider` kind + `ModelResolver` + OpenAI-compatible & Anthropic adapters + `ToolCallingLLM`** (ADR-0014), **env `SecretResolver` + redaction** (ADR-0015), **read-only tool registry** (ADR-0016), code-search context provider (ripgrep on local-path repos), **transcript recording + provenance**, **explain-mode `ConversationResponder`** | Triage attaches `research-notes` with `repo:path:line` citations; every run has a transcript; "why?" gets an answer grounded in that transcript | ☐ |
+| M4 | Sources | `manual` + GitHub `ItemFetcher`, "Sync now" | GitHub issues appear as WorkItems | ☐ |
 | M5 | UI | Next.js + Mantine (space theme): dashboard table, new item, sync, item detail (stages, artifacts, timeline), answer clarification, approve/reject, **run timeline + transcript viewer (incl. delegation tree, provenance) + "Ask this agent" chat**, Markdown with **Mermaid rendering** (ADR-0013), live updates (SSE) | MVP goal demonstrable end to end | ☐ |
 
 ### Increments after the MVP (re-planned when each one starts)
 | Version | Increment | Highlights |
 |---|---|---|
 | v0.2 | Write-back | Outbox + `CommentPublisher` (GitHub), Jira connector, answers synced from comments (`CommentReader`), **re-run replay with diff** (`RunReplayer`) |
-| v0.3 | Construction for real | Developer agent works on branches/PRs, Git workspace clones, real `automated` gate checks (build/tests), Bolt fan-out per Unit |
+| v0.3 | Construction for real | **`ExecutionEnvironment` sandbox (container per AgentRun, ADR-0016)**, developer agent works on branches/PRs, Git workspace clones, real `automated` gate checks (build/tests), Bolt fan-out per Unit |
 | v0.4 | Auth & squads | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
 | v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011) |
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
