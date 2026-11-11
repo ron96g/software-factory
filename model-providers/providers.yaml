@@ -1,5 +1,6 @@
 # ADR-0014: agents declare a tier; providers map tiers to models.
 # A provider is used only if its secret resolves (env var, ADR-0015), e.g. OPENAI_API_KEY.
+# Defaults are preferred; among them the first one whose secret resolves wins.
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: ModelProvider
 metadata:
@@ -8,7 +9,6 @@ spec:
   type: openai-compatible
   baseUrl: https://api.openai.com/v1
   secretRef: { name: openai-api-key }
-  default: true
   models:
     reasoning: gpt-5.1
     coding: gpt-5.1
@@ -26,3 +26,18 @@ spec:
     reasoning: claude-opus-4-5
     coding: claude-sonnet-4-5
     fast: claude-haiku-4-5
+---
+# GitHub Copilot speaks the OpenAI chat API. Token: a GitHub token with Copilot access, e.g. COPILOT_TOKEN=$(gh auth token).
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: github-copilot
+spec:
+  type: openai-compatible
+  baseUrl: https://api.githubcopilot.com
+  secretRef: { name: copilot-token }
+  default: true
+  models:
+    reasoning: claude-sonnet-5.5
+    coding: claude-sonnet-5.5
+    fast: claude-haiku-5.5

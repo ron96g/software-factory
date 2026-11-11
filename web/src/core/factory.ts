@@ -2,7 +2,8 @@
  * Composition root (AGENTS.md rule 3). The ONLY file that knows concrete implementations.
  */
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentTool, Clock, ExecutionEnvironment, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
@@ -39,6 +40,7 @@ import { JiraConnector } from "./adapters/sources/jira.ts";
 import { DefaultRunReplayer } from "./agents/replayer.ts";
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
+import { HostEnvironment } from "./adapters/sandbox/host.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { SandboxToolLoopExecutor } from "./agents/tool-loop.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
@@ -46,6 +48,8 @@ import { StoreOutbox, commentHandler, createClarificationSyncController, createO
 export interface FactoryOptions {
   /** Repo root containing agents/, skills/, workflows/, … */
   definitionsRoot: string;
+  /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
+  workspacesDir?: string;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
@@ -104,6 +108,14 @@ export async function createFactory(o: FactoryOptions) {
   // ── sandbox runtimes (ADR-0019) ──────────────────────────────────────
   const sandboxEnvs = new Registry<ExecutionEnvironment>();
   sandboxEnvs.register("none", new NoSandboxEnvironment());
+  // ADR-0020: registered, but only used when FACTORY_SANDBOX_RUNTIME=host (never part of `auto`).
+  sandboxEnvs.register(
+    "host",
+    new HostEnvironment({
+      definitionsRoot: o.definitionsRoot,
+      workspacesDir: o.workspacesDir ?? join(o.databasePath === ":memory:" ? tmpdir() : dirname(o.databasePath), "workspaces"),
+    }),
+  );
   for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
   const env = o.env ?? process.env;
   const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [

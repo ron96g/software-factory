@@ -74,3 +74,43 @@ test("S2: without a runtime, construction agents are simulated with a visible re
     await f.stop();
   }
 });
+
+test("contract: host runtime (ADR-0020) on a temp git repo; worktree persists per work item", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { HostEnvironment } = await import("./adapters/sandbox/host.ts");
+  const repo = mkdtempSync(join(tmpdir(), "sf-repo-"));
+  const g = (...a: string[]) => execFileSync("git", a, { cwd: repo });
+  g("init", "-q");
+  writeFileSync(join(repo, "a.txt"), "one\n");
+  g("add", ".");
+  g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
+  const env = new HostEnvironment({ definitionsRoot: repo, workspacesDir: join(repo, "..", `${repo.split("/").pop()}-ws`) });
+  const h = await env.health();
+  assert.equal(h.waivesIsolation, true);
+  const hostSpec = {
+    run: { metadata: { name: "r1" }, spec: { workItemRef: { name: "item-1" } } },
+    profile: {},
+    repositories: [{ metadata: { name: "repo" }, spec: { local: { path: repo } } }],
+  } as unknown as SandboxSpec;
+  const sb = await env.prepare(hostSpec);
+  await sb.writeFile("src/new.txt", "hello");
+  assert.equal(await sb.readFile("src/new.txt"), "hello");
+  await assert.rejects(sb.writeFile("../escape", "x"), /escapes/);
+  await assert.rejects(sb.writeFile(".git/config", "x"), /escapes/);
+  process.env.SF_TEST_SECRET = "sk-should-not-leak";
+  const r = await sb.exec("echo \"key=[$SF_TEST_SECRET]\" && cat a.txt");
+  assert.equal(r.exitCode, 0);
+  assert.match(r.stdout, /key=\[\]/, "factory env is scrubbed");
+  assert.match(r.stdout, /one/);
+  assert.ok((await sb.listFiles("src/*")).includes("src/new.txt"));
+  assert.match(await sb.diff(), /\+hello/);
+  assert.equal((await sb.exec("sleep 5", { timeoutMs: 200 })).exitCode !== 0, true, "timeout kills");
+  await sb.dispose();
+  // second run of the same item sees the first run's changes; the source checkout is untouched
+  const sb2 = await env.prepare(hostSpec);
+  assert.equal(await sb2.readFile("src/new.txt"), "hello");
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: repo }).toString().trim(), "");
+});

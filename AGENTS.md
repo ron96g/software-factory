@@ -142,11 +142,10 @@ text in Jira comments.
 | S1 | Sandbox ports & profile | `ExecutionEnvironment` + segregated `Sandbox*` ports, `SandboxHealth`, `SandboxProfile` kind, `sandboxRef` on agents/repos, in-memory fake sandbox for tests | Ports reviewed; fake passes a contract test | ✅ |
 | S2 | Runtime selection & `none` | Registry + `auto` selection by health and minimum isolation, `none` adapter, provenance + UI health badge, explicit fallback reason | Without a runtime: analysis works; construction is simulated with a visible reason | ✅ |
 | S3 | Tool-call loop | `ToolCallingLLM` adapters, agent tool loop (recorded), sandbox-bound tools (`run`, `read_file`, `write_file`, `git_diff`) | Developer agent edits code and runs tests in the fake sandbox | ✅ |
-| S4 | First real adapter | Depends on the environment (kubernetes / remote / podman) | Real run in an isolated sandbox | ☐ blocked: no usable runtime on the dev machine |
+| S4 | First real adapter | `host` (ADR-0020, explicit opt-in, unsandboxed, per-item Git worktree); container/kubernetes adapters later | Real run on the dev machine | ✅ host · ☐ isolated adapters |
 | S5 | Git workspace, real checks, PR via outbox | Short-lived token clone, branch per item, `build`/`unit-tests` checks, draft PR through the outbox | End-to-end PR from a work item | ☐ |
 
-Known v0.3 limits (closed by S5): every run gets a fresh sandbox from its seed, so the verifier doesn't yet see the
-developer's changes (needs the per-item Git branch/workspace); tool results go to the model unredacted, which is safe
+Known v0.3 limits: with `host`, runs of one item share a Git worktree (branch `factory/<item>`); other runtimes start fresh until S5; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
 #### Later increments

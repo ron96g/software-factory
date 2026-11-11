@@ -77,7 +77,8 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
     if (!profile) throw new Error(`sandbox profile "${ctx.agent.spec.sandboxRef!.name}" not found`);
     const { environment, health } = await this.d.environments.select();
     const required = profile.spec.isolation ?? "container";
-    if (ISOLATION_RANK[health.isolation] < ISOLATION_RANK[required]) {
+    const insufficient = ISOLATION_RANK[health.isolation] < ISOLATION_RANK[required];
+    if (insufficient && !health.waivesIsolation) {
       throw new Error(`sandbox runtime "${health.runtime}" provides isolation "${health.isolation}", profile requires "${required}"`);
     }
 
@@ -85,6 +86,13 @@ export class SandboxToolLoopExecutor implements AgentExecutor {
     await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
     await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
 
+    if (insufficient) {
+      await ctx.transcript.record({
+        role: "note",
+        author: sys,
+        content: `WARNING: runtime "${health.runtime}" is unsandboxed (isolation ${health.isolation}); profile minimum "${required}" waived by explicit opt-in (ADR-0020).`,
+      });
+    }
     const sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories });
     await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name})` });
     try {

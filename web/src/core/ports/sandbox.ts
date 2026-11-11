@@ -56,6 +56,8 @@ export interface SandboxHealthInfo {
   runtime: string;
   available: boolean;
   isolation: IsolationLevel;
+  /** Explicitly opted-in runtime that waives profile minimum isolation (ADR-0020 `host`). */
+  waivesIsolation?: boolean;
   version?: string;
   message?: string;
 }

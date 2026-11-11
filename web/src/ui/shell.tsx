@@ -24,8 +24,8 @@ function HealthBadges() {
           </Stack>
         }
       >
-        <Badge variant="light" color={sb.available ? "teal" : "gray"} leftSection={<IconBox size={12} />}>
-          {sb.available ? sb.runtime : "no sandbox"}
+        <Badge variant={sb.waivesIsolation ? "filled" : "light"} color={sb.waivesIsolation ? "red" : sb.available ? "teal" : "gray"} leftSection={<IconBox size={12} />}>
+          {sb.waivesIsolation ? `${sb.runtime} · unsandboxed` : sb.available ? sb.runtime : "no sandbox"}
         </Badge>
       </Tooltip>
       <Tooltip label={data.llm.available ? `${data.llm.provider} · ${data.llm.model}` : "No ModelProvider key configured: deterministic/simulated agents"}>
