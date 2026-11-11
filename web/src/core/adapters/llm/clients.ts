@@ -1,5 +1,5 @@
 import type { ModelProvider } from "../../model/kinds.ts";
-import type { CompletionRequest, LLMClient, LLMClientFactory } from "../../ports/index.ts";
+import type { CompletionRequest, LLMClient, LLMClientFactory, ToolCall, ToolCallingLLM, ToolLoopMessage, ToolSchema } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
 
@@ -10,8 +10,20 @@ async function postJson(f: Fetch, url: string, headers: Record<string, string>, 
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+const toOpenAI = (m: ToolLoopMessage) => {
+  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+  if ("toolCalls" in m) {
+    return {
+      role: "assistant",
+      content: m.content ?? null,
+      tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.arguments) } })),
+    };
+  }
+  return m;
+};
+
 /** OpenAI Chat Completions API and compatibles (Azure, Ollama, OpenRouter, vLLM, …). */
-export class OpenAICompatibleClient implements LLMClient {
+export class OpenAICompatibleClient implements LLMClient, ToolCallingLLM {
   private readonly baseUrl: string;
   private readonly model: (tier?: string) => string;
   private readonly apiKey?: string;
@@ -34,10 +46,49 @@ export class OpenAICompatibleClient implements LLMClient {
     const choice = (r.choices as { message: { content: string } }[] | undefined)?.[0];
     return choice?.message.content ?? "";
   }
+  async completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }) {
+    const r = await postJson(this.f, `${this.baseUrl}/chat/completions`, this.headers(), {
+      model: this.model(req.tier),
+      messages: req.messages.map(toOpenAI),
+      tools: req.tools.map((t) => ({ type: "function", function: t })),
+    });
+    const msg = (r.choices as { message: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[])[0]
+      .message;
+    const toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, arguments: safeJson(c.function.arguments) }));
+    return { text: msg.content ?? undefined, toolCalls };
+  }
 }
 
+const safeJson = (s: string): Record<string, unknown> => {
+  try {
+    return JSON.parse(s || "{}");
+  } catch {
+    return { _raw: s };
+  }
+};
+
+/** Anthropic: tool calls are `tool_use` blocks; results go back as `tool_result` blocks in a user turn. */
+const toAnthropic = (msgs: ToolLoopMessage[]) => {
+  const out: { role: "user" | "assistant"; content: unknown }[] = [];
+  for (const m of msgs) {
+    if (m.role === "system") continue;
+    if (m.role === "tool") {
+      const block = { type: "tool_result", tool_use_id: m.toolCallId, content: m.content };
+      const last = out.at(-1);
+      if (last?.role === "user" && Array.isArray(last.content)) (last.content as unknown[]).push(block);
+      else out.push({ role: "user", content: [block] });
+    } else if ("toolCalls" in m) {
+      out.push({
+        role: "assistant",
+        content: [...(m.content ? [{ type: "text", text: m.content }] : []), ...m.toolCalls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.arguments }))],
+      });
+    } else out.push({ role: m.role, content: m.content });
+  }
+  return out;
+};
+
 /** Anthropic Messages API. */
-export class AnthropicClient implements LLMClient {
+export class AnthropicClient implements LLMClient, ToolCallingLLM {
   private readonly baseUrl: string;
   private readonly model: (tier?: string) => string;
   private readonly apiKey?: string;
@@ -59,6 +110,21 @@ export class AnthropicClient implements LLMClient {
   async complete(req: CompletionRequest): Promise<string> {
     const r = await postJson(this.f, `${this.baseUrl}/v1/messages`, this.headers(), this.body(req));
     return ((r.content as { type: string; text?: string }[]) ?? []).filter((c) => c.type === "text").map((c) => c.text).join("");
+  }
+  async completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }) {
+    const system = req.messages.filter((m) => m.role === "system").map((m) => ("content" in m ? m.content : "")).join("\n\n");
+    const r = await postJson(this.f, `${this.baseUrl}/v1/messages`, this.headers(), {
+      model: this.model(req.tier),
+      max_tokens: 8192,
+      system,
+      messages: toAnthropic(req.messages),
+      tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+    });
+    const content = (r.content as { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]) ?? [];
+    return {
+      text: content.filter((c) => c.type === "text").map((c) => c.text).join("") || undefined,
+      toolCalls: content.filter((c) => c.type === "tool_use").map((c) => ({ id: c.id!, name: c.name!, arguments: c.input ?? {} })),
+    };
   }
 }
 

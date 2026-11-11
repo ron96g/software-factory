@@ -17,13 +17,26 @@ Rules: artifacts must contain exactly the listed types${outputs.length ? "" : " 
 All diagrams in artifacts must be Mermaid code blocks. Cite code as repo:path:line. Never invent facts about the code.`;
 };
 
+const TOOLS_CONTRACT = (ctx: ExecutionContext) => {
+  const outputs = ctx.run.spec.outputs.map((o) => o.name);
+  return `## Working mode
+You work inside an isolated sandbox containing the repository workspace. Use the tools to inspect files, make changes
+and run commands (for example the tests). Work in small steps and verify your changes by running the relevant tests.
+When you are done, call the \`finish\` tool exactly once with:
+- summary: what you changed and why
+- artifacts: [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}]${outputs.includes("source-code") ? " (the diff is attached automatically)" : ""}
+- outcome: ${ctx.run.spec.outcomes?.length ? ctx.run.spec.outcomes.join(" | ") : "omit"}
+- questions: only if you cannot proceed responsibly without a human answer.
+All diagrams must be Mermaid. Never print secrets.`;
+};
+
 /** Pure function: Agent body + skills → system; work item, inputs, answers, sections → user. */
 export class DefaultPromptBuilder implements PromptBuilder {
-  build(ctx: ExecutionContext): Prompt {
+  build(ctx: ExecutionContext, mode: "json" | "tools" = "json"): Prompt {
     const system = [
       ctx.agent.body,
       ...ctx.skills.map((s) => `## Skill: ${s.metadata.name}\n${s.body}`),
-      OUTPUT_CONTRACT(ctx),
+      mode === "tools" ? TOOLS_CONTRACT(ctx) : OUTPUT_CONTRACT(ctx),
     ].join("\n\n");
 
     const wi = ctx.workItem;

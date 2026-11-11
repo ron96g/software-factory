@@ -64,7 +64,8 @@ export interface Prompt {
 }
 
 export interface PromptBuilder {
-  build(ctx: ExecutionContext): Prompt;
+  /** `json`: answer with one JSON object; `tools`: work with tools and finish via the `finish` tool. */
+  build(ctx: ExecutionContext, mode?: "json" | "tools"): Prompt;
 }
 
 export interface ProducedArtifact {

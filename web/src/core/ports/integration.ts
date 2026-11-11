@@ -4,6 +4,7 @@
  */
 import type { ModelProvider, Repository, Source } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
+import type { SandboxArtifacts, SandboxExec, SandboxFiles } from "./sandbox.ts";
 
 // ── Generic registry (adapter lookup by `type`) ─────────────────────────
 
@@ -122,9 +123,19 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Conversation of a tool loop: plain chat plus assistant tool calls and tool results. */
+export type ToolLoopMessage =
+  | ChatMessage
+  | { role: "assistant"; content?: string; toolCalls: ToolCall[] }
+  | { role: "tool"; toolCallId: string; name: string; content: string };
+
 export interface ToolCallingLLM {
-  completeWithTools(req: CompletionRequest & { tools: ToolSchema[] }): Promise<{ text?: string; toolCalls: ToolCall[] }>;
+  completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }): Promise<{ text?: string; toolCalls: ToolCall[] }>;
 }
+
+/** Tool calling is an optional client capability (ISP), detected at runtime. */
+export const canCallTools = (c: LLMClient): c is LLMClient & ToolCallingLLM =>
+  typeof (c as Partial<ToolCallingLLM>).completeWithTools === "function";
 
 /** Builds a client for a ModelProvider definition. Registered by `ModelProvider.spec.type`. */
 export interface LLMClientFactory {
@@ -150,6 +161,28 @@ export interface AgentToolInfo {
   readonly name: string;
   readonly readOnly: boolean;
   readonly description: string;
+  /** True for tools that only exist inside a sandbox (ADR-0019). */
+  readonly requiresSandbox?: boolean;
+  /** Sandbox capabilities the tool is bound to. Nothing else is passed to `bind` (ISP). */
+  readonly capabilities?: readonly (keyof ToolCapabilities)[];
+}
+
+/** Sandbox capabilities a tool may be bound to; each tool takes only what it needs (ISP). */
+export interface ToolCapabilities {
+  exec?: SandboxExec;
+  files?: SandboxFiles;
+  artifacts?: SandboxArtifacts;
+}
+
+export interface BoundTool {
+  readonly schema: ToolSchema;
+  /** Returns the tool result as text for the model (and the transcript). */
+  invoke(args: Record<string, unknown>): Promise<string>;
+}
+
+/** A registered agent tool. Context-only tools (e.g. code-search) have no `bind`. */
+export interface AgentTool extends AgentToolInfo {
+  bind?(caps: ToolCapabilities): BoundTool;
 }
 
 // ── Outbox (outbound side effects) ───────────────────────────────────────

@@ -1,7 +1,7 @@
 import type {
   AgentExecutor,
   AgentResult,
-  AgentToolInfo,
+  AgentTool,
   ExecutionContext,
   Lookup,
   PromptBuilder,
@@ -31,19 +31,23 @@ export class ExecutorChain implements AgentExecutor {
 }
 
 /**
- * LLM executor. ADR-0016: only for agents whose tools are all registered read-only tools;
- * agents needing shell/write tools wait for the v0.3 sandbox (they fall through to simulation).
+ * LLM executor (JSON mode). Only for agents whose tools are all context-provided read-only tools;
+ * agents with sandbox tools use the SandboxToolLoopExecutor or fall through to simulation (ADR-0019).
  */
 export class LLMExecutor implements AgentExecutor {
   readonly name = "llm";
   private readonly prompts: PromptBuilder;
-  private readonly tools: Lookup<AgentToolInfo>;
-  constructor(prompts: PromptBuilder, tools: Lookup<AgentToolInfo>) {
+  private readonly tools: Lookup<AgentTool>;
+  constructor(prompts: PromptBuilder, tools: Lookup<AgentTool>) {
     this.prompts = prompts;
     this.tools = tools;
   }
   canExecute(ctx: ExecutionContext): boolean {
-    return !!ctx.model && (ctx.agent.spec.tools ?? []).every((t) => this.tools.get(t)?.readOnly);
+    // JSON mode: only context-provided read-only tools; sandbox tools need the tool loop (ADR-0019).
+    return !!ctx.model && (ctx.agent.spec.tools ?? []).every((t) => {
+      const tool = this.tools.get(t);
+      return !!tool && tool.readOnly && !tool.requiresSandbox;
+    });
   }
   async execute(ctx: ExecutionContext): Promise<AgentResult> {
     const model = ctx.model!;

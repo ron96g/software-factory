@@ -4,7 +4,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentToolInfo, Clock, ExecutionEnvironment, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { AgentTool, Clock, ExecutionEnvironment, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -39,6 +39,8 @@ import { JiraConnector } from "./adapters/sources/jira.ts";
 import { DefaultRunReplayer } from "./agents/replayer.ts";
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
+import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
+import { SandboxToolLoopExecutor } from "./agents/tool-loop.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 
 export interface FactoryOptions {
@@ -89,8 +91,11 @@ export async function createFactory(o: FactoryOptions) {
   llmFactories.register("anthropic", anthropicFactory(o.fetch));
   const models = new DefaultModelResolver(store, secrets, llmFactories);
 
-  const tools = new Registry<AgentToolInfo>();
-  for (const name of ["code-search", "git-read", "filesystem-read"]) tools.register(name, { name, readOnly: true, description: `${name} (read-only)` });
+  const tools = new Registry<AgentTool>();
+  for (const t of [...CONTEXT_TOOLS, ...SANDBOX_TOOLS]) {
+    if (t.name === "finish") throw new Error('tool name "finish" is reserved by the tool loop');
+    tools.register(t.name, t);
+  }
 
   const skillHandlers = new Registry<SkillHandler>();
   skillHandlers.register(classificationHandler.skill, classificationHandler);
@@ -117,8 +122,10 @@ export async function createFactory(o: FactoryOptions) {
     recorders,
     environments,
   });
+  const prompts = new DefaultPromptBuilder();
   const executor = new ExecutorChain([
-    new LLMExecutor(new DefaultPromptBuilder(), tools),
+    new SandboxToolLoopExecutor({ reader: store, prompts, tools, environments }),
+    new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
     new SimulatedExecutor(),
   ]);
