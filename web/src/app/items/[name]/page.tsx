@@ -27,7 +27,8 @@ import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
 import { RunDrawer } from "@/ui/run-inspector.tsx";
 
-const PHASE_COLOR: Record<string, string> = { inception: "nebula", construction: "plasma", operations: "teal", build: "plasma" };
+const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
+const PHASE_COLOR: Record<string, string> = { inception: "indigo", construction: "cyan", operations: "teal", build: "cyan" };
 
 export default function ItemPage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = use(params);
@@ -85,7 +86,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
-          <Card className="sf-glass">
+          <Card className="sf-surface">
             <Tabs defaultValue="artifacts">
               <Tabs.List>
                 <Tabs.Tab value="artifacts">Artifacts ({d.artifacts.length})</Tabs.Tab>
@@ -109,7 +110,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }}>
-          <Card className="sf-glass">
+          <Card className="sf-surface">
             <Title order={5} mb="sm">
               Timeline
             </Title>
@@ -117,7 +118,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
               {[...d.events].reverse().slice(0, 60).map((e) => (
                 <Timeline.Item
                   key={e.metadata.name}
-                  color={e.spec.type === "Warning" ? "red" : "nebula"}
+                  color={e.spec.type === "Warning" ? "red" : "indigo"}
                   title={
                     <Text size="sm" fw={500}>
                       {e.spec.reason} <Text span size="xs" c="dimmed">{e.spec.involvedObject.kind}</Text>
@@ -147,7 +148,7 @@ function StageProgress({ d }: { d: WorkItemDetail }) {
   const idx = d.stages.findIndex((s) => s.name === st?.stage);
   const done = st?.phase === "Done";
   return (
-    <Card className="sf-glass" p="sm">
+    <Card className="sf-surface" p="sm">
       <Group gap={6} wrap="wrap">
         {d.stages.map((s, i) => {
           const current = i === idx && !done;
@@ -176,7 +177,7 @@ function ClarificationPanel({ c }: { c: Clarification }) {
   const [answers, setAnswers] = useState<string[]>(c.spec.questions.map(() => ""));
   const [busy, setBusy] = useState(false);
   return (
-    <Alert color="orange" variant="light" title={`Blocked at ${c.spec.stage}: the agent needs your input`} icon={<IconHandStop />}>
+    <Alert color="orange" variant="outline" styles={ALERT_STYLES} title={`Blocked at ${c.spec.stage}: the agent needs your input`} icon={<IconHandStop />}>
       <Stack gap="sm" mt="xs">
         {c.spec.questions.map((q, i) => (
           <Textarea
@@ -219,7 +220,7 @@ function ApprovalPanel({ a }: { a: Approval }) {
     setBusy(null);
   };
   return (
-    <Alert color="yellow" variant="light" title={`Gate: ${a.spec.stage} needs human approval`} icon={<IconHandStop />}>
+    <Alert color="yellow" variant="outline" styles={ALERT_STYLES} title={`Gate: ${a.spec.stage} needs human approval`} icon={<IconHandStop />}>
       <Stack gap="xs" mt="xs">
         {a.spec.approvers.length > 0 && (
           <Text size="sm">

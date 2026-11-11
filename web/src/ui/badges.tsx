@@ -4,7 +4,7 @@ import type { RunPhase, WorkItemPhase } from "@/core/model/kinds.ts";
 
 const PHASE_COLORS: Record<string, MantineColor> = {
   New: "gray",
-  Running: "plasma",
+  Running: "blue",
   Blocked: "orange",
   AwaitingApproval: "yellow",
   Done: "teal",
@@ -19,18 +19,18 @@ const LABELS: Record<string, string> = { AwaitingApproval: "Awaiting approval" }
 export function PhaseBadge({ phase, size = "sm" }: { phase?: WorkItemPhase | RunPhase | string; size?: "xs" | "sm" | "md" }) {
   const p = phase ?? "New";
   return (
-    <Badge color={PHASE_COLORS[p] ?? "gray"} variant={p === "Blocked" || p === "AwaitingApproval" ? "filled" : "light"} size={size}>
+    <Badge color={PHASE_COLORS[p] ?? "gray"} variant="light" size={size}>
       {LABELS[p] ?? p}
     </Badge>
   );
 }
 
-const TYPE_COLORS: Record<string, MantineColor> = { bug: "red", incident: "pink", feature: "nebula", chore: "gray", question: "plasma" };
+const TYPE_COLORS: Record<string, MantineColor> = { bug: "red", incident: "pink", feature: "indigo", chore: "gray", question: "blue" };
 
 export function TypeBadge({ type }: { type?: string }) {
   if (!type) return null;
   return (
-    <Badge color={TYPE_COLORS[type] ?? "gray"} variant="outline" size="sm">
+    <Badge color={TYPE_COLORS[type] ?? "gray"} variant="dot" size="sm">
       {type}
     </Badge>
   );

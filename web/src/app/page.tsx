@@ -48,7 +48,7 @@ export default function Dashboard() {
     <Stack gap="lg" maw={1400} mx="auto">
       <Group justify="space-between" align="flex-end">
         <div>
-          <Title order={2} className="sf-glow">
+          <Title order={2}>
             Work items
           </Title>
           <Text c="dimmed" size="sm">
@@ -77,7 +77,7 @@ export default function Dashboard() {
               ))}
             </Menu.Dropdown>
           </Menu>
-          <Button leftSection={<IconPlus size={16} />} variant="gradient" gradient={{ from: "nebula", to: "plasma", deg: 135 }} onClick={open}>
+          <Button leftSection={<IconPlus size={16} />} onClick={open}>
             New item
           </Button>
         </Group>
@@ -94,7 +94,7 @@ export default function Dashboard() {
         </Text>
       </Group>
 
-      <Card className="sf-glass" p={0}>
+      <Card className="sf-surface" p={0}>
         <Table verticalSpacing="sm" horizontalSpacing="md">
           <Table.Thead>
             <Table.Tr>

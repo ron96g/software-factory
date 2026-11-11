@@ -16,7 +16,7 @@ const ROLE_ICON: Record<string, React.ReactNode> = {
   "tool-result": <IconTool size={14} />,
   note: <IconNote size={14} />,
 };
-const ROLE_COLOR: Record<string, string> = { system: "gray", user: "plasma", assistant: "nebula", "tool-call": "yellow", "tool-result": "yellow", note: "gray" };
+const ROLE_COLOR: Record<string, string> = { system: "gray", user: "blue", assistant: "indigo", "tool-call": "yellow", "tool-result": "yellow", note: "gray" };
 
 export function TranscriptMessages({ messages, collapseLong = true }: { messages: TranscriptMessage[]; collapseLong?: boolean }) {
   return (
@@ -24,7 +24,7 @@ export function TranscriptMessages({ messages, collapseLong = true }: { messages
       {messages.map((m) => {
         const long = collapseLong && (m.role === "system" || m.role === "user" || m.role === "tool-result") && m.content.length > 600;
         return (
-          <Paper key={m.seq} p="xs" className="sf-glass">
+          <Paper key={m.seq} p="xs" className="sf-surface">
             <Group gap="xs" mb={4}>
               <ThemeIcon size="sm" variant="light" color={ROLE_COLOR[m.role]}>
                 {ROLE_ICON[m.role]}
@@ -37,7 +37,7 @@ export function TranscriptMessages({ messages, collapseLong = true }: { messages
               </Text>
               {m.meta?.tool && <Badge size="xs" variant="outline">{String(m.meta.tool)}</Badge>}
               {typeof m.meta?.latencyMs === "number" && <Badge size="xs" variant="light">{m.meta.latencyMs} ms</Badge>}
-              {typeof m.meta?.model === "string" && <Badge size="xs" variant="light" color="plasma">{m.meta.model}</Badge>}
+              {typeof m.meta?.model === "string" && <Badge size="xs" variant="light" color="blue">{m.meta.model}</Badge>}
             </Group>
             {long ? (
               <Accordion variant="contained" chevronPosition="left">
@@ -78,7 +78,7 @@ export function RunDrawer({ run, conversations, onClose }: { run: AgentRun | nul
         <Group gap="xs">
           <PhaseBadge phase={run.status?.phase} />
           <Badge variant="light">executor: {p?.executor ?? run.status?.executor ?? "–"}</Badge>
-          {p?.model && <Badge variant="light" color="plasma">{p.model.provider}/{p.model.name} ({p.model.tier})</Badge>}
+          {p?.model && <Badge variant="light" color="blue">{p.model.provider}/{p.model.name} ({p.model.tier})</Badge>}
           {p?.promptHash && <Tooltip label="prompt hash"><Badge variant="outline">#{p.promptHash}</Badge></Tooltip>}
         </Group>
         {run.status?.result?.summary && <Text size="sm">{run.status.result.summary}</Text>}

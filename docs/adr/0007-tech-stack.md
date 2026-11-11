@@ -1,6 +1,6 @@
 # ADR-0007: Tech stack: Next.js, React, Mantine (space theme), TypeScript
 
-- **Status:** Accepted
+- **Status:** Accepted (theme part superseded by ADR-0018)
 - **Date:** 2026-11-11
 
 ## Decision

@@ -1,28 +1,24 @@
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import "./globals.css";
-import { ColorSchemeScript, MantineProvider, mantineHtmlProps } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
 import type { Metadata } from "next";
-import { theme } from "@/ui/theme.ts";
-import { Shell } from "@/ui/shell.tsx";
+import { cookies } from "next/headers";
+import { COLOR_SCHEME_COOKIE, isColorScheme } from "@/ui/color-scheme.ts";
+import { Providers } from "@/ui/providers.tsx";
 
 export const metadata: Metadata = {
-  title: "Software Factory · AI-DLC",
+  title: "Software Factory",
   description: "AI-driven development lifecycle as code",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const stored = (await cookies()).get(COLOR_SCHEME_COOKIE)?.value;
+  // "auto" can't be resolved on the server; fall back to light (ADR-0018 default).
+  const scheme = isColorScheme(stored) && stored !== "auto" ? stored : "light";
   return (
-    <html lang="en" {...mantineHtmlProps}>
-      <head>
-        <ColorSchemeScript forceColorScheme="dark" />
-      </head>
+    <html lang="en" data-mantine-color-scheme={scheme} suppressHydrationWarning>
       <body>
-        <MantineProvider theme={theme} forceColorScheme="dark">
-          <Notifications position="top-right" />
-          <Shell>{children}</Shell>
-        </MantineProvider>
+        <Providers colorScheme={scheme}>{children}</Providers>
       </body>
     </html>
   );
