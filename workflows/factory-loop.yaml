@@ -102,6 +102,7 @@ spec:
           gate:
             type: human-approval
             approvers: [{ role: ops-lead }]
+            onReject: { next: implement }   # the reject reason reaches the developer as a "Human gate decision"
 
         - name: monitor
           steps:
