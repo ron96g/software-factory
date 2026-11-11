@@ -80,6 +80,22 @@ def main():
             if (REF_KINDS[ref_key], name) not in index:
                 errors.append(f"{path}: unresolved {ref_key} -> {REF_KINDS[ref_key]}/{name}")
 
+    # Step-level tool narrowing may only name tools the step's agent has (ADR-0022).
+    agents = {d["metadata"]["name"]: d for _, d in docs if d.get("kind") == "Agent"}
+    for path, doc in docs:
+        if doc.get("kind") != "Workflow":
+            continue
+        for phase in doc["spec"].get("phases", []):
+            for stage in phase.get("stages", []):
+                for step in stage.get("steps", []) or []:
+                    if "tools" not in step:
+                        continue
+                    agent = agents.get(step["agentRef"]["name"], {})
+                    allowed = set(agent.get("spec", {}).get("tools", []) or [])
+                    for t in step["tools"]:
+                        if t not in allowed:
+                            errors.append(f"{path}: step {step['name']}: tool '{t}' is not a tool of agent {step['agentRef']['name']}")
+
     for e in errors:
         print("ERROR", e)
     print(f"{len(index)} resources, {len(errors)} errors")

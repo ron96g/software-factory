@@ -143,6 +143,7 @@ export class ToolLoopExecutor implements AgentExecutor {
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
     const sys = { type: "system" as const, id: "tool-loop" };
     const agentAuthor = { type: "agent" as const, id: ctx.agent.metadata.name };
+    // `search` is always bound to the workspace (not the sandbox's in-progress writes); see ADR-0022.
     {
       const bound = new Map<string, BoundTool>();
       const unavailable: string[] = [];

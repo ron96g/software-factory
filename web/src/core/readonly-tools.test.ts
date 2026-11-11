@@ -96,3 +96,29 @@ test("S5b: a workflow step narrows the agent's tools (classify runs without tool
   assert.deepEqual((await cf.create(run(["read_file", "write_file"]))).agent.spec.tools, ["read_file"], "cannot extend");
   assert.deepEqual((await cf.create(run())).agent.spec.tools, ["search_code", "read_file"]);
 });
+
+test("S5b/ADR-0022: workspace reader guards (escape, .git, symlink outside) and search cites repo:path:line", async () => {
+  const { mkdtempSync, writeFileSync, symlinkSync, mkdirSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { LocalWorkspaceReaders } = await import("./adapters/workspaces/local-reader.ts");
+  const { RipgrepCodeSearch } = await import("./adapters/codesearch/ripgrep.ts");
+  const outside = mkdtempSync(join(tmpdir(), "sf-secret-"));
+  writeFileSync(join(outside, "id_rsa"), "PRIVATE KEY");
+  const dir = mkdtempSync(join(tmpdir(), "sf-ws-"));
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "a.ts"), "export const needle = 42;\n");
+  symlinkSync(join(outside, "id_rsa"), join(dir, "link"));
+  const ws = { metadata: { name: "w" }, spec: { repositoryRef: { name: "repo" } }, status: { phase: "Ready", path: dir } } as never;
+  const r = new LocalWorkspaceReaders(new RipgrepCodeSearch()).forWorkspaces([ws]);
+
+  assert.match(await r.readFile("src/a.ts"), /needle/);
+  await assert.rejects(r.readFile("../x"), /escapes/);
+  await assert.rejects(r.readFile(".git/config"), /escapes/);
+  await assert.rejects(r.readFile("link"), /escapes the workspace \(via symlink\)/);
+  const hits = await r.searchCode("needle");
+  assert.equal(`${hits[0].repository}:${hits[0].path}:${hits[0].line}`, "repo:src/a.ts:1");
+  assert.ok((await r.listFiles("src/*")).includes("src/a.ts"));
+});

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Workspace } from "../../model/kinds.ts";
@@ -46,7 +46,14 @@ export class LocalWorkspaceReaders implements WorkspaceReaderFactory {
     return {
       async readFile(p: string): Promise<string> {
         const { ws, rel } = locate(p);
-        const text = await readFile(resolve(ws.status!.path!, rel), "utf8");
+        // Lexical checks aren't enough: a committed symlink (e.g. link -> ~/.ssh) must not lead outside the workspace.
+        const root = await realpath(ws.status!.path!);
+        const real = await realpath(resolve(ws.status!.path!, rel));
+        const realRel = relative(root, real);
+        if (realRel.startsWith("..") || isAbsolute(realRel) || realRel.split(/[\\/]/)[0] === ".git") {
+          throw new Error(`path escapes the workspace (via symlink): ${p}`);
+        }
+        const text = await readFile(real, "utf8");
         return text.length > MAX_FILE ? `${text.slice(0, MAX_FILE)}\n…[file truncated]` : text;
       },
       async listFiles(glob?: string): Promise<string[]> {

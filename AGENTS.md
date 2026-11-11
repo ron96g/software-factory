@@ -70,8 +70,8 @@ Required reading:
     `SecretResolver`, are redacted everywhere, and are never put into prompts.
 17. **Providers via tiers (ADR-0014).** Agents declare `model.tier`, never a vendor or model name. Providers are
     `ModelProvider` definitions resolved through `ModelResolver`.
-18. **No free-form execution on the host (ADR-0016, ADR-0019).** Shell, file writes, and code execution only run inside an
-    `ExecutionEnvironment` sandbox. Without a sandbox runtime, such agents fall back to simulation with a visible reason.
+18. **No free-form execution on the host (ADR-0016, ADR-0019, ADR-0022).** Shell, file writes, and code execution only run inside an
+    `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason.
 
 ---
 
@@ -144,8 +144,8 @@ text in Jira comments.
 | S3 | Tool-call loop | `ToolCallingLLM` adapters, agent tool loop (recorded), sandbox-bound tools (`run`, `read_file`, `write_file`, `git_diff`) | Developer agent edits code and runs tests in the fake sandbox | ✅ |
 | S4 | First real adapter | `host` (ADR-0020, explicit opt-in, unsandboxed, per-item Git worktree); container/kubernetes adapters later | Real run on the dev machine | ✅ host · ☐ isolated adapters |
 | S5a | Workspace resource (ADR-0021) | `Workspace` kind + controller, `WorkspacePreparer`/`WorkspaceCleaner` ports, host worktree adapter, setup commands, items wait for Ready, code search + sandboxes use the workspace, provenance `repo@commit` | All agents of an item see the same pinned code state; workspace visible + cleaned up | ✅ |
-| S5b | Read-only code tools for analysis agents | `read_file`/`list_files`/`search_code` on the workspace for triager, architect, reviewer | Reviewer reads surrounding code, not only the diff | ⏳ next |
-| S5c | Real checks + draft PR | `build`/`unit-tests` gate checks in the workspace, push branch + draft PR through the outbox | End-to-end PR from a work item | ☐ |
+| S5b | Read-only code tools for analysis agents | `read_file`/`list_files`/`search_code` on the workspace for triager, architect, reviewer | Reviewer reads surrounding code, not only the diff | ✅ |
+| S5c | Real checks + draft PR | `build`/`unit-tests` gate checks in the workspace, push branch + draft PR through the outbox | End-to-end PR from a work item | ⏳ next |
 | U1 | Navigation | Left navbar with entities (work items, definitions, workspaces); generic resource list/detail views | Every kind browsable from the UI | ✅ |
 
 Known v0.3 limits: workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
