@@ -60,7 +60,11 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
             name,
             namespace: ns,
             ownerReferences: run.metadata.ownerReferences,
-            labels: { "factory.ai-dlc.io/workitem": run.spec.workItemRef.name, "factory.ai-dlc.io/artifact-type": a.type },
+            labels: {
+              "factory.ai-dlc.io/workitem": run.spec.workItemRef.name,
+              "factory.ai-dlc.io/artifact-type": a.type,
+              ...(run.spec.replayOf ? { "factory.ai-dlc.io/replay": run.spec.replayOf.name } : {}),
+            },
           },
           spec: {
             artifactTypeRef: { name: a.type },
@@ -87,6 +91,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         inputs: Object.fromEntries(ctx.inputs.map((a) => [a.metadata.name, a.metadata.resourceVersion ?? ""])),
         clarifications: ctx.clarifications.map((c) => c.metadata.name),
         ...result.provenance,
+        replayOf: run.spec.replayOf,
       };
       const latest = (await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name))!;
       const done = await d.status.updateStatus({

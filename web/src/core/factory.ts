@@ -4,7 +4,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentToolInfo, Clock, GateCheck, GateEvaluator, LLMClientFactory, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { AgentToolInfo, Clock, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -35,10 +35,15 @@ import { ExplainResponder } from "./agents/explain-responder.ts";
 import { GithubConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
+import { JiraConnector } from "./adapters/sources/jira.ts";
+import { DefaultRunReplayer } from "./agents/replayer.ts";
+import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 
 export interface FactoryOptions {
   /** Repo root containing agents/, skills/, workflows/, … */
   definitionsRoot: string;
+  /** Poll interval for replies on synced issues (W3). */
+  commentPollMs?: number;
   /** SQLite file, or ":memory:". */
   databasePath: string;
   env?: Record<string, string | undefined>;
@@ -106,19 +111,29 @@ export async function createFactory(o: FactoryOptions) {
   const gates = new Registry<GateEvaluator>();
   for (const g of [decisionGate, humanApprovalGate, automatedGate(checks, events)]) gates.register(g.type, g);
 
+  // ── sources & outbox (rule 7) ────────────────────────────────────────
+  const connectors = new Registry<SourceConnector>();
+  connectors.register("manual", manualConnector);
+  connectors.register("internal", internalConnector);
+  connectors.register("github", new GithubConnector(secrets, o.fetch));
+  connectors.register("jira", new JiraConnector(secrets, o.fetch));
+  const outbox = new StoreOutbox(store);
+  const outboxHandlers = new Registry<OutboxHandler>();
+  const comment = commentHandler(connectors);
+  outboxHandlers.register(comment.action, comment);
+
   // ── controllers ──────────────────────────────────────────────────────
   const manager = new ControllerManager(store, o.log);
-  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates }));
+  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox }));
+  manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor }));
+  manager.register(
+    createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
+  );
   manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor }));
   manager.register(createClarificationController({ reader: store, status: store, clock }));
   manager.register(createApprovalController({ reader: store, status: store }));
   manager.register(createConversationController({ reader: store, status: store, recorders }));
 
-  // ── sources ──────────────────────────────────────────────────────────
-  const connectors = new Registry<SourceConnector>();
-  connectors.register("manual", manualConnector);
-  connectors.register("internal", internalConnector);
-  connectors.register("github", new GithubConnector(secrets, o.fetch));
   const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events });
 
   const app = new FactoryApp({
@@ -128,6 +143,7 @@ export async function createFactory(o: FactoryOptions) {
     compiler,
     syncer,
     transcripts,
+    replayer: new DefaultRunReplayer(store, store),
     responder: new ExplainResponder({ reader: store, transcripts, recorders, models }),
   });
 

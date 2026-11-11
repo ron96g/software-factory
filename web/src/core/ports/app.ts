@@ -73,3 +73,8 @@ export interface ConversationActions {
 export interface DefinitionQueries {
   listDefinitions(p: Principal, kind: string): Promise<Resource[]>;
 }
+
+export interface ReplayActions {
+  /** Re-runs a past AgentRun with the same spec (ADR-0012). Never changes the work item's state. */
+  rerun(p: Principal, runName: string): Promise<AgentRun>;
+}

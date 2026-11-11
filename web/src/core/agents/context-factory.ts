@@ -10,6 +10,7 @@ import type {
   TranscriptRecorderFactory,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { LABEL_REPLAY } from "./replayer.ts";
 
 export interface ContextFactoryDeps {
   reader: ResourceReader;
@@ -37,14 +38,26 @@ export class DefaultContextFactory implements ExecutionContextFactory {
     const skills = await this.skillsWithRequires(skillRefs, ns);
 
     const owned = { kind: "WorkItem", name: workItem.metadata.name, namespace: ns };
-    const allArtifacts = await reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned });
-    const inputs = run.spec.inputs
+    // Artifacts produced by replays never become inputs of the real workflow (ADR-0012).
+    const allArtifacts = (await reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned })).filter(
+      (a) => !a.metadata.labels?.[LABEL_REPLAY],
+    );
+    let clarifications = (await reader.list<Clarification>("Clarification", { namespace: ns, ownedBy: owned })).filter(
+      (c) => c.spec.answers?.length,
+    );
+    let inputs = run.spec.inputs
       .map((t) => allArtifacts.filter((a) => a.spec.artifactTypeRef.name === t.name).at(-1))
       .filter((a): a is Artifact => !!a);
 
-    const clarifications = (await reader.list<Clarification>("Clarification", { namespace: ns, ownedBy: owned })).filter(
-      (c) => c.spec.answers?.length,
-    );
+    if (run.spec.replayOf) {
+      // Faithful replay: same inputs and human answers as the original run saw.
+      const original = await reader.get<AgentRun>("AgentRun", ns, run.spec.replayOf.name);
+      const prov = original?.status?.provenance;
+      if (prov) {
+        inputs = allArtifacts.filter((a) => a.metadata.name in prov.inputs);
+        clarifications = clarifications.filter((c) => (prov.clarifications ?? []).includes(c.metadata.name));
+      }
+    }
 
     const repositories: Repository[] = [];
     for (const r of workItem.spec.repositoryRefs ?? []) {

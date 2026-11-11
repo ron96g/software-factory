@@ -1,4 +1,4 @@
-import type { Approval, Clarification, WorkItem, WorkItemStatus } from "../../model/kinds.ts";
+import type { Approval, Clarification, Source, WorkItem, WorkItemStatus } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
 import {
@@ -11,12 +11,14 @@ import {
   type GateDecision,
   type GateEvaluatorLookup,
   type InitialKeys,
+  type Outbox,
   type ResourceReader,
   type ResourceWriter,
   type StatusWriter,
   type WorkflowCompiler,
 } from "../../ports/index.ts";
 import { routeToDecision } from "../../model/routes.ts";
+import { resolveRef } from "../../refs/refs.ts";
 
 const TERMINAL = new Set(["Done", "Closed", "Failed"]);
 const DEFAULT_QUESTION = "The agent needs more information to continue. Please add details.";
@@ -29,6 +31,7 @@ export interface WorkItemControllerDeps {
   clock: Clock;
   compiler: WorkflowCompiler;
   gates: GateEvaluatorLookup;
+  outbox: Outbox;
 }
 
 export const runName = (wi: WorkItem, stage: string, step: number, round: number) =>
@@ -75,6 +78,29 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     } catch (e) {
       if (!isStoreError(e, "AlreadyExists")) throw e; // idempotent
     }
+  }
+
+  /** Rule 7: questions reach Jira/GitHub only via the outbox. Idempotent key per clarification. */
+  async function publishQuestions(wi: WorkItem, c: Clarification) {
+    if (!wi.spec.externalRef) return;
+    const source = await resolveRef<Source>(d.reader, "Source", wi.spec.sourceRef, nsOf(wi));
+    if (!source?.spec.sync?.bidirectional) return;
+    const body = [
+      `**Software Factory needs more information** (stage \`${c.spec.stage}\`):`,
+      "",
+      ...c.spec.questions.map((q, i) => `${i + 1}. ${q}`),
+      "",
+      "_Reply to this issue to answer; the work item resumes automatically._",
+    ].join("\n");
+    await d.outbox.enqueue({
+      key: `${c.metadata.name}-questions`,
+      namespace: nsOf(wi),
+      source: source.metadata.name,
+      externalId: wi.spec.externalRef.id,
+      action: "comment",
+      payload: { body },
+      owner: ownerRef(wi),
+    });
   }
 
   async function block(wi: WorkItem, stage: CompiledStage, questions: string[]) {
@@ -156,7 +182,11 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
 
         if (st.phase === "Blocked") {
           const c = await d.reader.get<Clarification>("Clarification", namespace, st.blockedBy?.name ?? "");
-          if (!c?.spec.answers?.length) return;
+          if (c && !c.spec.answers?.length) {
+            await publishQuestions(wi, c);
+            return;
+          }
+          if (!c) return;
           return write(wi, enterStage(wf, stage, st.round! + 1), "Resumed", `${stage.name}: clarification answered, re-running stage`);
         }
 

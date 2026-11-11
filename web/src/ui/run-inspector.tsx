@@ -1,8 +1,8 @@
 "use client";
-import { Accordion, Badge, Box, Button, Code, Divider, Drawer, Group, Paper, ScrollArea, Stack, Text, Textarea, ThemeIcon, Tooltip } from "@mantine/core";
-import { IconMessageQuestion, IconRobot, IconSend, IconTool, IconUser, IconSettings, IconNote } from "@tabler/icons-react";
+import { Accordion, Badge, Box, Button, Code, Divider, Drawer, Group, Paper, ScrollArea, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Tooltip } from "@mantine/core";
+import { IconArrowsDiff, IconMessageQuestion, IconNote, IconRefresh, IconRobot, IconSend, IconSettings, IconTool, IconUser } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
-import type { AgentRun, Conversation } from "@/core/model/kinds.ts";
+import type { AgentRun, Artifact, Conversation } from "@/core/model/kinds.ts";
 import type { TranscriptMessage } from "@/core/ports/transcripts.ts";
 import { act, api, useLive } from "./api.ts";
 import { PhaseBadge } from "./badges.tsx";
@@ -66,10 +66,24 @@ export function TranscriptMessages({ messages, collapseLong = true }: { messages
 }
 
 /** Run inspector: provenance + recorded transcript (replay "inspect" mode) + "Ask this agent" chat. */
-export function RunDrawer({ run, conversations, onClose }: { run: AgentRun | null; conversations: Conversation[]; onClose: () => void }) {
-  const [tab, setTab] = useState<"transcript" | "chat">("transcript");
+export function RunDrawer({
+  run,
+  original,
+  artifacts,
+  conversations,
+  onClose,
+  onOpen,
+}: {
+  run: AgentRun | null;
+  original: AgentRun | null;
+  artifacts: Artifact[];
+  conversations: Conversation[];
+  onClose: () => void;
+  onOpen: (name: string) => void;
+}) {
+  const [tab, setTab] = useState<"transcript" | "chat" | "compare">("transcript");
   const { data: transcript } = useLive<TranscriptMessage[]>(run ? `/api/runs/${run.metadata.name}/transcript` : null, (n) => n.name === run?.metadata.name);
-  useEffect(() => setTab("transcript"), [run?.metadata.name]);
+  useEffect(() => setTab(run?.spec.replayOf ? "compare" : "transcript"), [run?.metadata.name, run?.spec.replayOf]);
   if (!run) return null;
   const p = run.status?.provenance;
   return (
@@ -93,10 +107,24 @@ export function RunDrawer({ run, conversations, onClose }: { run: AgentRun | nul
             </Accordion.Item>
           </Accordion>
         )}
+        {run.spec.replayOf && (
+          <Text size="sm" c="dimmed">
+            Replay of{" "}
+            <Text span ff="monospace" size="sm" c="indigo" style={{ cursor: "pointer" }} onClick={() => onOpen(run.spec.replayOf!.name)}>
+              {run.spec.replayOf.name}
+            </Text>
+            . It used the same inputs and answers, and doesn&apos;t change the work item.
+          </Text>
+        )}
         <Group>
           <Button size="xs" variant={tab === "transcript" ? "filled" : "default"} onClick={() => setTab("transcript")}>
             Transcript
           </Button>
+          {original && (
+            <Button size="xs" leftSection={<IconArrowsDiff size={14} />} variant={tab === "compare" ? "filled" : "default"} onClick={() => setTab("compare")}>
+              Compare
+            </Button>
+          )}
           <Button
             size="xs"
             leftSection={<IconMessageQuestion size={14} />}
@@ -106,9 +134,26 @@ export function RunDrawer({ run, conversations, onClose }: { run: AgentRun | nul
           >
             Ask this agent
           </Button>
+          {!run.spec.replayOf && (run.status?.phase === "Succeeded" || run.status?.phase === "Failed") && (
+            <Tooltip label="Run again with the same inputs and answers (e.g. after changing the agent, skill or model). The work item is not changed.">
+              <Button
+                size="xs"
+                variant="default"
+                leftSection={<IconRefresh size={14} />}
+                onClick={async () => {
+                  const r = await act<AgentRun>(`/api/runs/${run.metadata.name}/rerun`, {}, "Re-run started");
+                  if (r) onOpen(r.metadata.name);
+                }}
+              >
+                Re-run
+              </Button>
+            </Tooltip>
+          )}
         </Group>
         <Divider />
-        {tab === "transcript" ? (
+        {tab === "compare" && original ? (
+          <Compare original={original} replay={run} artifacts={artifacts} />
+        ) : tab === "transcript" ? (
           <TranscriptMessages messages={transcript ?? []} />
         ) : (
           <ExplainChat run={run} existing={conversations.filter((c) => c.spec.agentRunRef.name === run.metadata.name)} />
@@ -172,6 +217,67 @@ function ExplainChat({ run, existing }: { run: AgentRun; existing: Conversation[
           </Button>
         </Group>
       </Box>
+    </Stack>
+  );
+}
+
+function RunSummary({ run, artifacts }: { run: AgentRun; artifacts: Artifact[] }) {
+  const r = run.status?.result;
+  const p = run.status?.provenance;
+  const own = artifacts.filter((a) => a.spec.producedBy?.agentRunRef.name === run.metadata.name);
+  return (
+    <Stack gap="xs">
+      <Group gap={6}>
+        <PhaseBadge phase={run.status?.phase} size="xs" />
+        <Badge size="xs" variant="light">{p?.executor ?? "…"}</Badge>
+        {p?.model && <Badge size="xs" variant="light" color="blue">{p.model.name}</Badge>}
+        {p?.promptHash && <Badge size="xs" variant="outline">#{p.promptHash}</Badge>}
+      </Group>
+      <Text size="sm">{r?.summary ?? "–"}</Text>
+      {r?.outcome && <Text size="sm"><b>Outcome:</b> {r.outcome}</Text>}
+      {r?.questions?.length ? (
+        <Text size="sm"><b>Questions:</b> {r.questions.join(" · ")}</Text>
+      ) : null}
+      {r?.classification && <Code block>{JSON.stringify(r.classification, null, 2)}</Code>}
+      {own.map((a) => (
+        <Paper key={a.metadata.name} p="xs">
+          <Badge size="xs" variant="light" mb={4}>{a.spec.artifactTypeRef.name}</Badge>
+          <ScrollArea.Autosize mah={320}>
+            <MarkdownView>{a.spec.content}</MarkdownView>
+          </ScrollArea.Autosize>
+        </Paper>
+      ))}
+    </Stack>
+  );
+}
+
+/** Side-by-side comparison of an original run and its replay (ADR-0012, re-run mode). */
+function Compare({ original, replay, artifacts }: { original: AgentRun; replay: AgentRun; artifacts: Artifact[] }) {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const o = original.status?.result;
+  const r = replay.status?.result;
+  const diffs = [
+    !same(o?.outcome, r?.outcome) && "outcome",
+    !same(o?.questions, r?.questions) && "questions",
+    !same(o?.classification, r?.classification) && "classification",
+    !same(original.status?.provenance?.promptHash, replay.status?.provenance?.promptHash) && "prompt",
+    !same(original.status?.provenance?.definitions, replay.status?.provenance?.definitions) && "definitions",
+  ].filter(Boolean);
+  return (
+    <Stack>
+      <Text size="sm" c={diffs.length ? "orange" : "teal"}>
+        {replay.status?.phase !== "Succeeded" ? "Replay still running…" : diffs.length ? `Differs in: ${diffs.join(", ")}` : "Same result as the original."}
+      </Text>
+      <SimpleGrid cols={2}>
+        <div>
+          <Text size="xs" c="dimmed" mb={4}>Original · {original.metadata.name}</Text>
+          <RunSummary run={original} artifacts={artifacts} />
+        </div>
+        <div>
+          <Text size="xs" c="dimmed" mb={4}>Replay · {replay.metadata.name}</Text>
+          <RunSummary run={replay} artifacts={artifacts} />
+        </div>
+      </SimpleGrid>
     </Stack>
   );
 }

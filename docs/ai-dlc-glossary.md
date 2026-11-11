@@ -86,6 +86,9 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Replay: inspect** | Step through a recorded transcript exactly as it happened. |
 | **Replay: re-run** | Create a new AgentRun from an old run's provenance and compare the results. The original is never changed. |
 | **Conversation** | A follow-up chat with the agent of a past run ("why did you…?"). Explain mode makes no changes. |
+| **Outbox** | Persisted queue (`OutboxMessage`) for effects in external systems, e.g. posting questions to GitHub or Jira. Delivered with retries, and each message is idempotent. |
+| **Echo suppression** | The factory marks its own comments, so syncing replies back never treats them as human answers. |
+| **Answer at source** | A human reply on the original issue (GitHub or Jira) that answers an open clarification and resumes the item. |
 | **ModelProvider** | A definition mapping model tiers (`reasoning`, `coding`, `fast`) to a vendor's models, with a `secretRef` (ADR-0014). |
 | **Model tier** | A vendor-neutral model class that agents declare instead of a model name. |
 | **secretRef** | A reference to a secret by name. The value is resolved at runtime and never stored (ADR-0015). |

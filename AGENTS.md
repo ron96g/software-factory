@@ -122,9 +122,24 @@ human spec-review → **Ready for construction**. Later stages run on the simula
 | M5 | UI | Next.js + Mantine (clean light/dark theme, ADR-0018): dashboard table, new item, sync, item detail (stages, artifacts, timeline), answer clarification, approve/reject, **run timeline + transcript viewer (incl. delegation tree, provenance) + "Ask this agent" chat**, Markdown with **Mermaid rendering** (ADR-0013), live updates (SSE) | MVP goal demonstrable end to end | ✅ |
 
 ### Increments after the MVP (re-planned when each one starts)
+
+#### v0.2: Write-back (current)
+| # | Item | Scope | Exit criteria | Status |
+|---|---|---|---|---|
+| W1 | Outbox | `Outbox` port impl (writes `OutboxMessage`), outbox controller delivers through `OutboxHandler` registry with exponential backoff; WorkItem controller enqueues the clarification questions when the source is `bidirectional` | Questions of a blocked synced item are delivered exactly once (idempotent name), retried on failure | ✅ |
+| W2 | GitHub write/read | `CommentPublisher` + `CommentReader` on the GitHub connector; echo suppression via a hidden marker | Comment posted; replies read back | ✅ |
+| W3 | Answers from comments | Clarification sync controller polls `CommentReader` for open clarifications on synced items; a human reply becomes the answer (the item resumes) | Replying on the issue unblocks the item | ✅ |
+| W4 | Jira connector | `ItemFetcher` + `CommentPublisher` + `CommentReader` (REST v3, basic auth email+token) | Same tests as GitHub with a fake API | ✅ |
+| W5 | Re-run replay | `RunReplayer`: new AgentRun from a run's spec (labelled replay, never advances the workflow, its artifacts are not used as inputs), UI "Re-run" + side-by-side compare | Re-run result visible next to the original; workflow state unchanged | ✅ |
+
+Known v0.2 simplifications: all replies found at the first poll become one answer (later replies are ignored); replies
+older than the Clarification are ignored (clock skew can drop a very early reply); the factory's marker is visible as
+text in Jira comments.
+
+#### Later increments
 | Version | Increment | Highlights |
 |---|---|---|
-| v0.2 | Write-back | Outbox + `CommentPublisher` (GitHub), Jira connector, answers synced from comments (`CommentReader`), **re-run replay with diff** (`RunReplayer`) |
+| v0.2 | Write-back | ✅ see table above |
 | v0.3 | Construction for real | **`ExecutionEnvironment` sandbox (container per AgentRun, ADR-0016)**, developer agent works on branches/PRs, Git workspace clones, real `automated` gate checks (build/tests), Bolt fan-out per Unit |
 | v0.4 | Auth & squads | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
 | v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011), **LLM tool-call loop + delegation as tool calls** (ADR-0017) |

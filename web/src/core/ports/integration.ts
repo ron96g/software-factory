@@ -3,7 +3,7 @@
  * so a connector only implements what its external system supports.
  */
 import type { ModelProvider, Repository, Source } from "../model/kinds.ts";
-import type { Ref } from "../model/resource.ts";
+import type { OwnerReference, Ref } from "../model/resource.ts";
 
 // ── Generic registry (adapter lookup by `type`) ─────────────────────────
 
@@ -160,7 +160,22 @@ export interface OutboxHandler {
   deliver(source: Source, externalId: string, payload: Record<string, unknown>): Promise<void>;
 }
 
-/** Enqueues outbound messages (persisted, delivered asynchronously with retries). */
-export interface Outbox {
-  enqueue(msg: { source: string; externalId: string; action: string; payload: Record<string, unknown> }): Promise<void>;
+export interface OutboundMessage {
+  /** Deterministic idempotency key (becomes the OutboxMessage name). Enqueueing twice is a no-op. */
+  key: string;
+  namespace: string;
+  source: string;
+  externalId: string;
+  action: string;
+  payload: Record<string, unknown>;
+  /** Owner for cascade delete (usually the WorkItem). */
+  owner?: OwnerReference;
 }
+
+/** Enqueues outbound messages (persisted, delivered asynchronously with retries, ADR-0005). */
+export interface Outbox {
+  enqueue(msg: OutboundMessage): Promise<void>;
+}
+
+/** Marker appended to every comment the factory writes, so inbound sync ignores its own comments. */
+export const FACTORY_COMMENT_MARKER = "<!-- software-factory -->";

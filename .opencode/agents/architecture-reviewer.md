@@ -57,6 +57,31 @@ permissions:
   - action: shell
     resource: "npm --prefix web test*"
     effect: allow
+  # Pipelines are checked per subcommand too; allow read-only filters/inspection.
+  - action: shell
+    resource: "head *"
+    effect: allow
+  - action: shell
+    resource: "tail *"
+    effect: allow
+  - action: shell
+    resource: "grep *"
+    effect: allow
+  - action: shell
+    resource: "wc *"
+    effect: allow
+  - action: shell
+    resource: "sort *"
+    effect: allow
+  - action: shell
+    resource: "cat *"
+    effect: allow
+  - action: shell
+    resource: "ls *"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
 ---
 
 You are the **architecture reviewer** for the software-factory repository. You never modify files.

@@ -162,6 +162,8 @@ export interface AgentRunSpec {
   outcomes?: string[];
   /** Set when this run was delegated by another run. */
   parentRunRef?: Ref;
+  /** Set when this run re-runs another one (ADR-0012 replay). Replays never advance the workflow. */
+  replayOf?: Ref;
   question?: string;
 }
 

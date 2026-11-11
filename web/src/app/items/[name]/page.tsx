@@ -138,7 +138,14 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Grid.Col>
       </Grid>
 
-      <RunDrawer run={run} conversations={d.conversations} onClose={() => setOpenRun(null)} />
+      <RunDrawer
+        run={run}
+        original={run?.spec.replayOf ? (d.runs.find((r) => r.metadata.name === run.spec.replayOf!.name) ?? null) : null}
+        artifacts={d.artifacts}
+        conversations={d.conversations}
+        onClose={() => setOpenRun(null)}
+        onOpen={setOpenRun}
+      />
     </Stack>
   );
 }
@@ -259,6 +266,11 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
           <Accordion.Control>
             <Group gap="xs">
               <Badge variant="light">{a.spec.artifactTypeRef.name}</Badge>
+              {a.metadata.labels?.["factory.ai-dlc.io/replay"] && (
+                <Badge variant="outline" color="grape" size="xs">
+                  replay
+                </Badge>
+              )}
               <Text size="sm">by {a.spec.producedBy?.agentRef.name}</Text>
               <Text size="xs" c="dimmed" ff="monospace">
                 {a.spec.producedBy?.agentRunRef.name}
@@ -276,8 +288,9 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
 
 /** Runs grouped as a tree via parentRunRef (delegation, ADR-0012). */
 function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void }) {
-  const roots = runs.filter((r) => !r.spec.parentRunRef);
-  const children = (n: string) => runs.filter((r) => r.spec.parentRunRef?.name === n);
+  // Tree: delegations (parentRunRef) and replays (replayOf) nest under their origin.
+  const roots = runs.filter((r) => !r.spec.parentRunRef && !r.spec.replayOf);
+  const children = (n: string) => runs.filter((r) => r.spec.parentRunRef?.name === n || r.spec.replayOf?.name === n);
   const Row = ({ r, depth }: { r: AgentRun; depth: number }) => (
     <>
       <Group justify="space-between" className="sf-row" p="xs" pl={8 + depth * 24} onClick={() => onOpen(r.metadata.name)} style={{ borderRadius: 8 }}>
@@ -286,12 +299,17 @@ function Runs({ runs, onOpen }: { runs: AgentRun[]; onOpen: (n: string) => void 
           <Text size="sm" fw={500}>
             {r.spec.agentRef.name}
           </Text>
+          {r.spec.replayOf && (
+            <Badge size="xs" variant="outline" color="grape">
+              replay
+            </Badge>
+          )}
           <Text size="sm" c="dimmed">
             {r.spec.stage} / {r.spec.step}
           </Text>
           <Tooltip label="round: increments each time a stage is (re-)entered">
             <Badge size="xs" variant="light" color="gray">
-              {/-r(\d+)$/.exec(r.metadata.name)?.[0].slice(1) ?? ""}
+              {/-(r\d+)(?:-replay-\d+)?$/.exec(r.metadata.name)?.[1] ?? ""}
             </Badge>
           </Tooltip>
           {r.status?.result?.outcome && (

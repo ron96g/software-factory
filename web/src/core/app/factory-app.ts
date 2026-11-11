@@ -15,6 +15,8 @@ import type {
   ConversationResponder,
   DefinitionQueries,
   HumanActions,
+  ReplayActions,
+  RunReplayer,
   KindLookup,
   NewWorkItemInput,
   Principal,
@@ -40,6 +42,7 @@ export interface FactoryAppDeps {
   syncer: SourceSyncer;
   transcripts: TranscriptReader;
   responder: ConversationResponder;
+  replayer: RunReplayer;
 }
 
 const slug = (s: string) =>
@@ -50,7 +53,15 @@ const slug = (s: string) =>
  * and namespace scoping plug in here in v0.4. MVP: single namespace `default`.
  */
 export class FactoryApp
-  implements WorkItemQueries, WorkItemCommands, HumanActions, SourceActions, TranscriptQueries, ConversationActions, DefinitionQueries
+  implements
+    WorkItemQueries,
+    WorkItemCommands,
+    HumanActions,
+    SourceActions,
+    TranscriptQueries,
+    ConversationActions,
+    DefinitionQueries,
+    ReplayActions
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -166,6 +177,13 @@ export class FactoryApp
     if (!c) throw new Error(`conversation ${name} not found`);
     if (!text.trim()) throw new Error("message is empty");
     return this.d.responder.respond(c, text.trim(), { type: "human", id: p.id });
+  }
+
+  async rerun(_p: Principal, runName: string): Promise<AgentRun> {
+    const run = await this.d.reader.get<AgentRun>("AgentRun", this.ns, runName);
+    if (!run) throw new Error(`run ${runName} not found`);
+    if (run.status?.phase !== "Succeeded" && run.status?.phase !== "Failed") throw new Error("only finished runs can be re-run");
+    return this.d.replayer.rerun(run);
   }
 
   async listDefinitions(_p: Principal, kind: string): Promise<Resource[]> {
