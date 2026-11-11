@@ -31,8 +31,12 @@ export class DefaultContextFactory implements ExecutionContextFactory {
   async create(run: AgentRun): Promise<ExecutionContext> {
     const ns = nsOf(run);
     const { reader } = this.d;
-    const agent = await resolveRef<Agent>(reader, "Agent", run.spec.agentRef, ns);
-    if (!agent) throw new Error(`agent "${run.spec.agentRef.name}" not found`);
+    const found = await resolveRef<Agent>(reader, "Agent", run.spec.agentRef, ns);
+    if (!found) throw new Error(`agent "${run.spec.agentRef.name}" not found`);
+    // A step may only narrow the agent's tools (intersection), never extend them.
+    const agent: Agent = run.spec.tools
+      ? { ...found, spec: { ...found.spec, tools: (found.spec.tools ?? []).filter((t) => run.spec.tools!.includes(t)) } }
+      : found;
     const workItem = await reader.get<WorkItem>("WorkItem", ns, run.spec.workItemRef.name);
     if (!workItem) throw new Error(`work item "${run.spec.workItemRef.name}" not found`);
 

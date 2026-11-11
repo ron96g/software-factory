@@ -269,6 +269,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                 inputs: (step.inputs ?? []).map((i) => i.artifactRef),
                 outputs: (step.outputs ?? []).map((o) => o.artifactRef),
                 modelTier: step.model?.tier,
+                tools: step.tools,
                 outcomes: last && stage.gate?.type === "decision" ? Object.keys(stage.gate.routes ?? {}) : undefined,
               },
             });

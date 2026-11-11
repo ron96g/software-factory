@@ -35,6 +35,8 @@ export interface StepSpec {
   name: string;
   agentRef: Ref;
   skillRefs?: Ref[];
+  /** Narrows the agent's tools for this step (least privilege); `[]` = no tools. Can't add tools the agent lacks. */
+  tools?: string[];
   model?: { tier?: string };
   inputs?: { artifactRef: Ref }[];
   outputs?: { artifactRef: Ref }[];
@@ -178,6 +180,8 @@ export interface AgentRunSpec {
   modelTier?: string;
   /** Allowed decision outcomes when the stage ends in a decision gate. */
   outcomes?: string[];
+  /** Step-level tool narrowing, copied from the workflow step. */
+  tools?: string[];
   /** Set when this run was delegated by another run. */
   parentRunRef?: Ref;
   /** Set when this run re-runs another one (ADR-0012 replay). Replays never advance the workflow. */

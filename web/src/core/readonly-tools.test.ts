@@ -70,3 +70,29 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     await f.stop();
   }
 });
+
+test("S5b: a workflow step narrows the agent's tools (classify runs without tools)", async () => {
+  const { DefaultContextFactory } = await import("./agents/context-factory.ts");
+  const reader = {
+    async get(kind: string, _ns: string, name: string) {
+      if (kind === "Agent") return { kind, metadata: { name, namespace: "factory-system" }, spec: { role: "r", tools: ["search_code", "read_file"] }, body: "" };
+      if (kind === "WorkItem") return { kind, metadata: { name, namespace: "default" }, spec: { title: "t", sourceRef: { name: "manual" } } };
+      return null;
+    },
+    async list() {
+      return [];
+    },
+  };
+  const cf = new DefaultContextFactory({
+    reader: reader as never,
+    providers: [],
+    models: { resolve: async () => undefined },
+    recorders: { forRun: async () => ({ ref: { namespace: "default", id: "x" }, record: async () => {} }), forConversation: async () => ({}) as never },
+    environments: { select: async () => ({}) as never, refresh: async () => {} },
+  });
+  const run = (tools?: string[]) =>
+    ({ kind: "AgentRun", metadata: { name: "r", namespace: "default" }, spec: { workItemRef: { name: "w" }, agentRef: { name: "a" }, skillRefs: [], stage: "s", step: "x", inputs: [], outputs: [], tools } }) as never;
+  assert.deepEqual((await cf.create(run([]))).agent.spec.tools, []);
+  assert.deepEqual((await cf.create(run(["read_file", "write_file"]))).agent.spec.tools, ["read_file"], "cannot extend");
+  assert.deepEqual((await cf.create(run())).agent.spec.tools, ["search_code", "read_file"]);
+});

@@ -27,6 +27,7 @@ spec:
               agentRef: { name: triager }
               skillRefs: [{ name: work-item-classification }]
               model: { tier: fast }
+              tools: []                # fast first pass: no code research (least privilege per step)
               inputs:  [{ artifactRef: { name: signal } }]
 
         - name: triage
