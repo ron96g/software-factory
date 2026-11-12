@@ -1,0 +1,72 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: servicedesk
+  annotations:
+    description: >
+      Service desk requests: classify → investigate (code research + analysis) → respond (draft reply)
+      → response-review [human]. Read-only towards the ticket: humans post the approved reply themselves.
+spec:
+  trigger:
+    sourceRefs:
+      - name: jira-servicedesk
+    output: { artifactRef: { name: signal } }
+
+  phases:
+    - name: inception
+      stages:
+        - name: classify
+          sets: { phase: Classified }
+          steps:
+            - name: auto-classify
+              agentRef: { name: triager }
+              skillRefs: [{ name: work-item-classification }]
+              model: { tier: fast }
+              tools: []
+              inputs:  [{ artifactRef: { name: signal } }]
+
+        - name: investigate
+          sets: { phase: Triaging }
+          steps:
+            - name: research-request
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: codebase-research }, { name: knowledge-base }]
+              inputs:  [{ artifactRef: { name: signal } }]
+              outputs: [{ artifactRef: { name: research-notes } }]
+            - name: analyze-request
+              agentRef: { name: support-engineer }
+              skillRefs: [{ name: service-request-analysis }, { name: human-clarification }, { name: knowledge-base }]
+              inputs:  [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
+              outputs: [{ artifactRef: { name: support-analysis } }]
+          gate:
+            type: decision             # routes on the analysis outcome
+            routes:
+              resolvable:   { next: respond }
+              needs-info:   { block: human-input }   # internal team answers in the UI; resumes investigate
+              needs-change: { next: respond }        # reply + a proposed change to file as a factory-loop item
+              out-of-scope: { next: respond }        # reply says who can help
+
+    - name: operations
+      stages:
+        - name: respond
+          steps:
+            - name: draft-response
+              agentRef: { name: support-engineer }
+              skillRefs: [{ name: customer-response-writing }]
+              inputs:
+                - { artifactRef: { name: signal } }
+                - { artifactRef: { name: support-analysis } }
+              outputs: [{ artifactRef: { name: customer-response } }]
+
+        - name: response-review
+          steps: []
+          gate:
+            type: human-approval
+            approvers: [{ role: service-desk-agent }]
+            criteria: [Correct and grounded in the analysis, No internal details, Ready to post on the ticket]
+            onReject: { next: respond }   # the reject reason reaches the agent as a "Human gate decision"
+
+  humanInput:
+    sets: { phase: Blocked }
+    channels: [ui]                     # the service desk source is read-only: never asked on the ticket
+    resume: { stage: current, appendTo: context }

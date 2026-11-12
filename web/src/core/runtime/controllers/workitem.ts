@@ -1,4 +1,5 @@
-import type { Approval, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
+import type { AgentRun, Approval, Artifact, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
+import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
 import {
@@ -219,21 +220,61 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     }
   }
 
+  /** Restarts are spec-driven and handled once per `spec.restart.id`; a restart may revive Done/Failed/Closed items. */
+  const restartPending = (wi: WorkItem) => !!wi.spec.restart && wi.spec.restart.id !== wi.status?.restartHandled;
+
+  /**
+   * Re-enters `restart.stage` (default: first) with a fresh round. Artifacts from that stage onward are labelled
+   * superseded so agents don't read stale (e.g. simulated) output; history stays visible. Each step is idempotent.
+   */
+  async function restartItem(wi: WorkItem, wf: CompiledWorkflow, restart: NonNullable<WorkItem["spec"]["restart"]>) {
+    const target = restart.stage ? wf.stage(restart.stage) : wf.stages[0];
+    if (!target) {
+      await d.events.warning(wi, "RestartIgnored", `unknown stage "${restart.stage}"`);
+      return write(wi, { restartHandled: restart.id });
+    }
+    const ns = nsOf(wi);
+    const owned = { kind: "WorkItem", name: wi.metadata.name, namespace: ns };
+    const affected = new Set(wf.stages.slice(wf.stages.findIndex((s) => s.name === target.name)).map((s) => s.name));
+    const supersede = { [LABEL_SUPERSEDED]: restart.id };
+    const runs = await d.reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned });
+    const runStage = new Map(runs.map((r) => [r.metadata.name, r.spec.stage]));
+    for (const a of await d.reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned })) {
+      const stage = runStage.get(a.spec.producedBy?.agentRunRef?.name ?? "");
+      if (!stage || !affected.has(stage) || a.metadata.labels?.[LABEL_SUPERSEDED]) continue;
+      await d.writer.update<Artifact>({ ...a, metadata: { ...a.metadata, labels: { ...a.metadata.labels, ...supersede } } });
+    }
+    for (const r of runs) {
+      if (!affected.has(r.spec.stage) || r.metadata.labels?.[LABEL_SUPERSEDED]) continue;
+      await d.writer.update<AgentRun>({ ...r, metadata: { ...r.metadata, labels: { ...r.metadata.labels, ...supersede } } });
+    }
+    await ensureWorkspaces(wi);
+    const round = (wi.status?.round ?? 0) + 1;
+    return write(
+      wi,
+      { ...enterStage(wf, target, round), retries: undefined, loopExhausted: undefined, restartHandled: restart.id },
+      "Restarted",
+      `from ${target.name}${restart.requestedBy ? ` by ${restart.requestedBy}` : ""}`,
+    );
+  }
+
   return {
     name: "workitem",
     primaryKind: "WorkItem",
     watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
-    initialKeys: async () => (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "")).map(keyOf),
+    initialKeys: async () =>
+      (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w)).map(keyOf),
     resyncMs: 60_000,
 
     async reconcile(key) {
       const { namespace, name } = parseKey(key);
       const wi = await d.reader.get<WorkItem>("WorkItem", namespace, name);
-      if (!wi || TERMINAL.has(wi.status?.phase ?? "")) return;
+      if (!wi || (TERMINAL.has(wi.status?.phase ?? "") && !restartPending(wi))) return;
       try {
         if (!wi.spec.workflowRef) return write(wi, { phase: "Failed", message: "no workflowRef" }, "Failed", "no workflowRef");
         const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
+        if (restartPending(wi)) return restartItem(wi, wf, wi.spec.restart!);
 
         if (!wi.status?.phase || wi.status.phase === "New") {
           await ensureWorkspaces(wi);
@@ -309,23 +350,35 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             });
             return;
           }
-          const rs = run.status as { phase?: string; result?: { outcome?: string; questions?: string[]; classification?: WorkItemStatus["classification"] }; message?: string } | undefined;
+          const rs = run.status as
+            | { phase?: string; result?: { outcome?: string; questions?: string[]; classification?: WorkItemStatus["classification"] }; message?: string; modelWaits?: number }
+            | undefined;
           if (rs?.phase === "Failed") {
             await d.events.warning(wi, "AgentRunFailed", `${rn}: ${rs.message ?? ""}`);
             return write(wi, { phase: "Failed", message: `agent run ${rn} failed: ${rs.message ?? ""}` });
           }
-          if (rs?.phase !== "Succeeded") return;
+          if (rs?.phase !== "Succeeded") {
+            // Surface a waiting run on the item (ADR-0029/0031). A retry attempt (Running with modelWaits) keeps the
+            // item Waiting, so the phase doesn't flicker on every retry.
+            const reason = rs?.phase === "Pending" && rs.message ? rs.message : undefined;
+            const retrying = rs?.phase === "Running" && (rs.modelWaits ?? 0) > 0;
+            if (reason && (st.phase !== "Waiting" || st.message !== reason)) {
+              return write(wi, { phase: "Waiting", message: reason }, st.phase === "Waiting" ? undefined : "Waiting", `${stage.name}/${step.name}: ${reason}`);
+            }
+            if (!reason && !retrying && st.phase === "Waiting") return write(wi, { phase: "Running", message: undefined });
+            return;
+          }
           const r = rs.result ?? {};
           const patch: Partial<WorkItemStatus> = {
             classification: r.classification ? { ...st.classification, ...r.classification } : st.classification,
             lastOutcome: r.outcome ?? st.lastOutcome,
           };
           if (r.questions?.length) {
-            await write(wi, patch);
+            await write(wi, { ...patch, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
             const fresh = (await d.reader.get<WorkItem>("WorkItem", namespace, name))!;
             return block(fresh, stage, r.questions);
           }
-          return write(wi, { ...patch, step: stepIdx + 1 });
+          return write(wi, { ...patch, step: stepIdx + 1, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
         }
 
         // Q1: bounded loop back (e.g. AI review requested changes) before the stage's gate.

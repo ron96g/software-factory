@@ -35,6 +35,7 @@ export class ItemExplainResponder implements ConversationResponder {
   async respond(conv: Conversation, humanMessage: string, author: TranscriptAuthor): Promise<TranscriptMessage> {
     if (!conv.status?.transcriptRef) throw new Error("conversation is not ready yet (transcript not opened)");
     const ns = nsOf(conv);
+    if (!conv.spec.workItemRef) throw new Error("explain-item conversations need a work item");
     const name = conv.spec.workItemRef.name;
     const owned = { kind: "WorkItem", name, namespace: ns };
     const [wi, runs, artifacts, clarifications, approvals, events] = await Promise.all([
@@ -75,6 +76,7 @@ export function digest(wi: WorkItem, runs: AgentRun[], artifacts: Artifact[], cl
   const parts: string[] = [
     `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
     clip(wi.spec.description, 2000),
+    wi.spec.context ? `## Additional context from the team\n${clip(wi.spec.context, 4000)}` : "",
     `Status: ${wi.status?.phase} · stage ${wi.status?.stage} · round ${wi.status?.round}`,
     "## Agent runs (chronological)",
     ...runs.map((r) => {

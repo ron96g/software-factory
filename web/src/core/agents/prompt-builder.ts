@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { ExecutionContext, Prompt, PromptBuilder } from "../ports/index.ts";
 
+const proposesKnowledge = (ctx: ExecutionContext) => ctx.skills.some((s) => s.metadata.name === "knowledge-base");
+
 const OUTPUT_CONTRACT = (ctx: ExecutionContext) => {
   const outputs = ctx.run.spec.outputs.map((o) => o.name);
   const outcomes = ctx.run.spec.outcomes;
@@ -11,7 +13,8 @@ Respond with ONE JSON object and nothing else:
   "artifacts": [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}],
   "classification": { "type": "feature|bug|incident|chore|question", "priority": "P0-P3", "labels": [], "confidence": 0.0 } | null,
   "outcome": ${outcomes?.length ? outcomes.map((o) => `"${o}"`).join(" | ") : "null"},
-  "questions": ["…"]   // only if you cannot proceed responsibly without a human answer; otherwise []
+  "questions": ["…"]${proposesKnowledge(ctx) ? `,  // only if you cannot proceed responsibly without a human answer; otherwise []
+  "knowledge": [{ "title": "…", "content": "<markdown>", "tags": ["…"] }]   // optional, see the knowledge-base skill` : "   // only if you cannot proceed responsibly without a human answer; otherwise []"}
 }
 Rules: artifacts must contain exactly the listed types${outputs.length ? "" : " (none for this step)"}.
 All diagrams in artifacts must be Mermaid code blocks. Cite code as repo:path:line. Never invent facts about the code.`;
@@ -27,7 +30,7 @@ When you are done, call the \`finish\` tool exactly once with:
 - summary: what you changed and why
 - artifacts: [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}]${outputs.includes("source-code") ? " (the diff is attached automatically)" : ""}
 - outcome: ${ctx.run.spec.outcomes?.length ? ctx.run.spec.outcomes.join(" | ") : "omit"}
-- questions: only if you cannot proceed responsibly without a human answer.
+- questions: only if you cannot proceed responsibly without a human answer.${proposesKnowledge(ctx) ? "\n- knowledge: optional reusable knowledge to propose (see the knowledge-base skill); humans approve it first." : ""}
 All diagrams must be Mermaid. Never print secrets.`;
 };
 
@@ -44,6 +47,9 @@ export class DefaultPromptBuilder implements PromptBuilder {
     const parts = [
       `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
       wi.spec.description ?? "(no description)",
+      ...(wi.spec.context?.trim()
+        ? [`## Additional context from the team\nProvided by humans working on this item. Use it; don't ask for what it already answers.\n\n${wi.spec.context.trim()}`]
+        : []),
       `Source: ${wi.spec.sourceRef.name}${wi.spec.externalRef ? ` (${wi.spec.externalRef.id})` : ""}`,
       `Stage: ${ctx.run.spec.stage} · step: ${ctx.run.spec.step}`,
     ];

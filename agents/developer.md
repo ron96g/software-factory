@@ -24,3 +24,10 @@ You implement a single Unit of Work from its domain model.
 - Work test-first.
 - Keep changes scoped to the unit you were given.
 - Stop and escalate when the domain model is ambiguous.
+
+## Tooling
+- Build, generate and test the way the repository documents it (its AGENTS.md / Makefile targets).
+- If a tool is missing (e.g. `controller-gen`, `setup-envtest`), install it the way the repository does
+  (usually a Makefile target or `go install` / `npm ci`), then retry. Read the error first: a broken environment
+  variable (e.g. `GOPROXY`) can often be fixed for one command (`GOPROXY=https://proxy.golang.org,direct make …`).
+- Ask a human only for what you cannot do yourself, and include the exact command and error output.

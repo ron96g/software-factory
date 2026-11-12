@@ -122,3 +122,58 @@ test("S3: tools receive only the capabilities they declare (ISP)", async () => {
     assert.throws(() => t.bind!({}), /needs sandbox capability/, `${t.name} refuses without caps`);
   }
 });
+
+test("ADR-0033: a repository's sandbox profile wins over the agent's default (Go repo → go-build)", async () => {
+  const profiles: string[] = [];
+  class Recording extends InMemorySandboxEnvironment {
+    override async prepare(spec: Parameters<InMemorySandboxEnvironment["prepare"]>[0]) {
+      profiles.push(spec.profile.metadata.name);
+      return super.prepare(spec);
+    }
+  }
+  const call = (name: string, args: unknown) => ({ id: "x", type: "function", function: { name, arguments: JSON.stringify(args) } });
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as { tools?: unknown[] };
+    if (body.tools) return Response.json({ choices: [{ message: { content: null, tool_calls: [call("finish", { summary: "done", outcome: "accept" })] } }] });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] });
+  }) as typeof fetch;
+  const backend = {
+    supports: () => true,
+    sweep: async () => [],
+    remove: async () => {},
+    prepare: async () => ({ path: ROOT, baseCommit: "c0ffee", headCommit: "c0ffee", preparedBy: "fake", setupCompleted: true }),
+  };
+  const f = await createFactory({
+    definitionsRoot: ROOT,
+    databasePath: ":memory:",
+    env: { OPENAI_API_KEY: "sk-test-abcdef", FACTORY_SANDBOX_RUNTIME: "in-memory" },
+    fetch: fetchImpl,
+    sandboxes: [new Recording()],
+    workspaceBackend: backend,
+    log: () => {},
+  });
+  await f.start();
+  try {
+    const wi = await f.app.createWorkItem(p, { title: "Go change", description: "Change the Go controller so it handles failover zones.", repositoryRefs: ["controlplane"] });
+    for (let i = 0; i < 600 && !profiles.length; i++) {
+      const d = await f.app.getWorkItem(p, wi.metadata.name);
+      const open = d?.approvals.find((a) => !a.spec.decision && d.workItem.status?.blockedBy?.name === a.metadata.name);
+      if (open) await f.app.decideApproval(p, open.metadata.name, "approve");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(profiles[0], "go-build", "the developer runs with the repository's Go profile, not the agent's node-build");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("ADR-0033: profile env reaches commands; factory secrets don't", async () => {
+  const { runScrubbed } = await import("./adapters/sandbox/process.ts");
+  process.env.FACTORY_TEST_SECRET = "s3cret";
+  try {
+    const r = await runScrubbed('echo "proxy=$GOPROXY secret=[$FACTORY_TEST_SECRET]"', ROOT, 10_000, { GOPROXY: "https://proxy.golang.org,direct" });
+    assert.match(r.stdout, /proxy=https:\/\/proxy\.golang\.org,direct secret=\[\]/);
+  } finally {
+    delete process.env.FACTORY_TEST_SECRET;
+  }
+});

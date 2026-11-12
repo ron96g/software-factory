@@ -1,4 +1,4 @@
-import type { SandboxProfile } from "../model/kinds.ts";
+import type { SandboxProfile, ToolServer } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import {
   ISOLATION_RANK,
@@ -18,9 +18,14 @@ import {
   SANDBOX_CAPABILITIES,
   type ToolLoopMessage,
   type ToolSchema,
+  type KnowledgeSearcher,
+  type ToolProvider,
+  type ToolSession,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
+import { parseKnowledge } from "./executors.ts";
+import { scopedSearcher } from "../knowledge/context.ts";
 
 const FINISH: ToolSchema = {
   name: "finish",
@@ -32,6 +37,11 @@ const FINISH: ToolSchema = {
       artifacts: { type: "array", items: { type: "object", properties: { type: { type: "string" }, content: { type: "string" } }, required: ["type", "content"] } },
       outcome: { type: "string" },
       questions: { type: "array", items: { type: "string" } },
+      knowledge: {
+        type: "array",
+        description: "Optional (knowledge-base skill): reusable knowledge to propose. Humans approve it before anyone uses it.",
+        items: { type: "object", properties: { title: { type: "string" }, content: { type: "string" }, tags: { type: "array", items: { type: "string" } } }, required: ["title", "content"] },
+      },
     },
     required: ["summary"],
   },
@@ -43,6 +53,10 @@ export interface ToolLoopDeps {
   tools: Lookup<AgentTool>;
   environments: ExecutionEnvironmentSelector;
   readers: WorkspaceReaderFactory;
+  /** ADR-0030: backs the `search_knowledge` tool (scoped per run). */
+  knowledge?: KnowledgeSearcher;
+  /** ADR-0034: opens the agent's ToolServers (MCP). */
+  toolProvider?: ToolProvider;
   maxSteps?: number;
 }
 
@@ -57,6 +71,10 @@ export class ToolLoopExecutor implements AgentExecutor {
   private readonly d: ToolLoopDeps;
   constructor(d: ToolLoopDeps) {
     this.d = d;
+  }
+
+  private knowledgeFor(ctx: ExecutionContext): KnowledgeSearcher | undefined {
+    return this.d.knowledge ? scopedSearcher(this.d.knowledge, ctx) : undefined;
   }
 
   private neededCapabilities(ctx: ExecutionContext): Set<keyof ToolCapabilities> {
@@ -92,11 +110,14 @@ export class ToolLoopExecutor implements AgentExecutor {
       await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
       await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
       await ctx.transcript.record({ role: "note", author: sys, content: `read-only workspace access: ${ctx.workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10)}`).join(", ")}` });
-      return this.loop(ctx, prompt, { read: reader, search: reader }, async () => "");
+      return this.loop(ctx, prompt, { read: reader, search: reader, knowledge: this.knowledgeFor(ctx) }, async () => "");
     }
 
-    const profile = await resolveRef<SandboxProfile>(this.d.reader, "SandboxProfile", ctx.agent.spec.sandboxRef!, nsOf(ctx.agent));
-    if (!profile) throw new Error(`sandbox profile "${ctx.agent.spec.sandboxRef!.name}" not found`);
+    // ADR-0033: the repository knows its toolchain (e.g. Go), so its profile wins over the agent's default.
+    const repoRef = ctx.repositories.find((r) => r.spec.sandboxRef && ctx.workspaces.some((w) => w.spec.repositoryRef.name === r.metadata.name))?.spec.sandboxRef;
+    const profileRef = repoRef ?? ctx.agent.spec.sandboxRef!;
+    const profile = await resolveRef<SandboxProfile>(this.d.reader, "SandboxProfile", profileRef, nsOf(ctx.agent));
+    if (!profile) throw new Error(`sandbox profile "${profileRef.name}" not found`);
     const { environment, health } = await this.d.environments.select();
     const required = profile.spec.isolation ?? "container";
     const insufficient = ISOLATION_RANK[health.isolation] < ISOLATION_RANK[required];
@@ -116,9 +137,9 @@ export class ToolLoopExecutor implements AgentExecutor {
       });
     }
     const sandbox: Sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
-    await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name})` });
+    await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name}${repoRef ? " from the repository" : " from the agent"})` });
     try {
-      return await this.loop(ctx, prompt, { read: sandbox, write: sandbox, exec: sandbox, artifacts: sandbox, search: reader }, () => sandbox.diff());
+      return await this.loop(ctx, prompt, { read: sandbox, write: sandbox, exec: sandbox, artifacts: sandbox, search: reader, knowledge: this.knowledgeFor(ctx) }, () => sandbox.diff());
     } catch (e) {
       await ctx.transcript.record({ role: "note", author: sys, content: `tool loop failed: ${e instanceof Error ? e.message : String(e)}` });
       throw e;
@@ -160,46 +181,85 @@ export class ToolLoopExecutor implements AgentExecutor {
       if (unavailable.length) {
         await ctx.transcript.record({ role: "note", author: sys, content: `tools not available in this run (missing capability): ${unavailable.join(", ")}` });
       }
-      const schemas = [...[...bound.values()].map((b) => b.schema), FINISH];
-      const messages: ToolLoopMessage[] = [
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user },
-      ];
-      const maxSteps = this.d.maxSteps ?? 30;
+      // ADR-0034: tools from the agent's MCP servers, offered next to the built-in ones for this run only.
+      const session = await this.openToolServers(ctx);
+      try {
+        const shadowed: string[] = [];
+        for (const t of session?.tools ?? []) {
+          if (bound.has(t.schema.name)) shadowed.push(t.schema.name);
+          else bound.set(t.schema.name, t);
+        }
+        if (shadowed.length) await ctx.transcript.record({ role: "note", author: sys, content: `MCP tools hidden by built-in tools of the same name: ${shadowed.join(", ")}` });
+        const schemas = [...[...bound.values()].map((b) => b.schema), FINISH];
+        const messages: ToolLoopMessage[] = [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user },
+        ];
+        const maxSteps = this.d.maxSteps ?? 30;
 
-      for (let step = 1; step <= maxSteps; step++) {
-        const started = Date.now();
-        const reply = await model.client.completeWithTools({ messages, tools: schemas, tier: model.tier });
-        await ctx.transcript.record({
-          role: "assistant",
-          author: agentAuthor,
-          content: reply.text ?? (reply.toolCalls.length ? "" : "(empty)"),
-          meta: { step, latencyMs: Date.now() - started, model: model.model, toolCalls: reply.toolCalls.map((c) => c.name) },
-        });
-        if (!reply.toolCalls.length) {
-          messages.push({ role: "assistant", content: reply.text ?? "" });
-          messages.push({ role: "user", content: "Continue using the tools, or call `finish` when you are done." });
-          continue;
-        }
-        messages.push({ role: "assistant", content: reply.text, toolCalls: reply.toolCalls });
-        for (const call of reply.toolCalls) {
-          await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
-          if (call.name === "finish") {
-            return await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step });
+        for (let step = 1; step <= maxSteps; step++) {
+          const started = Date.now();
+          const reply = await model.client.completeWithTools({ messages, tools: schemas, tier: model.tier });
+          await ctx.transcript.record({
+            role: "assistant",
+            author: agentAuthor,
+            content: reply.text ?? (reply.toolCalls.length ? "" : "(empty)"),
+            meta: { step, latencyMs: Date.now() - started, model: model.model, toolCalls: reply.toolCalls.map((c) => c.name) },
+          });
+          if (!reply.toolCalls.length) {
+            messages.push({ role: "assistant", content: reply.text ?? "" });
+            messages.push({ role: "user", content: "Continue using the tools, or call `finish` when you are done." });
+            continue;
           }
-          let result: string;
-          const tool = bound.get(call.name);
-          try {
-            result = tool ? await tool.invoke(call.arguments) : `error: unknown tool "${call.name}"`;
-          } catch (e) {
-            result = `error: ${e instanceof Error ? e.message : String(e)}`;
+          messages.push({ role: "assistant", content: reply.text, toolCalls: reply.toolCalls });
+          for (const call of reply.toolCalls) {
+            await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
+            if (call.name === "finish") {
+              return await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step });
+            }
+            let result: string;
+            const tool = bound.get(call.name);
+            try {
+              result = tool ? await tool.invoke(call.arguments) : `error: unknown tool "${call.name}"`;
+            } catch (e) {
+              result = `error: ${e instanceof Error ? e.message : String(e)}`;
+            }
+            await ctx.transcript.record({ role: "tool-result", author: sys, content: result, meta: { tool: call.name, step } });
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
           }
-          await ctx.transcript.record({ role: "tool-result", author: sys, content: result, meta: { tool: call.name, step } });
-          messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
         }
+        throw new Error(`tool loop did not finish within ${maxSteps} steps`);
+      } finally {
+        await session?.close();
       }
-      throw new Error(`tool loop did not finish within ${maxSteps} steps`);
     }
+  }
+
+  private async openToolServers(ctx: ExecutionContext): Promise<ToolSession | undefined> {
+    const refs = ctx.agent.spec.toolServerRefs ?? [];
+    if (!refs.length || !this.d.toolProvider) return undefined;
+    const sys = { type: "system" as const, id: "tool-servers" };
+    const servers: ToolServer[] = [];
+    for (const ref of refs) {
+      const s = await resolveRef<ToolServer>(this.d.reader, "ToolServer", ref, nsOf(ctx.agent));
+      if (s) servers.push(s);
+      else await ctx.transcript.record({ role: "note", author: sys, content: `tool server "${ref.name}" not found` });
+    }
+    const allowStdio = (await this.d.environments.select()).health.runtime === "host";
+    const session = await this.d.toolProvider.open(servers, { allowStdio, runName: ctx.run.metadata.name });
+    try {
+      await ctx.transcript.record({
+      role: "note",
+      author: sys,
+      content:
+        `MCP tools: ${session.tools.map((t) => t.schema.name).join(", ") || "none"}` +
+        (session.unavailable.length ? `; unavailable: ${session.unavailable.map((u) => `${u.server} (${u.reason})`).join("; ")}` : ""),
+      });
+    } catch (e) {
+      await session.close(); // never leak connections (or stdio processes) when recording fails
+      throw e;
+    }
+    return session;
   }
 
   private async finish(
@@ -223,6 +283,7 @@ export class ToolLoopExecutor implements AgentExecutor {
       artifacts,
       outcome: typeof args.outcome === "string" ? args.outcome : undefined,
       questions: Array.isArray(args.questions) ? args.questions.filter((q): q is string => typeof q === "string" && !!q.trim()) : [],
+      knowledge: parseKnowledge(args.knowledge),
       provenance: {
         model: { provider: meta.model.provider, name: meta.model.model, tier: meta.model.tier, params: { steps: meta.steps } },
         promptHash: meta.promptHash,

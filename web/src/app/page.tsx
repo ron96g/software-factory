@@ -5,7 +5,10 @@ import {
   Group,
   Menu,
   Modal,
+  MultiSelect,
   SegmentedControl,
+  Select,
+  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -20,6 +23,7 @@ import { IconCloudDownload, IconPlus, IconAlertTriangle } from "@tabler/icons-re
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import type { Source, WorkItem } from "@/core/model/kinds.ts";
+import type { NewItemOptions } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 
@@ -36,7 +40,7 @@ export default function Dashboard() {
     const all = items ?? [];
     const phase = (w: WorkItem) => w.status?.phase ?? "New";
     if (filter === "attention") return all.filter((w) => ["Blocked", "AwaitingApproval"].includes(phase(w)));
-    if (filter === "active") return all.filter((w) => ["New", "Running"].includes(phase(w)));
+    if (filter === "active") return all.filter((w) => ["New", "Running", "Waiting"].includes(phase(w)));
     if (filter === "done") return all.filter((w) => ["Done", "Closed", "Failed"].includes(phase(w)));
     return all;
   }, [items, filter]);
@@ -138,7 +142,7 @@ export default function Dashboard() {
                 <Table.Td>
                   <Text size="sm">{w.status?.stage ?? "–"}</Text>
                   <Text size="xs" c="dimmed">
-                    {w.status?.lifecyclePhase}
+                    {[w.spec.workflowRef?.name, w.status?.lifecyclePhase].filter(Boolean).join(" · ")}
                   </Text>
                 </Table.Td>
                 <Table.Td>
@@ -179,7 +183,15 @@ export default function Dashboard() {
 function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose: () => void; onCreated: (name: string) => void }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [context, setContext] = useState("");
   const [busy, setBusy] = useState(false);
+  const { data: options } = useLive<NewItemOptions>(opened ? "/api/new-item-options" : null, () => false);
+  // null = untouched: follow the manual source's defaults until the user picks something.
+  const [workflowPick, setWorkflow] = useState<string | null>(null);
+  const [reposPick, setRepos] = useState<string[] | null>(null);
+  const workflow = workflowPick ?? options?.defaults.workflow ?? null;
+  const repos = reposPick ?? options?.defaults.repositories ?? [];
+  const chosenWorkflow = options?.workflows.find((w) => w.name === workflow);
   return (
     <Modal opened={opened} onClose={onClose} title="New work item" size="lg">
       <Stack>
@@ -192,20 +204,60 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
           value={description}
           onChange={(e) => setDescription(e.currentTarget.value)}
         />
+        <Textarea
+          label="Additional context"
+          description="Optional. What agents should know up front (environment, setup, what was already tried), so they don't have to ask."
+          autosize
+          minRows={2}
+          value={context}
+          onChange={(e) => setContext(e.currentTarget.value)}
+        />
+        {/* Descriptions below the inputs keep labels and inputs aligned in one row, however long the text. */}
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md" verticalSpacing="md">
+          <Select
+            label="Workflow"
+            description={chosenWorkflow?.description ?? "How agents and humans work on the item"}
+            inputWrapperOrder={["label", "input", "description", "error"]}
+            data={(options?.workflows ?? []).map((w) => ({ value: w.name, label: w.name }))}
+            value={workflow}
+            onChange={(v) => v && setWorkflow(v)}
+            allowDeselect={false}
+            disabled={!options}
+            styles={{ description: { marginTop: 6 } }}
+          />
+          <MultiSelect
+            label="Repositories"
+            description="Code the agents research and work on"
+            inputWrapperOrder={["label", "input", "description", "error"]}
+            data={(options?.repositories ?? []).map((r) => ({ value: r.name, label: r.name }))}
+            value={repos}
+            onChange={setRepos}
+            error={options && repos.length === 0 ? "Pick at least one repository" : undefined}
+            disabled={!options}
+            styles={{ description: { marginTop: 6 } }}
+          />
+        </SimpleGrid>
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
             Cancel
           </Button>
           <Button
             loading={busy}
-            disabled={!title.trim()}
+            disabled={!title.trim() || !options || !workflow || repos.length === 0}
             onClick={async () => {
               setBusy(true);
-              const wi = await act<WorkItem>("/api/workitems", { title, description }, "Work item created");
+              const wi = await act<WorkItem>(
+                "/api/workitems",
+                { title, description, context, workflowRef: workflow, repositoryRefs: repos },
+                "Work item created",
+              );
               setBusy(false);
               if (wi) {
                 setTitle("");
                 setDescription("");
+                setContext("");
+                setWorkflow(null);
+                setRepos(null);
                 onClose();
                 onCreated(wi.metadata.name);
               }

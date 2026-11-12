@@ -1,0 +1,13 @@
+# ADR-0034: MCP servers agents may use (`toolServerRefs` on an Agent). Only `allowedTools` are offered.
+# transport http: Streamable HTTP `url` (+ optional secretRef → Authorization: Bearer).
+# transport stdio: `command`/`args`, a local process, only with FACTORY_SANDBOX_RUNTIME=host.
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ToolServer
+metadata:
+  name: factory
+spec:
+  description: The factory's own MCP server (knowledge base, work items). Needs FACTORY_MCP_TOKEN.
+  transport: http
+  url: http://localhost:3000/api/mcp
+  secretRef: { name: factory-mcp-token }
+  allowedTools: [search_knowledge]

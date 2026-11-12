@@ -85,6 +85,9 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Provenance** | What a run used (model, definition versions, inputs, answers). It makes runs explainable and re-runnable. |
 | **Replay: inspect** | Step through a recorded transcript exactly as it happened. |
 | **Replay: re-run** | Create a new AgentRun from an old run's provenance and compare the results. The original is never changed. |
+| **Restart** | Re-run a work item's workflow from the first or a chosen stage in a new round (ADR-0029). Unlike a replay, it advances the workflow. |
+| **Superseded** | Label on runs and artifacts that a restart replaced. Kept as history, but never agent input or gate evidence again. |
+| **Simulation policy** | `FACTORY_SIMULATION`: `allow` falls back to simulated placeholder output; `wait` keeps runs Pending until an LLM or sandbox can take them. |
 | **Conversation** | A read-only follow-up chat. `purpose: explain` asks the agent of one run ("why did you…?"); `purpose: explain-item` asks about the whole work item across all agents (ADR-0026). |
 | **Outbox** | Persisted queue (`OutboxMessage`) for effects in external systems, e.g. posting questions to GitHub or Jira. Delivered with retries, and each message is idempotent. |
 | **Echo suppression** | The factory marks its own comments, so syncing replies back never treats them as human answers. |
@@ -150,6 +153,15 @@ flowchart LR
 | **Verification report** | A trace from each acceptance criterion to a test and its result. |
 | **Release** | A version, changelog, rollout plan, and rollback plan. |
 | **Feedback** | A signal emitted by monitor. It closes the loop. |
+| **Service desk workflow** | `servicedesk`: a second workflow for service requests (e.g. Jira Service Management). classify → investigate (code research + `support-analysis`, decision: resolvable / needs-info / needs-change / out-of-scope) → respond (`customer-response`) → response-review (**human**, reject → respond). Humans post the approved reply; the source stays read-only. |
+| **Support analysis** | Internal analysis of a service request by the support-engineer: facts, findings with `repo:path:line`, hypothesis, outcome, and a proposed change for `needs-change`. |
+| **Additional context** | Free text on a work item (`spec.context`) from the team: environment, setup, what was tried. Every agent sees it; sync never overwrites it (ADR-0032). |
+| **MCP server (factory)** | `/api/mcp`: lets a local agent harness work with the factory (items, context, answers, knowledge). Gates stay in the UI (ADR-0034). |
+| **Tool server** | An MCP server agents may use (`ToolServer`, `toolServerRefs`); only its `allowedTools` are offered, as `<server>__<tool>`. |
+| **Knowledge entry** | Reusable knowledge (`KnowledgeEntry`) that an agent proposed while working: where something lives in the code, how a recurring request is resolved, a pitfall. `Proposed → Approved / Rejected → Retired`; only approved entries reach agents (ADR-0030). |
+| **Knowledge source** | External docs (`KnowledgeSource`) agents can search, e.g. product docs or runbooks. Maintained by humans. |
+| **Refine with the agent** | A conversation (purpose `refine-knowledge`) in which a human and the proposing agent improve an entry. The agent suggests drafts; the human applies them and decides on approval. |
+| **Customer response** | The reply to the requester, free of internal details, ready to post after human approval. |
 
 ## Mapping: AI-DLC concept → factory resource
 

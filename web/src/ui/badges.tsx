@@ -5,6 +5,7 @@ import type { RunPhase, WorkItemPhase } from "@/core/model/kinds.ts";
 const PHASE_COLORS: Record<string, MantineColor> = {
   New: "gray",
   Running: "blue",
+  Waiting: "violet",
   Blocked: "orange",
   AwaitingApproval: "yellow",
   Done: "teal",
@@ -14,6 +15,10 @@ const PHASE_COLORS: Record<string, MantineColor> = {
   Preparing: "blue",
   Ready: "teal",
   Succeeded: "teal",
+  Proposed: "yellow",
+  Approved: "teal",
+  Rejected: "red",
+  Retired: "gray",
 };
 
 const LABELS: Record<string, string> = { AwaitingApproval: "Awaiting approval" };

@@ -181,12 +181,15 @@ export function ChatPanel({
   placeholder,
   intro,
   suggestions = [],
+  footer,
 }: {
   existing: Conversation[];
   start: () => Promise<Conversation | undefined>;
   placeholder: string;
   intro: string;
   suggestions?: string[];
+  /** Extra actions derived from the conversation, e.g. "Apply this draft" (ADR-0030). */
+  footer?: (messages: TranscriptMessage[]) => React.ReactNode;
 }) {
   const [conv, setConv] = useState<string | null>(existing.at(-1)?.metadata.name ?? null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -241,6 +244,7 @@ export function ChatPanel({
           </Group>
         )}
       </ScrollArea.Autosize>
+      {footer?.(messages)}
       <Box>
         <Textarea
           placeholder={placeholder}

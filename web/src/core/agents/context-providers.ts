@@ -37,6 +37,7 @@ export function codeSearchProvider(workspaces: WorkspaceProvider, search: CodeSe
       const text = [
         ctx.workItem.spec.title,
         ctx.workItem.spec.description ?? "",
+        ctx.workItem.spec.context ?? "",
         ...ctx.clarifications.flatMap((c) => c.spec.answers ?? []),
       ].join("\n");
       const terms = extractTerms(text);

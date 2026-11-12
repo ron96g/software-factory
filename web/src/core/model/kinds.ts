@@ -14,9 +14,27 @@ export interface AgentSpec {
   skillRefs?: Ref[];
   delegates?: { agentRef: Ref }[];
   tools?: string[];
+  /** ADR-0034: MCP servers whose (allowed) tools this agent may call in the tool loop. */
+  toolServerRefs?: Ref[];
   humanCounterpart?: { role: string };
 }
 export type Agent = DocumentResource<AgentSpec>;
+
+/** ADR-0034 (ADR-0011): an MCP server agents can use. */
+export interface ToolServerSpec {
+  transport: "http" | "stdio";
+  /** `http`: Streamable HTTP endpoint. */
+  url?: string;
+  /** `stdio`: local process (host runtime opt-in only, ADR-0020). */
+  command?: string;
+  args?: string[];
+  /** Sent as `Authorization: Bearer <secret>` (http) or as env `MCP_TOKEN` (stdio). Never stored (ADR-0015). */
+  secretRef?: Ref;
+  /** Only these tools are offered to agents. Empty or missing = none (explicit opt-in per tool). */
+  allowedTools?: string[];
+  description?: string;
+}
+export type ToolServer = Resource<ToolServerSpec>;
 
 export interface SkillSpec {
   description: string;
@@ -129,6 +147,11 @@ export interface SandboxProfileSpec {
   network?: { mode: "none" | "allowlist"; allow?: string[] };
   filesystem?: { workspace?: string; rootReadOnly?: boolean; tmpfs?: string[] };
   user?: string;
+  /**
+   * Plain environment variables for every command in the sandbox, e.g. `GOPROXY` (ADR-0033). Definitions are in Git:
+   * never put secrets here (rule 16); commands otherwise only get PATH, HOME, LANG, TERM, USER.
+   */
+  env?: Record<string, string>;
   /** Minimum isolation; runtimes below it are never used. */
   isolation?: "process" | "container" | "microvm";
 }
@@ -139,6 +162,8 @@ export type SandboxProfile = Resource<SandboxProfileSpec>;
 export type WorkItemPhase =
   | "New"
   | "Running"
+  /** The current agent run can't proceed yet (model quota / rate limit, or no LLM/sandbox with FACTORY_SIMULATION=wait). */
+  | "Waiting"
   | "Blocked"
   | "AwaitingApproval"
   | "Done"
@@ -155,11 +180,21 @@ export interface Classification {
 export interface WorkItemSpec {
   title: string;
   description?: string;
+  /**
+   * Extra context from the team (Markdown), e.g. environment, customer setup, what was already tried. Written by
+   * humans only; sync never touches it. Every agent sees it (ADR-0032).
+   */
+  context?: string;
   sourceRef: Ref;
   externalRef?: { id: string; url?: string };
   workflowRef?: Ref;
   repositoryRefs?: Ref[];
+  /** Human request to re-run the workflow from `stage` (default: first stage). A new `id` triggers it once. */
+  restart?: { id: string; stage?: string; requestedBy?: string };
 }
+
+/** On artifacts that a restart replaced: kept for history, never used as agent input again. */
+export const LABEL_SUPERSEDED = "factory.ai-dlc.io/superseded";
 
 export interface WorkItemStatus {
   phase: WorkItemPhase;
@@ -176,6 +211,8 @@ export interface WorkItemStatus {
   retries?: Record<string, number>;
   /** `<stage>@r<round>` once a stage loop's budget is used up (LoopExhausted is recorded exactly once). */
   loopExhausted?: string;
+  /** `spec.restart.id` of the last restart that was carried out. */
+  restartHandled?: string;
   message?: string;
   conditions?: Condition[];
 }
@@ -214,6 +251,10 @@ export interface AgentRunStatus {
   /** ADR-0012: append-only transcript of this run. */
   transcriptRef?: { namespace: string; id: string };
   provenance?: RunProvenance;
+  /** Model temporarily unavailable (quota, rate limit): the run waits until then instead of failing. */
+  retryAt?: string;
+  /** Consecutive waits for the model (drives the backoff). */
+  modelWaits?: number;
 }
 export type AgentRun = Resource<AgentRunSpec, AgentRunStatus>;
 
@@ -235,13 +276,53 @@ export interface RunProvenance {
   workspaces?: Record<string, string>;
 }
 
+/** ADR-0030: where a knowledge entry or source applies. Empty = everywhere. */
+export interface KnowledgeScope {
+  repositoryRefs?: Ref[];
+  workflowRefs?: Ref[];
+}
+
+export interface KnowledgeEntrySpec {
+  title: string;
+  /** Markdown. */
+  content: string;
+  tags?: string[];
+  /** Plain names, not refs (like provenance): an entry must stay editable even if a definition is renamed later. */
+  scope?: { repositories?: string[]; workflows?: string[] };
+  /** Plain names, not refs: entries outlive the runs and items they came from. */
+  provenance?: { agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string };
+  /** Human decision (rule 8). Only approved entries are shown to agents. */
+  review?: { decision: "approve" | "reject"; by?: string; at?: string; comment?: string };
+  retired?: boolean;
+}
+export type KnowledgePhase = "Proposed" | "Approved" | "Rejected" | "Retired";
+export interface KnowledgeEntryStatus {
+  phase: KnowledgePhase;
+  approvedAt?: string;
+}
+export type KnowledgeEntry = Resource<KnowledgeEntrySpec, KnowledgeEntryStatus>;
+
+/** ADR-0030: external docs (runbooks, product docs). `type` selects the registered search (`files` = ripgrep). */
+export interface KnowledgeSourceSpec {
+  type: string;
+  description?: string;
+  local?: { path: string };
+  include?: string[];
+  exclude?: string[];
+  scope?: KnowledgeScope;
+}
+export type KnowledgeSource = Resource<KnowledgeSourceSpec>;
+
 export interface ConversationSpec {
-  workItemRef: Ref;
+  /** Set for conversations about a work item (`explain`, `explain-item`). */
+  workItemRef?: Ref;
   /** Set for `explain` (one run); absent for `explain-item` (the whole work item, X4). */
   agentRunRef?: Ref;
   agentRef?: Ref;
+  /** Set for `refine-knowledge` (ADR-0030). */
+  knowledgeRef?: Ref;
   /** Selects the registered ConversationResponder. */
-  purpose: "explain" | "explain-item";
+  purpose: "explain" | "explain-item" | "refine-knowledge";
   startedBy?: string;
 }
 export interface ConversationStatus {

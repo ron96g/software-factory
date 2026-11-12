@@ -1,0 +1,14 @@
+# ADR-0030: external docs agents can search (search_knowledge tool, knowledge context). `type: files` = ripgrep over a
+# local folder; other types (e.g. a vector store) are registered implementations later.
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: KnowledgeSource
+metadata:
+  name: controlplane-docs
+spec:
+  type: files
+  description: Controlplane (TARDIS) product documentation (docs site sources)
+  local:
+    path: ~/git/personal/software-factory-repos/controlplane/docs/docs
+  include: ["**/*.md", "**/*.mdx"]
+  scope:
+    repositoryRefs: [{ name: controlplane }]

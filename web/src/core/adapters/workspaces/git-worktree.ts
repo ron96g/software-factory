@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
 import type { PreparedWorkspace, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper } from "../../ports/index.ts";
 import { runScrubbed } from "../sandbox/process.ts";
+import { resolveLocalPath } from "../fs/paths.ts";
 
 const execFileP = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await execFileP("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
@@ -29,7 +30,7 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
   private source(repo: Repository): string {
     const p = repo.spec.local?.path;
     if (!p) throw new Error(`repository ${repo.metadata.name} has no spec.local.path (git clone arrives with isolated runtimes)`);
-    return isAbsolute(p) ? p : resolve(this.root, p);
+    return resolveLocalPath(this.root, p);
   }
 
   private pathOf(ws: Workspace): string {

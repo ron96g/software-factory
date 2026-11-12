@@ -2,6 +2,7 @@
  * Integration ports (Ports & Adapters). Each capability is its own interface (ISP),
  * so a connector only implements what its external system supports.
  */
+import type { KnowledgeSearcher } from "./knowledge.ts";
 import type { ModelProvider, Repository, Source, Workspace } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
 import type { FileReader, FileWriter, SandboxArtifacts, SandboxExec } from "./sandbox.ts";
@@ -105,6 +106,22 @@ export interface CompletionRequest {
   json?: boolean;
 }
 
+/**
+ * The model is temporarily unavailable: quota exhausted, rate limited, or overloaded (HTTP 429/503/529).
+ * Not a failure of the run: callers wait and retry (`retryAfterMs` when the provider says how long).
+ */
+export class ModelUnavailableError extends Error {
+  readonly status: number;
+  readonly retryAfterMs?: number;
+  constructor(message: string, status: number, retryAfterMs?: number) {
+    super(message);
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export const isModelUnavailable = (e: unknown): e is ModelUnavailableError => e instanceof ModelUnavailableError;
+
 export interface LLMClient {
   complete(req: CompletionRequest): Promise<string>;
 }
@@ -180,6 +197,8 @@ export interface CodeSearcher {
 export interface ToolCapabilities {
   read?: FileReader;
   search?: CodeSearcher;
+  /** ADR-0030: approved knowledge + docs, already scoped to the run's repositories/workflow. Read-only. */
+  knowledge?: KnowledgeSearcher;
   write?: FileWriter;
   exec?: SandboxExec;
   artifacts?: SandboxArtifacts;

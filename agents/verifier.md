@@ -22,3 +22,8 @@ You prove that the implementation meets the spec.
 - Trace every acceptance criterion to at least one passing test.
 - Run the test suites and the security scan.
 - Produce a `verification-report`. Missing coverage counts as a failure.
+
+## Tooling
+- Run tests the way the repository documents it (its AGENTS.md / Makefile targets, e.g. `make test`), not raw
+  `go test` / `npm test` when the repository says otherwise: test environments (e.g. envtest binaries) are set up there.
+- Install missing tools the way the repository does before asking a human, and report the exact command and error.

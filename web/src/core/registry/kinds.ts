@@ -9,6 +9,8 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "Repository", plural: "repositories", scope: "definition" },
   { kind: "ModelProvider", plural: "modelproviders", scope: "definition" },
   { kind: "SandboxProfile", plural: "sandboxprofiles", scope: "definition" },
+  { kind: "KnowledgeSource", plural: "knowledgesources", scope: "definition" },
+  { kind: "ToolServer", plural: "toolservers", scope: "definition" },
   { kind: "WorkItem", plural: "workitems", scope: "runtime" },
   { kind: "AgentRun", plural: "agentruns", scope: "runtime" },
   { kind: "Artifact", plural: "artifacts", scope: "runtime" },
@@ -18,4 +20,5 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "Conversation", plural: "conversations", scope: "runtime" },
   { kind: "Event", plural: "events", scope: "runtime" },
   { kind: "OutboxMessage", plural: "outboxmessages", scope: "runtime" },
+  { kind: "KnowledgeEntry", plural: "knowledgeentries", scope: "runtime" },
 ];

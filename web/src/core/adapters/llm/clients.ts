@@ -1,11 +1,26 @@
 import type { ModelProvider } from "../../model/kinds.ts";
-import type { CompletionRequest, LLMClient, LLMClientFactory, ToolCall, ToolCallingLLM, ToolLoopMessage, ToolSchema } from "../../ports/index.ts";
+import { ModelUnavailableError, type CompletionRequest, type LLMClient, type LLMClientFactory, type ToolCall, type ToolCallingLLM, type ToolLoopMessage, type ToolSchema } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
+
+/** Quota / rate limit (429), unavailable (503), Anthropic "overloaded" (529): wait and retry, don't fail. */
+const TRANSIENT = new Set([429, 503, 529]);
+
+/** `Retry-After`: seconds or an HTTP date. */
+export function retryAfterMs(header: string | null, now = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
 
 async function postJson(f: Fetch, url: string, headers: Record<string, string>, body: unknown): Promise<Record<string, unknown>> {
   const res = await f(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   const text = await res.text();
+  if (TRANSIENT.has(res.status)) {
+    throw new ModelUnavailableError(`LLM HTTP ${res.status}: ${text.trim().slice(0, 300)}`, res.status, retryAfterMs(res.headers.get("retry-after")));
+  }
   if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 500)}`);
   return JSON.parse(text) as Record<string, unknown>;
 }

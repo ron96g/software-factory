@@ -35,12 +35,12 @@ spec:
           steps:
             - name: research-impact
               agentRef: { name: code-researcher }
-              skillRefs: [{ name: codebase-research }]
+              skillRefs: [{ name: codebase-research }, { name: knowledge-base }]
               inputs:  [{ artifactRef: { name: signal } }]
               outputs: [{ artifactRef: { name: research-notes } }]
             - name: triage-signal
               agentRef: { name: triager }
-              skillRefs: [{ name: issue-triage }, { name: human-clarification }]
+              skillRefs: [{ name: issue-triage }, { name: human-clarification }, { name: knowledge-base }]
               inputs:  [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
               outputs: [{ artifactRef: { name: triage-decision } }]
           gate:

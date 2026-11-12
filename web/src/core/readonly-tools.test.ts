@@ -56,15 +56,16 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     assert.equal(research.status?.provenance?.executor, "tool-loop");
     const t = await f.app.runTranscript(p, research.metadata.name);
     assert.ok(t.some((m) => m.role === "note" && /read-only workspace access: software-factory@c0ffee/.test(m.content)));
-    const results = t.filter((m) => m.role === "tool-result").map((m) => m.content);
-    assert.match(results[0], /software-factory:web\/src\/core\/model\/meta\.ts:\d+/, "search cites repo:path:line");
-    assert.match(results[1], /export function setCondition/, "read_file returns real code");
+    const result = (tool: string) => t.find((m) => m.role === "tool-result" && m.meta?.tool === tool)?.content ?? "";
+    assert.match(result("search_code"), /software-factory:web\/src\/core\/model\/meta\.ts:\d+/, "search cites repo:path:line");
+    assert.match(result("read_file"), /export function setCondition/, "read_file returns real code");
     assert.ok(d!.artifacts.some((a) => a.spec.artifactTypeRef.name === "research-notes" && /meta\.ts/.test(a.spec.content)));
 
-    // analysis agents only ever get read-only tools (+ finish)
+    // analysis agents only ever get read-only tools (+ finish); search_knowledge only where the agent declares it
     for (const [agent, tools] of Object.entries(toolSets)) {
-      assert.deepEqual(tools.sort(), ["finish", "list_files", "read_file", "search_code"], agent);
+      assert.deepEqual(tools.filter((x) => x !== "search_knowledge").sort(), ["finish", "list_files", "read_file", "search_code"], agent);
     }
+    assert.ok(toolSets["Triager"].includes("search_knowledge") && !toolSets["Architect"].includes("search_knowledge"));
     assert.ok(toolSets["Triager"] && toolSets["Architect"] && toolSets["Reviewer"], JSON.stringify(Object.keys(toolSets)));
   } finally {
     await f.stop();

@@ -3,6 +3,8 @@ import { Badge, Box, NavLink, ScrollArea, Stack, Text } from "@mantine/core";
 import {
   IconBolt,
   IconBook,
+  IconBooks,
+  IconBulb,
   IconBox,
   IconBrain,
   IconCloudDownload,
@@ -10,6 +12,7 @@ import {
   IconFolderCode,
   IconGitBranch,
   IconLayoutList,
+  IconPlugConnected,
   IconRobot,
   IconRoute,
   type Icon,
@@ -34,6 +37,7 @@ const SECTIONS: { title: string; entries: Entry[] }[] = [
       { label: "Work items", href: "/", icon: IconLayoutList, kind: "WorkItem" },
       { label: "Workspaces", href: "/resources/workspaces", icon: IconGitBranch, kind: "Workspace" },
       { label: "Agent runs", href: "/resources/agentruns", icon: IconBolt, kind: "AgentRun" },
+      { label: "Knowledge", href: "/knowledge", icon: IconBulb, kind: "KnowledgeEntry" },
     ],
   },
   {
@@ -52,6 +56,8 @@ const SECTIONS: { title: string; entries: Entry[] }[] = [
       { label: "Sources", href: "/resources/sources", icon: IconCloudDownload, kind: "Source" },
       { label: "Model providers", href: "/resources/modelproviders", icon: IconBrain, kind: "ModelProvider" },
       { label: "Sandbox profiles", href: "/resources/sandboxprofiles", icon: IconBox, kind: "SandboxProfile" },
+      { label: "Knowledge sources", href: "/resources/knowledgesources", icon: IconBooks, kind: "KnowledgeSource" },
+      { label: "Tool servers (MCP)", href: "/resources/toolservers", icon: IconPlugConnected, kind: "ToolServer" },
     ],
   },
 ];

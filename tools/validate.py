@@ -15,12 +15,14 @@ REF_KINDS = {
     "skillRefs": "Skill",
     "requires": "Skill",
     "workflowRef": "Workflow",
+    "workflowRefs": "Workflow",
     "artifactRef": "ArtifactType",
     "sourceRef": "Source",
     "sourceRefs": "Source",
     "repositoryRefs": "Repository",
     "providerRef": "ModelProvider",
     "sandboxRef": "SandboxProfile",
+    "toolServerRefs": "ToolServer",
 }
 
 
