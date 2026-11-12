@@ -7,6 +7,7 @@ export const REF_FIELDS: Record<string, string> = {
   skillRefs: "Skill",
   requires: "Skill",
   workflowRef: "Workflow",
+  workflowRefs: "Workflow",
   artifactRef: "ArtifactType",
   artifactTypeRef: "ArtifactType",
   sourceRef: "Source",
@@ -17,6 +18,8 @@ export const REF_FIELDS: Record<string, string> = {
   workItemRef: "WorkItem",
   agentRunRef: "AgentRun",
   parentRunRef: "AgentRun",
+  knowledgeRef: "KnowledgeEntry",
+  toolServerRefs: "ToolServer",
 };
 
 /** ADR-0011: same namespace first, then factory-system. Explicit namespace only for factory-system. */

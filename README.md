@@ -72,7 +72,35 @@ npm run typecheck
 
 Without an LLM key, the factory still runs end to end. Classification and code research use deterministic
 skill handlers (ripgrep over the `software-factory` repository itself), and the other agents are simulated.
+Set `FACTORY_SIMULATION=wait` to keep agent runs waiting until an LLM is configured instead of producing placeholders.
+Use **Restart** on an item to run it again (e.g. after adding a key). Earlier output stays as superseded history.
 Data lives in `web/data/factory.db`. Delete the file to reset.
+
+Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless you opt in. Start the server with
+`NODE_USE_ENV_PROXY=1 npm run dev`. Otherwise source sync and LLM calls fail with `fetch failed: Connect Timeout Error`.
+
+## MCP (ADR-0034)
+
+The factory is an MCP server for your local agent harness, and its agents can use MCP servers.
+
+- **Server:** set `FACTORY_MCP_TOKEN` in `web/.env.local` and restart. Endpoint: `http://localhost:3000/api/mcp`
+  (Streamable HTTP, `Authorization: Bearer <token>`). Tools: list/get/create work items, set context, restart, answer
+  the current questions, list/sync sources, search and propose knowledge. Approving gates and knowledge stays in the UI.
+  VS Code (`.vscode/mcp.json`):
+  ```json
+  {
+    "inputs": [{ "id": "factory-token", "type": "promptString", "description": "FACTORY_MCP_TOKEN", "password": true }],
+    "servers": {
+      "software-factory": {
+        "type": "http",
+        "url": "http://localhost:3000/api/mcp",
+        "headers": { "Authorization": "Bearer ${input:factory-token}" }
+      }
+    }
+  }
+  ```
+- **Agents as clients:** define a `ToolServer` in `tool-servers/` (`http` url, or `stdio` command with the `host`
+  runtime only), list the `allowedTools`, and add it to an agent's `toolServerRefs`. Tools appear as `<server>__<tool>`.
 
 ## Validation
 

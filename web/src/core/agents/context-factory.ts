@@ -5,13 +5,23 @@ import type {
   ContextProvider,
   ExecutionContext,
   ExecutionContextFactory,
+  ExecutionContextPreviewer,
   ExecutionEnvironmentSelector,
   ModelResolver,
   ResourceReader,
+  TranscriptRecorder,
   TranscriptRecorderFactory,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { LABEL_REPLAY } from "./replayer.ts";
+import { LABEL_SUPERSEDED } from "../model/kinds.ts";
+
+const PREVIEW_RECORDER: TranscriptRecorder = {
+  ref: { namespace: "", id: "" },
+  record: async () => {
+    throw new Error("a preview context must not be used to execute a run");
+  },
+};
 
 export interface ContextFactoryDeps {
   reader: ResourceReader;
@@ -22,13 +32,21 @@ export interface ContextFactoryDeps {
 }
 
 /** Assembles everything an executor needs: definitions, inputs, human answers, repos, enrichment, model. */
-export class DefaultContextFactory implements ExecutionContextFactory {
+export class DefaultContextFactory implements ExecutionContextFactory, ExecutionContextPreviewer {
   private readonly d: ContextFactoryDeps;
   constructor(d: ContextFactoryDeps) {
     this.d = d;
   }
 
-  async create(run: AgentRun): Promise<ExecutionContext> {
+  create(run: AgentRun): Promise<ExecutionContext> {
+    return this.build(run, true);
+  }
+
+  preview(run: AgentRun): Promise<ExecutionContext> {
+    return this.build(run, false);
+  }
+
+  private async build(run: AgentRun, forExecution: boolean): Promise<ExecutionContext> {
     const ns = nsOf(run);
     const { reader } = this.d;
     const found = await resolveRef<Agent>(reader, "Agent", run.spec.agentRef, ns);
@@ -44,15 +62,22 @@ export class DefaultContextFactory implements ExecutionContextFactory {
     const skills = await this.skillsWithRequires(skillRefs, ns);
 
     const owned = { kind: "WorkItem", name: workItem.metadata.name, namespace: ns };
-    // Artifacts produced by replays never become inputs of the real workflow (ADR-0012).
+    // Artifacts produced by replays or superseded by a restart never become inputs of the real workflow (ADR-0012).
     const allArtifacts = (await reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned })).filter(
       (a) => !a.metadata.labels?.[LABEL_REPLAY],
+    );
+    // Level-triggered: output of a superseded run is stale even if it landed after the restart labelled artifacts.
+    const supersededRuns = new Set(
+      (await reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned })).filter((r) => r.metadata.labels?.[LABEL_SUPERSEDED]).map((r) => r.metadata.name),
+    );
+    const current = allArtifacts.filter(
+      (a) => !a.metadata.labels?.[LABEL_SUPERSEDED] && !supersededRuns.has(a.spec.producedBy?.agentRunRef?.name ?? ""),
     );
     let clarifications = (await reader.list<Clarification>("Clarification", { namespace: ns, ownedBy: owned })).filter(
       (c) => c.spec.answers?.length,
     );
     let inputs = run.spec.inputs
-      .map((t) => allArtifacts.filter((a) => a.spec.artifactTypeRef.name === t.name).at(-1))
+      .map((t) => current.filter((a) => a.spec.artifactTypeRef.name === t.name).at(-1))
       .filter((a): a is Artifact => !!a);
 
     if (run.spec.replayOf) {
@@ -94,10 +119,11 @@ export class DefaultContextFactory implements ExecutionContextFactory {
       repositories,
       workspaces,
       sections: [],
-      transcript: await this.d.recorders.forRun(run),
+      transcript: forExecution ? await this.d.recorders.forRun(run) : PREVIEW_RECORDER,
       model,
       sandbox,
     };
+    if (!forExecution) return ctx;
     for (const p of this.d.providers) {
       if (p.appliesTo(ctx)) ctx.sections.push(...(await p.provide(ctx)));
     }

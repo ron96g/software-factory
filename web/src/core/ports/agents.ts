@@ -57,6 +57,14 @@ export interface ExecutionContextFactory {
   create(run: AgentRun): Promise<ExecutionContext>;
 }
 
+/**
+ * Side-effect free context for decisions before a run starts (ADR-0029): no transcript is opened and no
+ * context providers run. Its recorder throws, so it can never be used to execute.
+ */
+export interface ExecutionContextPreviewer {
+  preview(run: AgentRun): Promise<ExecutionContext>;
+}
+
 /** Enriches the context, e.g. with code-search hits or repository docs. */
 export interface ContextProvider {
   readonly name: string;
@@ -82,6 +90,12 @@ export interface ProducedArtifact {
 }
 
 /** Uniform result of any executor. The controller interprets it. */
+export interface ProposedKnowledge {
+  title: string;
+  content: string;
+  tags?: string[];
+}
+
 export interface AgentResult {
   summary?: string;
   artifacts?: ProducedArtifact[];
@@ -90,6 +104,8 @@ export interface AgentResult {
   outcome?: string;
   /** Non-empty → the work item gets blocked with a Clarification. */
   questions?: string[];
+  /** ADR-0030: knowledge worth keeping; becomes `Proposed` KnowledgeEntries (never used before a human approves). */
+  knowledge?: ProposedKnowledge[];
   /** Executor-specific provenance (model used, prompt hash); merged by the AgentRun controller. */
   provenance?: Partial<RunProvenance>;
 }
@@ -98,6 +114,16 @@ export interface AgentExecutor {
   readonly name: string;
   canExecute(ctx: ExecutionContext): boolean;
   execute(ctx: ExecutionContext): Promise<AgentResult>;
+}
+
+export type ExecutionReadiness = { ready: true } | { ready: false; reason: string; retryAfterMs: number };
+
+/**
+ * Decides whether a run may execute now, e.g. wait for an LLM or sandbox instead of falling back to simulation
+ * (ADR-0029). Side-effect free; the AgentRun controller keeps the run Pending and retries while not ready.
+ */
+export interface ExecutionGate {
+  check(ctx: ExecutionContext): ExecutionReadiness;
 }
 
 /** Deterministic, non-LLM implementation of a single skill. */

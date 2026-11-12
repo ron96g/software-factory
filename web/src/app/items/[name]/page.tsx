@@ -11,6 +11,7 @@ import {
   Grid,
   Group,
   List,
+  Menu,
   Stack,
   Tabs,
   Text,
@@ -19,10 +20,11 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion } from "@tabler/icons-react";
+import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil } from "@tabler/icons-react";
 import Link from "next/link";
 import { use, useMemo, useState } from "react";
 import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
+import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
 import type { GateEvidence, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
@@ -78,13 +80,21 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             {" · "}workflow {wi.spec.workflowRef?.name} · repos {(wi.spec.repositoryRefs ?? []).map((r) => r.name).join(", ") || "–"}
           </Text>
         </div>
-        <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)} style={{ flexShrink: 0 }}>
-          Ask about this item
-        </Button>
+        <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
+          <RestartMenu d={d} />
+          <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)}>
+            Ask about this item
+          </Button>
+        </Group>
       </Group>
 
       <StageProgress d={d} />
 
+      {st?.phase === "Waiting" && (
+        <Alert color="violet" icon={<IconHourglass />} title="Waiting">
+          {st.message} The item continues by itself once this is resolved.
+        </Alert>
+      )}
       {st?.phase === "Failed" && (
         <Alert color="red" icon={<IconAlertTriangle />} title="Failed">
           {st.message}
@@ -96,6 +106,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
+          <ContextCard d={d} />
           <Card className="sf-surface">
             <Tabs defaultValue="artifacts">
               <Tabs.List>
@@ -120,6 +131,26 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }} style={{ position: "sticky", top: 68, alignSelf: "flex-start" }}>
+          {d.knowledge.length > 0 && (
+            <Card className="sf-surface" mb="md">
+              <Title order={5} mb={4}>
+                Knowledge
+              </Title>
+              <Text size="xs" c="dimmed" mb="sm">
+                Proposed by this item&apos;s agents. Used by others only after approval.
+              </Text>
+              <Stack gap={6}>
+                {d.knowledge.map((k) => (
+                  <Group key={k.metadata.name} gap="xs" wrap="nowrap" justify="space-between">
+                    <Anchor component={Link} href={`/knowledge/${k.metadata.name}`} size="sm" lineClamp={1}>
+                      {k.spec.title}
+                    </Anchor>
+                    <PhaseBadge phase={k.status?.phase ?? "Proposed"} size="xs" />
+                  </Group>
+                ))}
+              </Stack>
+            </Card>
+          )}
           {d.workspaces.length > 0 && (
             <Card className="sf-surface" mb="md">
               <Title order={5} mb="sm">
@@ -204,6 +235,114 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         onOpen={setOpenRun}
       />
     </Stack>
+  );
+}
+
+/** ADR-0032: human-provided context every agent sees. Editing doesn't re-run finished steps (Restart does). */
+function ContextCard({ d }: { d: WorkItemDetail }) {
+  const wi = d.workItem;
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(wi.spec.context ?? "");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const hasRuns = d.runs.length > 0;
+  return (
+    <Card className="sf-surface" mb="md">
+      <Group justify="space-between" mb={editing || wi.spec.context ? "xs" : 0}>
+        <div>
+          <Title order={5}>Additional context</Title>
+          <Text size="xs" c="dimmed">
+            What agents should know up front: environment, customer setup, what was already tried. Every agent sees it.
+          </Text>
+        </div>
+        {!editing && (
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPencil size={14} />}
+            onClick={() => {
+              setText(wi.spec.context ?? "");
+              setSaved(false);
+              setEditing(true);
+            }}
+          >
+            {wi.spec.context ? "Edit" : "Add context"}
+          </Button>
+        )}
+      </Group>
+      {editing ? (
+        <Stack gap="xs">
+          <Textarea
+            autosize
+            minRows={4}
+            maxRows={16}
+            placeholder={"e.g. Environment: prod (eu-central). The team uses the Rover CLI, not the UI.\nAlready tried: re-applying the subscription."}
+            value={text}
+            onChange={(e) => setText(e.currentTarget.value)}
+            data-autofocus
+          />
+          <Group justify="flex-end">
+            <Button variant="default" size="xs" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              loading={busy}
+              onClick={async () => {
+                setBusy(true);
+                const r = await act(`/api/workitems/${wi.metadata.name}/context`, { context: text }, "Context saved");
+                setBusy(false);
+                if (r) {
+                  setEditing(false);
+                  setSaved(true);
+                }
+              }}
+            >
+              Save
+            </Button>
+          </Group>
+        </Stack>
+      ) : (
+        wi.spec.context && <MarkdownView>{wi.spec.context}</MarkdownView>
+      )}
+      {saved && hasRuns && (
+        <Text size="xs" c="dimmed" mt="xs">
+          Agents use it from their next run. To redo steps that already ran, use Restart.
+        </Text>
+      )}
+    </Card>
+  );
+}
+
+/** Re-runs the workflow in a new round; earlier output stays visible as superseded history. */
+function RestartMenu({ d }: { d: WorkItemDetail }) {
+  const [busy, setBusy] = useState(false);
+  const restart = async (stage?: string) => {
+    setBusy(true);
+    await act(`/api/workitems/${d.workItem.metadata.name}/restart`, { stage }, stage ? `Restarting from ${stage}` : "Restarting from the beginning");
+    setBusy(false);
+  };
+  return (
+    <Menu position="bottom-end" withinPortal>
+      <Menu.Target>
+        <Button variant="default" leftSection={<IconRefresh size={16} />} loading={busy}>
+          Restart
+        </Button>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Re-run agents in a new round</Menu.Label>
+        <Menu.Item onClick={() => restart()}>From the beginning</Menu.Item>
+        <Menu.Divider />
+        {d.stages.map((s) => (
+          <Menu.Item key={s.name} onClick={() => restart(s.name)}>
+            From {s.name}{" "}
+            <Text span size="xs" c="dimmed">
+              ({s.lifecyclePhase})
+            </Text>
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }
 
@@ -554,6 +693,14 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
                 <Badge variant="outline" color="grape" size="xs">
                   replay
                 </Badge>
+              )}
+              {(a.metadata.labels?.[LABEL_SUPERSEDED] ||
+                d.runs.find((r) => r.metadata.name === a.spec.producedBy?.agentRunRef.name)?.metadata.labels?.[LABEL_SUPERSEDED]) && (
+                <Tooltip label="Replaced by a restart; no longer used as agent input">
+                  <Badge variant="outline" color="gray" size="xs">
+                    superseded
+                  </Badge>
+                </Tooltip>
               )}
               <Text size="sm">by {a.spec.producedBy?.agentRef.name}</Text>
               <Text size="xs" c="dimmed" ff="monospace">

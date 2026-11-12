@@ -20,7 +20,7 @@ export function heuristicClassification(text: string): Classification {
 export const classificationHandler: SkillHandler = {
   skill: "work-item-classification",
   async handle(ctx) {
-    const c = heuristicClassification(`${ctx.workItem.spec.title}\n${ctx.workItem.spec.description ?? ""}`);
+    const c = heuristicClassification(`${ctx.workItem.spec.title}\n${ctx.workItem.spec.description ?? ""}\n${ctx.workItem.spec.context ?? ""}`);
     return { summary: `Heuristically classified as ${c.type} / ${c.priority}.`, classification: c };
   },
 };
@@ -76,7 +76,7 @@ export class SimulatedExecutor implements AgentExecutor {
     };
     const outcomes = ctx.run.spec.outcomes;
     if (outcomes?.length) {
-      const thin = (ctx.workItem.spec.description ?? "").trim().length < 40;
+      const thin = `${ctx.workItem.spec.description ?? ""}${ctx.workItem.spec.context ?? ""}`.trim().length < 40;
       if (thin && !ctx.clarifications.length && outcomes.includes("needs-info")) {
         result.outcome = "needs-info";
         result.questions = [
@@ -94,12 +94,17 @@ export class SimulatedExecutor implements AgentExecutor {
 }
 
 function simulationReason(ctx: ExecutionContext): string {
+  return `Simulated: ${noRealExecutorReason(ctx)}`;
+}
+
+/** Why no real executor (LLM, tool loop, skill handler) can take this run. Shared with the wait policy (ADR-0029). */
+export function noRealExecutorReason(ctx: ExecutionContext): string {
   if (ctx.sandbox && !ctx.sandbox.available) {
-    return `Simulated: this agent needs a sandbox, but ${ctx.sandbox.message ?? "none is available"}. Configure FACTORY_SANDBOX_RUNTIME (ADR-0019).`;
+    return `this agent needs a sandbox, but ${ctx.sandbox.message ?? "none is available"}. Configure FACTORY_SANDBOX_RUNTIME (ADR-0019).`;
   }
-  if (ctx.sandbox?.available) return `Simulated: sandbox "${ctx.sandbox.runtime}" is available, but the tool-call loop isn't implemented yet (v0.3 S3).`;
-  if (!ctx.model) return "Simulated: no ModelProvider with a resolvable secret is configured (ADR-0014).";
-  return `Simulated: agent tools [${(ctx.agent.spec.tools ?? []).join(", ")}] are not available (ADR-0019).`;
+  if (ctx.sandbox?.available) return `sandbox "${ctx.sandbox.runtime}" is available, but no executor supports this agent's tools.`;
+  if (!ctx.model) return "no ModelProvider with a resolvable secret is configured (ADR-0014).";
+  return `agent tools [${(ctx.agent.spec.tools ?? []).join(", ")}] are not available (ADR-0019).`;
 }
 
 const STOP = new Set([

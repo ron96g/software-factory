@@ -35,7 +35,7 @@ export class HostEnvironment implements ExecutionEnvironment {
   async prepare(spec: SandboxSpec): Promise<Sandbox> {
     const ws = spec.workspaces.find((w) => w.status?.phase === "Ready" && w.status.path);
     if (!ws) throw new SandboxUnavailableError(this.runtime, "the work item has no Ready workspace (ADR-0021)");
-    return new HostSandbox(`host-${ws.metadata.name}`, ws.status!.path!, ws.status!.baseCommit!);
+    return new HostSandbox(`host-${ws.metadata.name}`, ws.status!.path!, ws.status!.baseCommit!, spec.profile.spec?.env ?? {});
   }
 }
 
@@ -43,11 +43,13 @@ class HostSandbox implements Sandbox {
   readonly id: string;
   private readonly dir: string;
   private readonly base: string;
+  private readonly env: Record<string, string>;
   private disposed = false;
-  constructor(id: string, dir: string, base: string) {
+  constructor(id: string, dir: string, base: string, env: Record<string, string>) {
     this.id = id;
     this.dir = dir;
     this.base = base;
+    this.env = env;
   }
 
   private path(p: string): string {
@@ -62,7 +64,7 @@ class HostSandbox implements Sandbox {
 
   exec(command: string, o: ExecOptions = {}): Promise<ExecResult> {
     this.alive();
-    return runScrubbed(command, o.cwd ? this.path(o.cwd) : this.dir, o.timeoutMs);
+    return runScrubbed(command, o.cwd ? this.path(o.cwd) : this.dir, o.timeoutMs, this.env);
   }
   async readFile(p: string): Promise<string> {
     this.alive();

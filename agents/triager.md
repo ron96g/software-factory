@@ -11,9 +11,10 @@ spec:
     - name: work-item-classification
     - name: issue-triage
     - name: human-clarification
+    - name: knowledge-base
   delegates:
     - agentRef: { name: code-researcher }
-  tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)
+  tools: [search_code, read_file, list_files, search_knowledge]   # read-only workspace tools (ADR-0021)
   humanCounterpart: { role: product-owner }
 ---
 

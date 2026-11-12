@@ -5,7 +5,7 @@
   "required": ["apiVersion", "kind", "metadata", "spec"],
   "properties": {
     "apiVersion": { "const": "factory.ai-dlc.io/v1alpha1" },
-    "kind": { "enum": ["Agent", "Skill", "Workflow", "ArtifactType", "Source", "Repository", "ModelProvider", "SandboxProfile", "WorkItem"] },
+    "kind": { "enum": ["Agent", "Skill", "Workflow", "ArtifactType", "Source", "Repository", "ModelProvider", "SandboxProfile", "KnowledgeSource", "ToolServer", "WorkItem"] },
     "metadata": {
       "type": "object",
       "required": ["name"],

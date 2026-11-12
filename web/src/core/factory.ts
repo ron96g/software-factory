@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector } from "./ports/index.ts";
+import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -34,6 +34,15 @@ import { DefaultContextFactory } from "./agents/context-factory.ts";
 import { DefaultPromptBuilder } from "./agents/prompt-builder.ts";
 import { ExecutorChain, LLMExecutor, SkillHandlerExecutor } from "./agents/executors.ts";
 import { SimulatedExecutor, classificationHandler, codebaseResearchHandler } from "./agents/builtin-skills.ts";
+import { RequireRealExecutor } from "./agents/execution-gate.ts";
+import { McpToolProvider, type McpToolProviderDeps } from "./adapters/mcp/client.ts";
+import { createMcpHttpHandler } from "./adapters/mcp/server.ts";
+import { factoryTools } from "./exposed/factory-tools.ts";
+import { FilesKnowledgeSearch } from "./adapters/knowledge/files.ts";
+import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
+import { knowledgeProvider } from "./knowledge/context.ts";
+import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
+import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
 import { codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
@@ -73,6 +82,8 @@ export interface FactoryOptions {
   sandboxes?: ExecutionEnvironment[];
   /** Poll interval for replies on synced issues (W3). */
   commentPollMs?: number;
+  /** Test seam (ADR-0034): transport per ToolServer, e.g. an in-memory pair. */
+  mcpTransportFor?: McpToolProviderDeps["transportFor"];
   /** SQLite file, or ":memory:". */
   databasePath: string;
   env?: Record<string, string | undefined>;
@@ -158,21 +169,39 @@ export async function createFactory(o: FactoryOptions) {
         })
       : noWorkspaces);
 
+  // ── knowledge base (ADR-0030): search per KnowledgeSource.type; only approved entries are ever returned ──
+  const knowledgeSources = new Registry<KnowledgeSourceSearch>();
+  const filesKnowledge = new FilesKnowledgeSearch(o.definitionsRoot);
+  knowledgeSources.register(filesKnowledge.type, filesKnowledge);
+  const knowledge = new DefaultKnowledgeSearcher({ reader: store, sources: knowledgeSources, redactor });
+
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
   const contexts = new DefaultContextFactory({
     reader: store,
-    providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces)],
+    providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge)],
     models,
     recorders,
     environments,
   });
   const prompts = new DefaultPromptBuilder();
-  const executor = new ExecutorChain([
-    new ToolLoopExecutor({ reader: store, prompts, tools, environments, readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()) }),
+  const realExecutors = [
+    new ToolLoopExecutor({
+      reader: store,
+      prompts,
+      tools,
+      environments,
+      readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()),
+      knowledge,
+      toolProvider: new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor }),
+    }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
-    new SimulatedExecutor(),
-  ]);
+  ];
+  const executor = new ExecutorChain([...realExecutors, new SimulatedExecutor()]);
+  // ADR-0029: `allow` (default) falls back to simulated output; `wait` keeps runs Pending until a real executor fits.
+  const simulation = env.FACTORY_SIMULATION ?? "allow";
+  if (simulation !== "allow" && simulation !== "wait") throw new Error(`FACTORY_SIMULATION must be "allow" or "wait", got "${simulation}"`);
+  const executionGate = simulation === "wait" ? new RequireRealExecutor(realExecutors) : undefined;
 
   // ── workflow & gates ─────────────────────────────────────────────────
   const compiler = new DefaultWorkflowCompiler(store);
@@ -211,16 +240,18 @@ export async function createFactory(o: FactoryOptions) {
   manager.register(
     createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
   );
-  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor }));
+  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor, gate: executionGate && { policy: executionGate, previews: contexts } }));
   manager.register(createClarificationController({ reader: store, status: store, clock }));
   manager.register(createApprovalController({ reader: store, status: store }));
   manager.register(createConversationController({ reader: store, status: store, recorders }));
+  manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
 
   const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events });
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));
   responders.register("explain-item", new ItemExplainResponder({ reader: store, transcripts, recorders, models, redactor }));
+  responders.register("refine-knowledge", new KnowledgeRefineResponder({ reader: store, transcripts, recorders, models, redactor }));
 
   const app = new FactoryApp({
     reader: store,
@@ -235,10 +266,23 @@ export async function createFactory(o: FactoryOptions) {
     controllerHealth: reconcileErrors,
     events,
     responders,
+    simulation,
+  });
+
+  // ── MCP server (ADR-0034): what local agent harnesses may do; gates stay in the UI ──
+  const exposedTools = factoryTools({ items: app, answers: app, sources: app, knowledge: app, search: knowledge });
+  const mcp = createMcpHttpHandler({
+    tools: () => exposedTools,
+    token: secrets.resolve({ name: "factory-mcp-token" }),
+    redactor,
   });
 
   return {
     app,
+    /** Streamable HTTP MCP endpoint handler (Request → Response). */
+    mcp,
+    /** The exposed tool catalog (also used by tests). */
+    exposedTools,
     /** Watch feed for the UI (SSE). */
     watcher: store as Pick<typeof store, "watch">,
     transcriptTail: transcripts as Pick<typeof transcripts, "tail">,

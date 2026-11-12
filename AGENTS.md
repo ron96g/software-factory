@@ -13,10 +13,10 @@ Read this file completely before you change anything.
 A **software factory** that implements the **AI-DLC** (AI-Driven Development Lifecycle) *as code*:
 
 - **Definitions as code** (in Git): `Agent` and `Skill` as Markdown with YAML frontmatter; `Workflow`, `ArtifactType`,
-  `Source`, `Repository`, and `ModelProvider` as Kubernetes-style custom resources (YAML). They reference each other
-  through typed `*Ref`s.
-- **Runtime** (in a DB): `WorkItem`, `AgentRun`, `Artifact`, `Clarification`, `Approval`, `Conversation`, `Event`, and
-  `OutboxMessage`, all modeled as custom resources (`apiVersion / kind / metadata / spec / status`). Agent
+  `Source`, `Repository`, `ModelProvider`, `KnowledgeSource`, and `ToolServer` as Kubernetes-style custom resources
+  (YAML). They reference each other through typed `*Ref`s.
+- **Runtime** (in a DB): `WorkItem`, `AgentRun`, `Artifact`, `Clarification`, `Approval`, `Conversation`, `Event`,
+  `OutboxMessage`, and `KnowledgeEntry` (ADR-0030), all modeled as custom resources (`apiVersion / kind / metadata / spec / status`). Agent
   **transcripts** are stored separately in an append-only log (ADR-0012).
 - **Factory loop** (diagram: `docs/ai-dlc-glossary.md`):
   input (manual | Jira | GitHub | monitoring) → classify → triage → spec → spec-review [human] → implement →
@@ -72,7 +72,8 @@ Required reading:
     models are mapped on the `ModelProvider` (`agentModels`). Providers are
     `ModelProvider` definitions resolved through `ModelResolver`.
 18. **No free-form execution on the host (ADR-0016, ADR-0019, ADR-0022).** Shell, file writes, and code execution only run inside an
-    `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason.
+    `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason, or wait for one
+    with `FACTORY_SIMULATION=wait` (ADR-0029).
 
 ---
 
@@ -85,6 +86,8 @@ workflows/           Workflow CRs
 artifacts/           ArtifactType CRs
 sources/             Source CRs (manual, github, jira, monitoring-feedback)
 repositories/        Repository CRs (codebases agents research/edit)
+knowledge-sources/   KnowledgeSource CRs (external docs agents can search, ADR-0030)
+tool-servers/        ToolServer CRs (MCP servers agents may use, ADR-0034)
 schemas/             JSON Schemas
 tools/               validate.py
 examples/            example runtime objects
@@ -166,6 +169,13 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X7 | Gate decisions steer agents | Decided approvals (decision + comment) are agent input ("Human gate decision"); "Approve & let agents decide" delegates open decisions to recommended defaults (documented, no re-asking); reject reasons reach the re-run | A human can delegate open decisions in one click; rejection feedback is acted on | ✅ |
 | X8 | Per-agent models | `ModelProvider.agentModels` (agent → model) overrides the tier for that agent (ADR-0028) | Different agents run on different models without naming vendors in agent files | ✅ |
 | X9 | Sync from real sources | GitHub source points at `ron96g/software-factory` (label `factory`); dashboard "Sync" imports issues | Labelled issues appear as work items | ✅ |
+| X10 | Restart & simulation policy | `spec.restart` (from the first or a chosen stage, new round, earlier output superseded), UI "Restart" menu; `FACTORY_SIMULATION=wait` keeps runs Pending until a real executor fits (ADR-0029) | An item processed without an LLM can be re-run with one, history kept; with `wait`, no placeholders are produced | ✅ |
+| X11 | Service desk workflow | `servicedesk` workflow + `support-engineer` agent + `support-analysis`/`customer-response` artifacts; `jira-servicedesk` (read-only) uses it with repository `controlplane` | A service request is investigated against the code and ends in a human-approved reply, without writing to the ticket | ✅ |
+| X12 | Knowledge base | `KnowledgeEntry` (agents propose via the `knowledge-base` skill → human approves, edits, or refines with the proposing agent), `KnowledgeSource` (`files`: ripgrep over local docs), `KnowledgeSearcher` context + `search_knowledge` tool, UI "Knowledge" (ADR-0030) | An agent's proposal is approved by a human and then used (cited) by a later run; unapproved knowledge never reaches agents | ✅ |
+| X13 | Wait on model quota | HTTP 429/503/529 → `ModelUnavailableError`; the run waits (`retryAt`, Retry-After or backoff up to 15 min) instead of failing the item; the item shows phase `Waiting` with the reason (ADR-0031) | An exhausted quota pauses the item visibly and it resumes by itself | ✅ |
+| X14 | Additional context | `WorkItem.spec.context` (human-only, sync never overwrites) in every agent prompt; editable in the new-item form and on the item page (ADR-0032) | Agents use team-provided context without asking for it | ✅ |
+| X15 | Toolchains in sandboxes | `SandboxProfile.env` (plain, non-secret), repository's profile wins over the agent's, `go-build` sets `GOPROXY`; developer/verifier install tools themselves (ADR-0033) | An agent installs `controller-gen`/envtest itself on a Go repo | ✅ |
+| X16 | MCP | Factory as MCP server (`/api/mcp`, bearer `FACTORY_MCP_TOKEN`, no gate tools) + `ToolServer` kind / `ToolProvider` port for agents (http; stdio with host opt-in); `support-engineer` uses the factory's own MCP for knowledge (ADR-0034) | A local harness creates and answers items via MCP; an agent calls an MCP tool in its run (recorded) | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |
@@ -173,7 +183,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | v0.2 | Write-back | ✅ see table above |
 | v0.3 | Construction for real | see table above (ADR-0019); Bolt fan-out per Unit moves to v1.0 |
 | v0.4 | Auth & squads (**postponed**, ADR-0025) | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
-| v0.5 | Tool servers | `ToolServer` (MCP) kind, `ToolProvider` port, per-squad tools (ADR-0011), delegation as tool calls (loop itself moved to v0.3, ADR-0019) |
+| v0.5 | Tool servers | ✅ `ToolServer` (MCP) kind + `ToolProvider` port, factory as MCP server (X16, ADR-0034); open: per-squad tools (ADR-0011), delegation as tool calls |
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
 | v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself, Bolt fan-out per Unit |
 

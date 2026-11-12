@@ -3,7 +3,9 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
 import { ANONYMOUS, FACTORY_COMMENT_MARKER } from "./ports/index.ts";
-import { adfToText } from "./adapters/sources/jira.ts";
+import { JiraConnector } from "./adapters/sources/jira.ts";
+import { createOutboxController } from "./runtime/outbox.ts";
+import type { OutboxMessage } from "./model/kinds.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
@@ -84,33 +86,27 @@ test("W1–W3: questions go out via the outbox (retried, once), a reply on the i
   });
 });
 
-test("W4: Jira connector fetches (JQL), comments (ADF) and reads replies", async () => {
+test("W4: Jira (Data Center) fetches via JQL, comments as plain text and reads replies", async () => {
   const comments: { author: { displayName: string }; body: unknown; created: string }[] = [];
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const u = new URL(String(url));
-    if (u.pathname === "/rest/api/3/search/jql") {
-      assert.match(u.searchParams.get("jql") ?? "", /project = SHOP/);
+    if (u.pathname === "/rest/api/2/search") {
+      assert.match(u.searchParams.get("jql") ?? "", /labels = factory/);
       return Response.json({
         issues: [
           {
             key: "SHOP-7",
             self: "x",
-            fields: {
-              summary: "Refund button missing",
-              description: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "On mobile" }] }] },
-              labels: ["factory"],
-              priority: { name: "High" },
-              updated: "2026-11-11T10:00:00.000+0000",
-            },
+            fields: { summary: "Refund button missing", description: "On mobile", labels: ["factory"], priority: { name: "High" }, updated: "2026-11-11T10:00:00.000+0000" },
           },
         ],
       });
     }
-    if (u.pathname === "/rest/api/3/issue/SHOP-7/comment" && init?.method === "POST") {
+    if (u.pathname === "/rest/api/2/issue/SHOP-7/comment" && init?.method === "POST") {
       comments.push({ author: { displayName: "Factory" }, body: JSON.parse(String(init.body)).body, created: new Date().toISOString() });
       return Response.json({}, { status: 201 });
     }
-    if (u.pathname === "/rest/api/3/issue/SHOP-7/comment") return Response.json({ comments });
+    if (u.pathname === "/rest/api/2/issue/SHOP-7/comment") return Response.json({ comments });
     return new Response("nf", { status: 404 });
   }) as typeof fetch;
 
@@ -122,16 +118,59 @@ test("W4: Jira connector fetches (JQL), comments (ADF) and reads replies", async
       return x?.workItem.status?.phase === "Blocked" ? x : undefined;
     }, "blocked");
     assert.equal(d.workItem.spec.description, "On mobile");
-    assert.equal(d.workItem.spec.externalRef?.url, "https://acme.atlassian.net/browse/SHOP-7");
+    assert.equal(d.workItem.spec.externalRef?.url, "https://jira.telekom.de/browse/SHOP-7");
     await waitFor(async () => comments.length === 1, "jira comment");
-    assert.match(adfToText(comments[0].body as never), /needs more information/);
-    comments.push({ author: { displayName: "Bob" }, body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Only iOS, P2" }] }] }, created: new Date(Date.now() + 5).toISOString() });
+    assert.equal(typeof comments[0].body, "string");
+    assert.match(comments[0].body as string, /needs more information/);
+    comments.push({ author: { displayName: "Bob" }, body: "Only iOS, P2", created: new Date(Date.now() + 5).toISOString() });
     const after = await waitFor(async () => {
       const x = await f.app.getWorkItem(p, name);
-      return x?.clarifications[0]?.spec.answers?.length ? x : undefined;
-    }, "answered from jira");
+      return x?.workItem.status?.stage !== "triage" ? x : undefined;
+    }, "resumed past triage");
     assert.equal(after.clarifications[0].spec.answeredBy, "jira-main:Bob");
   });
+});
+
+test("W4: Jira auth and body format per deployment (cloud: basic + ADF, datacenter: bearer PAT + text)", async () => {
+  const calls: { path: string; auth: string | null; body?: unknown }[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    calls.push({ path: new URL(String(url)).pathname, auth: new Headers(init?.headers).get("authorization"), body: init?.body ? JSON.parse(String(init.body)).body : undefined });
+    return Response.json({}, { status: 201 });
+  }) as typeof fetch;
+  const connector = new JiraConnector({ resolve: () => "tok" }, fetchImpl);
+  const source = (deployment: string) =>
+    ({ metadata: { name: "j" }, spec: { type: "jira", connection: { url: "https://j.example", deployment, email: "a@b.c", secretRef: { name: "jira-token" } }, sync: { bidirectional: true } } }) as never;
+
+  await connector.postComment(source("cloud"), "X-1", "hi");
+  await connector.postComment(source("datacenter"), "X-1", "hi");
+  assert.deepEqual(calls[0], { path: "/rest/api/3/issue/X-1/comment", auth: `Basic ${Buffer.from("a@b.c:tok").toString("base64")}`, body: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }] } });
+  assert.deepEqual(calls[1], { path: "/rest/api/2/issue/X-1/comment", auth: "Bearer tok", body: "hi" });
+  await assert.rejects(connector.postComment(source("onprem"), "X-1", "hi"), /unknown connection.deployment/);
+});
+
+test("read-only source: the Jira connector refuses writes and the outbox never delivers to it", async () => {
+  const readOnly = { metadata: { name: "ro", namespace: "factory-system" }, spec: { type: "jira", connection: { url: "https://j.example", deployment: "datacenter" }, sync: { bidirectional: false } } } as never;
+  let requests = 0;
+  const connector = new JiraConnector({ resolve: () => "tok" }, (async () => (requests++, Response.json({}))) as typeof fetch);
+  await assert.rejects(connector.postComment(readOnly, "X-1", "hi"), /read-only/);
+  assert.equal(requests, 0);
+
+  let msg = { apiVersion: "x", kind: "OutboxMessage", metadata: { name: "m", namespace: "default" }, spec: { sourceRef: { name: "ro" }, externalId: "X-1", action: "comment", payload: { body: "q" } }, status: { phase: "Pending" } } as never as OutboxMessage;
+  let delivered = 0;
+  const warnings: string[] = [];
+  const controller = createOutboxController({
+    reader: { get: async (kind: string) => (kind === "OutboxMessage" ? msg : kind === "Source" ? readOnly : null), list: async () => [] } as never,
+    status: { updateStatus: async (o: OutboxMessage) => (msg = o) } as never,
+    events: { normal: async () => {}, warning: async (_o: unknown, reason: string) => void warnings.push(reason) } as never,
+    clock: { now: () => new Date() },
+    handlers: { get: () => ({ action: "comment", deliver: async () => void delivered++ }) } as never,
+    redactor: { redact: (x: string) => x } as never,
+  });
+  assert.equal(await controller.reconcile("default/m"), undefined, "no retry");
+  assert.equal(delivered, 0);
+  assert.equal(msg.status?.phase, "Failed");
+  assert.match(msg.status?.lastError ?? "", /read-only/);
+  assert.deepEqual(warnings, ["DeliveryBlocked"]);
 });
 
 test("W5: re-run creates a replay with pinned inputs; workflow state unchanged; replay artifacts not used", async () => {

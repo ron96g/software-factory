@@ -29,14 +29,14 @@ metadata:
 spec:
   type: jira
   connection:
-    url: https://acme.atlassian.net
-    project: SHOP
-    email: factory-bot@acme.com   # basic auth user; token from JIRA_TOKEN (ADR-0015)
-    secretRef: { name: jira-token }
+    url: https://jira.telekom.de
+    deployment: datacenter        # cloud (REST v3, email + API token) | datacenter (REST v2, Personal Access Token)
+    secretRef: { name: jira-token }   # PAT from JIRA_TOKEN (ADR-0015)
   sync:
     mode: poll
     pollInterval: 5m
-    filter: { jql: "project = SHOP AND labels = factory" }
+    # Only your own labelled issues: the factory comments on imported issues (bidirectional).
+    filter: { jql: "labels = factory AND reporter = currentUser() AND statusCategory != Done ORDER BY updated DESC" }
     bidirectional: true
   mapping:
     title: fields.summary
@@ -46,8 +46,33 @@ spec:
   defaults:
     workflowRef: { name: factory-loop }
     repositoryRefs:
-      - name: shop-backend
-      - name: shop-frontend
+      - name: software-factory
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: jira-servicedesk
+spec:
+  type: jira
+  connection:
+    url: https://jira.telekom.de
+    deployment: datacenter
+    secretRef: { name: jira-token }
+  sync:
+    mode: poll
+    pollInterval: 5m
+    filter: { jql: "project = SDDHEI AND labels = factory AND statusCategory != Done ORDER BY updated DESC" }
+    # Read-only: customers would see the factory's comments. Enforced by the outbox and the Jira connector.
+    bidirectional: false
+  mapping:
+    title: fields.summary
+    description: fields.description
+    externalId: key
+    priority: fields.priority.name
+  defaults:
+    workflowRef: { name: servicedesk }
+    repositoryRefs:
+      - name: controlplane
 ---
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: Source

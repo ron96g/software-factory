@@ -9,11 +9,14 @@ export function scrubbedEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(SAFE_ENV.filter((k) => process.env[k]).map((k) => [k, process.env[k]!])) as NodeJS.ProcessEnv;
 }
 
-/** Runs `bash -lc <command>` with a scrubbed env, a timeout (kills the process group) and an output cap. */
-export function runScrubbed(command: string, cwd: string, timeoutMs = 120_000): Promise<ExecResult> {
+/**
+ * Runs `bash -lc <command>` with a scrubbed env (plus the profile's plain `env`, ADR-0033), a timeout (kills the
+ * process group) and an output cap.
+ */
+export function runScrubbed(command: string, cwd: string, timeoutMs = 120_000, env: Record<string, string> = {}): Promise<ExecResult> {
   const started = Date.now();
   return new Promise((done) => {
-    const child = spawn("bash", ["-lc", command], { cwd, env: scrubbedEnv(), detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("bash", ["-lc", command], { cwd, env: { ...scrubbedEnv(), ...env }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let truncated = false;

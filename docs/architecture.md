@@ -4,8 +4,8 @@
 
 | Category | Kinds | Who writes them | Where they live |
 |---|---|---|---|
-| **Definitions** (the factory "as code") | `Agent`, `Skill`, `Workflow`, `ArtifactType`, `Source`, `Repository` | Platform team, via Git | this repo |
-| **Runtime objects** | `WorkItem` (plus its artifacts) | UI, sync, agents | the factory's store/API |
+| **Definitions** (the factory "as code") | `Agent`, `Skill`, `Workflow`, `ArtifactType`, `Source`, `Repository`, `KnowledgeSource`, `ToolServer` | Platform team, via Git | this repo |
+| **Runtime objects** | `WorkItem` (plus its artifacts), `KnowledgeEntry` | UI, sync, agents | the factory's store/API |
 
 Runtime objects follow the Kubernetes split: humans and sync write the **`spec`** (intent), and the factory
 controller writes the **`status`** (observed state). The UI is a view over `WorkItem` objects.
@@ -25,6 +25,11 @@ flowchart LR
   CR -- searches --> Repository
   Agent -- reads --> Repository
   Agent -- writes artifacts / context --> WorkItem
+  Agent -- proposes --> KE["KnowledgeEntry (human approves)"]
+  KE -- approved, as context --> Agent
+  KS["KnowledgeSource (docs, runbooks)"] -- searched by --> Agent
+  Agent -- calls allowed tools --> TS["ToolServer (MCP)"]
+  Harness["Local agent harness"] -- MCP /api/mcp --> WorkItem
 ```
 
 | Kind | Purpose |
@@ -32,6 +37,8 @@ flowchart LR
 | **Source** | A connector that syncs work items from an external system, such as Jira or GitHub Issues. It defines the field mapping and the default repositories and workflow for synced items. |
 | **Repository** | The codebase that work items change and that agents research. It holds the Git URL, default branch, and indexing settings, plus ownership metadata. |
 | **WorkItem** | One unit of demand (task, bug, feature) moving through a workflow. This is a row in the dashboard. |
+| **KnowledgeEntry** | A piece of reusable knowledge an agent proposed (or a human edited). Used by agents only after a human approves it (ADR-0030). It outlives the work item it came from. |
+| **KnowledgeSource** | External docs agents can search, e.g. product docs or runbooks. `type: files` searches a local folder; other types (e.g. a vector store) plug in later. |
 | **code-researcher** (Agent) | A shared, read-only agent. Other agents **delegate** to it, for example: "What would it take to add X?" or "Where does this stack trace come from?" |
 
 ## WorkItem lifecycle (`status.phase` + `status.stage`)
@@ -48,6 +55,8 @@ stateDiagram-v2
   Running --> AwaitingApproval: human-approval gate (Approval created)
   AwaitingApproval --> Running: approved (next stage) / rejected (onReject stage)
   Running --> Closed: triage outcome duplicate / reject
+  Running --> Waiting: run can't proceed yet (model quota / rate limit, or no LLM with FACTORY_SIMULATION=wait)
+  Waiting --> Running: the run proceeds again (automatic)
   Running --> Failed: agent run failed
   Running --> Done: last stage passed
   Done --> [*]

@@ -12,3 +12,19 @@ spec:
   filesystem: { workspace: /workspace, rootReadOnly: true, tmpfs: [/tmp] }
   user: "1000:1000"
   isolation: container
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: go-build
+spec:
+  image: docker.io/library/golang:1.26-bookworm
+  resources: { cpu: "4", memory: 8Gi, pids: 1024, timeout: 60m }
+  env:                       # ADR-0033: plain values for every command (never secrets)
+    GOPROXY: https://proxy.golang.org,direct
+  network:
+    mode: allowlist
+    allow: [proxy.golang.org, sum.golang.org, storage.googleapis.com, github.com]
+  filesystem: { workspace: /workspace, rootReadOnly: true, tmpfs: [/tmp] }
+  user: "1000:1000"
+  isolation: container

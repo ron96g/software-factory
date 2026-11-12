@@ -52,3 +52,13 @@ apiVersion: factory.ai-dlc.io/v1alpha1
 kind: ArtifactType
 metadata: { name: release }
 spec: { format: yaml, description: "Version, changelog, deployment target, rollout and rollback plan." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: support-analysis }
+spec: { format: markdown, description: "Service request analysis: request type, findings with repo:path:line, root-cause hypothesis, outcome (resolvable|needs-info|needs-change|out-of-scope), internal notes and a proposed change if any." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: customer-response }
+spec: { format: markdown, description: "Reply to the requester, ready to post on the service desk ticket after human approval. No internal details." }

@@ -99,6 +99,13 @@ export function createOutboxController(d: {
         if (msg.spec.sourceRef) {
           source = (await resolveRef<Source>(d.reader, "Source", msg.spec.sourceRef, namespace)) ?? undefined;
           if (!source) throw new Error(`source ${msg.spec.sourceRef.name} not found`);
+          // Read-only sources never receive writes, whoever enqueued the message. Final, no retries.
+          if (!source.spec.sync?.bidirectional) {
+            const lastError = `source ${source.metadata.name} is read-only (sync.bidirectional is not true); nothing was sent`;
+            await d.status.updateStatus({ ...msg, status: { phase: "Failed", attempts: msg.status?.attempts ?? 0, lastError } });
+            await d.events.warning(msg, "DeliveryBlocked", lastError);
+            return;
+          }
         }
         const handler = d.handlers.get(msg.spec.action);
         if (!handler) throw new Error(`no outbox handler for action "${msg.spec.action}"`);
@@ -155,6 +162,8 @@ export function createClarificationSyncController(d: {
       const wiRef = ownerOf(c, "WorkItem");
       const wi = wiRef ? await d.reader.get<WorkItem>("WorkItem", namespace, wiRef.name) : null;
       if (!wi?.spec.externalRef) return; // manual items are answered in the UI only
+      // ADR-0029: only the item's current blocker can be answered (a restart leaves the old round's one open).
+      if (wi.status?.blockedBy?.name !== c.metadata.name) return { requeueAfterMs: d.pollMs };
       const source = await resolveRef<Source>(d.reader, "Source", wi.spec.sourceRef, namespace ?? DEFAULT_NAMESPACE);
       const connector = source ? d.connectors.get(source.spec.type) : undefined;
       if (!source || !connector || !canReadComments(connector) || !source.spec.sync?.bidirectional) return;

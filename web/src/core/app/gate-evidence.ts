@@ -1,4 +1,5 @@
 import type { AgentRun, Artifact, Clarification, FactoryEvent } from "../model/kinds.ts";
+import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import type { EvidenceItem, EvidenceSeverity, GateEvidence } from "../ports/index.ts";
 
 /** Outcome → severity. Unknown outcomes are informational (ok). */
@@ -42,7 +43,7 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
   // Latest run per step (highest round), ignoring replays and unfinished runs.
   const latest = new Map<string, AgentRun>();
   for (const r of input.runs) {
-    if (r.spec.replayOf || r.status?.phase !== "Succeeded") continue;
+    if (r.spec.replayOf || r.status?.phase !== "Succeeded" || r.metadata.labels?.[LABEL_SUPERSEDED]) continue;
     const key = `${r.spec.stage}/${r.spec.step}`;
     const prev = latest.get(key);
     if (!prev || roundOf(r) >= roundOf(prev)) latest.set(key, r);

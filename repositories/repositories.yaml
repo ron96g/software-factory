@@ -67,3 +67,29 @@ spec:
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
     setup:
       - cd web && npm ci --no-audit --no-fund --loglevel=error
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Repository
+metadata:
+  name: controlplane
+  labels:
+    factory.ai-dlc.io/language: go
+  annotations:
+    description: Telekom Controlplane (TARDIS) Go monorepo, https://github.com/telekom/controlplane
+spec:
+  local:
+    # Dedicated clone for the factory (it adds git worktrees and factory/* branches there), outside the factory root.
+    path: ~/git/personal/software-factory-repos/controlplane
+  # No `git:` on purpose: without it the factory never pushes branches or opens PRs on the public
+  # telekom/controlplane repository (ADR-0023). Add `git: { url, defaultBranch: main, secretRef }` to enable that.
+  index:
+    enabled: true
+    type: ripgrep
+    include: ["**/*.go", "**/*.md", "**/*.mdx", "**/*.yaml", "**/Makefile"]
+    exclude: ["**/zz_generated*.go", "**/node_modules/**", "docs/static/**"]
+  context:
+    docs: [AGENTS.md, README.md]
+  sandboxRef: { name: go-build }
+  checks:                    # The repo's AGENTS.md: always use the Makefile targets. Checks time out after 15 min.
+    build: make build-all
+    unit-tests: make test-all

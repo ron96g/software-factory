@@ -5,6 +5,7 @@ import type {
   ExecutionContext,
   Lookup,
   PromptBuilder,
+  ProposedKnowledge,
   SkillHandlerLookup,
 } from "../ports/index.ts";
 import { promptHash } from "./prompt-builder.ts";
@@ -104,6 +105,20 @@ export class SkillHandlerExecutor implements AgentExecutor {
   }
 }
 
+/** ADR-0030: tolerant parsing of proposed knowledge; bounded so one run can't flood the review queue. */
+export function parseKnowledge(v: unknown): ProposedKnowledge[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((k): k is Record<string, unknown> => !!k && typeof k === "object")
+    .map((k) => ({
+      title: typeof k.title === "string" ? k.title.trim().slice(0, 200) : "",
+      content: typeof k.content === "string" ? k.content.trim().slice(0, 20_000) : "",
+      tags: Array.isArray(k.tags) ? k.tags.filter((t): t is string => typeof t === "string").map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 10) : [],
+    }))
+    .filter((k) => k.title && k.content)
+    .slice(0, 5);
+}
+
 export function parseAgentJson(text: string): AgentResult {
   const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   const start = cleaned.indexOf("{");
@@ -117,5 +132,6 @@ export function parseAgentJson(text: string): AgentResult {
     classification: raw.classification && typeof raw.classification === "object" ? (raw.classification as AgentResult["classification"]) : undefined,
     outcome: typeof raw.outcome === "string" ? raw.outcome : undefined,
     questions: arr<string>(raw.questions).filter((q) => typeof q === "string" && q.trim()),
+    knowledge: parseKnowledge(raw.knowledge),
   };
 }

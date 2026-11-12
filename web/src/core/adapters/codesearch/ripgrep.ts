@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
 import { access } from "node:fs/promises";
 import type { Repository } from "../../model/kinds.ts";
 import type { CodeHit, CodeSearch, CodeSearchQuery, WorkspaceProvider } from "../../ports/index.ts";
+import { resolveLocalPath } from "../fs/paths.ts";
 
 /** ADR-0008: ripgrep over a local checkout. Fixed-string, case-insensitive; read-only by construction. */
 export class RipgrepCodeSearch implements CodeSearch {
@@ -19,7 +19,7 @@ export class RipgrepCodeSearch implements CodeSearch {
       for (const g of repo.spec.index?.exclude ?? []) args.push("-g", `!${g}`);
       for (const g of ["!node_modules", "!.next", "!.venv", "!*.lock", "!package-lock.json", "!.serena", "!.workspaces", "!data"]) args.push("-g", g);
       args.push("--", term, ".");
-      const lines = await run(this.bin, args, root);
+      const lines = await runRipgrep(this.bin, args, root);
       let n = 0;
       for (const line of lines) {
         if (n >= max) break;
@@ -43,7 +43,7 @@ export class RipgrepCodeSearch implements CodeSearch {
   }
 }
 
-function run(bin: string, args: string[], cwd: string): Promise<string[]> {
+export function runRipgrep(bin: string, args: string[], cwd: string): Promise<string[]> {
   return new Promise((ok, fail) => {
     const p = spawn(bin, args, { cwd });
     let out = "";
@@ -62,7 +62,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   async checkout(repo: Repository): Promise<string> {
     const p = repo.spec.local?.path;
     if (!p) throw new Error(`repository ${repo.metadata.name} has no spec.local.path (git checkout arrives in v0.3)`);
-    const dir = isAbsolute(p) ? p : resolve(this.root, p);
+    const dir = resolveLocalPath(this.root, p);
     await access(dir);
     return dir;
   }

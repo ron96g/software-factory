@@ -10,7 +10,8 @@ spec:
   role: Codebase Researcher
   skillRefs:
     - name: codebase-research
-  tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)
+    - name: knowledge-base
+  tools: [search_code, read_file, list_files, search_knowledge]   # read-only workspace tools (ADR-0021)
   permissions:
     repositories: read-only
   invocation:

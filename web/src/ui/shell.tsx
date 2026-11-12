@@ -48,7 +48,15 @@ function HealthBadges() {
           </Badge>
         </Tooltip>
       )}
-      <Tooltip label={data.llm.available ? `${data.llm.provider} · ${data.llm.model}` : "No ModelProvider key configured: deterministic/simulated agents"}>
+      <Tooltip
+        label={
+          data.llm.available
+            ? `${data.llm.provider} · ${data.llm.model}`
+            : data.simulation === "wait"
+              ? "No ModelProvider key configured: agent runs that need an LLM wait (FACTORY_SIMULATION=wait)"
+              : "No ModelProvider key configured: deterministic/simulated agents"
+        }
+      >
         <Badge variant="light" color={data.llm.available ? "teal" : "gray"} leftSection={<IconBrain size={12} />}>
           {data.llm.available ? data.llm.provider : "no LLM"}
         </Badge>
