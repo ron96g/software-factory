@@ -1,0 +1,583 @@
+web/src/core/agents/work-item-digest.ts
+  s_3c433e3c1964d4::t_0dc5ab9ec052ac 12
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 1-11,13-38
+web/src/ui/navbar.tsx
+  s_3c433e3c1964d4::t_89599800bf4a22 18,39
+web/src/core/runtime/controllers/workitem.ts
+  s_3c433e3c1964d4::t_eb08f306be426e 21,228,323-327
+  s_3c433e3c1964d4::t_f9c4c1b567712e 1,267-269
+  s_3c433e3c1964d4::t_af7dfead6ba085 23,44,315-316
+  s_3c433e3c1964d4::t_59958369c90ff7 220-227
+  s_3c433e3c1964d4::t_99044d98dea904 22,24,43,45,229,284,337-344,351-352
+  s_3c433e3c1964d4::t_e67ce03f7a1121 270
+web/src/core/adapters/sandbox/check-runner.ts
+  s_3c433e3c1964d4::t_1164560dbd4ceb 1-33
+web/src/core/tickets/actions.ts
+  s_3c433e3c1964d4::t_66f10c842dd2b0 11,17,19,92
+  s_3c433e3c1964d4::t_d09ffcced1dd9e 32
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 105
+  s_3c433e3c1964d4::t_86896d5dac34f3 2,22,26,39,53,55,64-65,73,77,79,83,91,93,98-99,104
+  s_3c433e3c1964d4::t_867b590dd939f3 5,34-38,46,74,78,102
+  s_3c433e3c1964d4::t_db0b8bb4f7b856 1,3-4,6-9,12-13,20-21,23-25,27-31,33,40,42-45,47-52,54,56-63,66-72,75-76,80-82,84-90,94-97,100-101,103,106-112
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 10,14-16,18,41
+web/src/core/ports/agents.ts
+  s_3c433e3c1964d4::t_06e81096a02741 48
+web/src/core/adapters/workspaces/snapshot.ts
+  s_3c433e3c1964d4::t_1164560dbd4ceb 1-2,5-16,18-22,28-41
+  s_3c433e3c1964d4::t_4cf40ac0d2d88c 3-4,17,23-27
+components/kubernetes-cr-mcp/src/server.ts
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1-31,33-36
+  s_3c433e3c1964d4::t_d368253571e6f8 32
+components/kubernetes-cr-mcp/tsconfig.json
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 1-14,16
+  s_3c433e3c1964d4::t_27183d3be3ff73 15
+components/kubernetes-cr-mcp/src/index.ts
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1-29
+web/src/app/api/chats/agents/route.ts
+  s_3c433e3c1964d4::t_89599800bf4a22 1-4
+web/src/app/api/chats/route.ts
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 4,6-7
+  s_3c433e3c1964d4::t_89599800bf4a22 1-3,5,8
+components/kubernetes-cr-mcp/README.md
+  s_3c433e3c1964d4::t_a25c844ccc91ae 1-68,71-79,81-86,90-181
+  s_3c433e3c1964d4::t_ca579031a8e4f3 69-70
+  s_3c433e3c1964d4::t_d368253571e6f8 80,87-89
+web/src/core/model/kinds.ts
+  s_3c433e3c1964d4::t_5f53d4e0d8971b 304
+  s_3c433e3c1964d4::t_1772a4041e368f 406
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 466
+  s_3c433e3c1964d4::t_08e97e5d4217f3 19-20,210-211,407-409,416-421
+  s_3c433e3c1964d4::t_9e3c13d4a15953 492
+  s_3c433e3c1964d4::t_6e899c429af08b 98-103,106-109,143,224-225,293-297,299-302,305,321-322,491,493-496
+  s_3c433e3c1964d4::t_06e81096a02741 303
+  s_3c433e3c1964d4::t_d7ed68d603b4d0 306-320,323-325,327-330,333-341
+  s_3c433e3c1964d4::t_e34cd7bbb7e3fa 81,129-130,456-465,467-478,490,519
+  s_3c433e3c1964d4::t_5161e1004c831a 326
+  s_3c433e3c1964d4::t_052f20beb5ce4b 399
+  s_3c433e3c1964d4::t_47233f36707f9d 104-105,144,298,331-332
+  s_3c433e3c1964d4::t_e3a0c78ecf6ce2 212-221
+  s_3c433e3c1964d4::t_072879b3904fcf 342
+docs/adr/0040-reviewed-jira-publication.md
+  s_3c433e3c1964d4::t_e34cd7bbb7e3fa 1-51
+docs/adr/0042-reliable-verification-and-recovery.md
+  s_3c433e3c1964d4::t_64a2043ed12d6f 1-2,4-6,8-123,127-137,160,194-201
+  s_3c433e3c1964d4::t_e080707b415789 161-182,186-193
+  s_3c433e3c1964d4::t_6bb50606854e96 183-185
+  s_3c433e3c1964d4::t_5161e1004c831a 3,7,124-126,138-159
+AGENTS.md
+  s_3c433e3c1964d4::t_2373dfc05842be 185
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 174
+  s_3c433e3c1964d4::t_61f6d30ca7c8d0 181
+  s_3c433e3c1964d4::t_5161e1004c831a 19
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 91
+  s_3c433e3c1964d4::t_9d8704448e43d6 180
+  s_3c433e3c1964d4::t_58632c9c088a7c 183
+  s_3c433e3c1964d4::t_5892158232d488 158,187-188
+  s_3c433e3c1964d4::t_3141dfaf802277 182
+  s_3c433e3c1964d4::t_7ad9f1614ed532 184
+  s_3c433e3c1964d4::t_641e7bbe66dc04 186
+  s_3c433e3c1964d4::t_1a0f5e5d801b27 189
+web/src/core/registry/kinds.ts
+  s_3c433e3c1964d4::t_3a700f1546711e 16
+components/kubernetes-cr-mcp/src/ports.ts
+  s_3c433e3c1964d4::t_d368253571e6f8 57
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 1-56,58-75
+components/kubernetes-cr-mcp/src/queries.ts
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1-7,9-16,18-31,33-42,61-95,97-106,109,114-140
+  s_3c433e3c1964d4::t_d368253571e6f8 43-60,107
+  s_3c433e3c1964d4::t_27183d3be3ff73 8,17,32,96,108,110-113
+web/src/app/api/chats/[name]/turns/route.ts
+  s_3c433e3c1964d4::t_89599800bf4a22 1-6
+docs/adr/0037-work-item-agent-chat-context.md
+  s_3c433e3c1964d4::t_052f20beb5ce4b 1-41
+web/src/core/work-item-followups.test.ts
+  s_3c433e3c1964d4::t_7e7b2a27414393 117
+  s_3c433e3c1964d4::t_093025b76cdecd 17-38,44,68,103,107,136,145,173
+  s_3c433e3c1964d4::t_73800fc5465e32 14-16
+  s_3c433e3c1964d4::t_3e308fee93590c 39-43
+  s_3c433e3c1964d4::t_fa5cc5ae99a31a 45-47,65-67
+  s_3c433e3c1964d4::t_333056d8e90a87 69-71,100-102
+  s_3c433e3c1964d4::t_f685425a2050a1 104-106
+  s_3c433e3c1964d4::t_8461146460c2b0 108-110,114-116
+  s_3c433e3c1964d4::t_979c42af73de1c 118-120,133-135
+  s_3c433e3c1964d4::t_2739699c4a4643 137-139,142-144
+  s_3c433e3c1964d4::t_8a0f9691d39f2d 146-148,170-172
+  s_3c433e3c1964d4::t_18cf70e75a13c1 1-13,48-64,72-99,111-113,121-132,140-141,149-169
+web/src/app/api/chats/[name]/route.ts
+  s_3c433e3c1964d4::t_89599800bf4a22 1-8
+web/src/core/tickets/publication.ts
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 39,66
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 3,29
+  s_3c433e3c1964d4::t_86896d5dac34f3 63
+  s_3c433e3c1964d4::t_867b590dd939f3 99
+  s_3c433e3c1964d4::t_8d504cddfd0e71 6,21-26,31-36
+  s_3c433e3c1964d4::t_660cf8009c184d 1-2,4-5,7-20,27-28,30,37-38,40-62,64-65,67-98,100-133
+docs/adr/0039-work-item-followups.md
+  s_3c433e3c1964d4::t_e3a0c78ecf6ce2 1-50
+components/kubernetes-cr-mcp/package.json
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 1-24
+README.md
+  s_3c433e3c1964d4::t_83fb0204c3bff6 146-149
+  s_3c433e3c1964d4::t_1c170c938aff00 92-97
+  s_3c433e3c1964d4::t_61f6d30ca7c8d0 88-89
+  s_3c433e3c1964d4::t_9243bd4a57c775 104-115
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 116-135
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 82-87,91,98-103
+  s_3c433e3c1964d4::t_76671a18c51287 90
+  s_3c433e3c1964d4::t_e080707b415789 136-145,150-154
+  s_3c433e3c1964d4::t_a25c844ccc91ae 177-180
+web/src/app/api/workitems/[name]/checks/route.ts
+  s_243bad6a8136aa::t_fb601f79146671 1-20
+web/src/core/refs/refs.ts
+  s_3c433e3c1964d4::t_3a700f1546711e 16-17
+  s_3c433e3c1964d4::t_828bd552955077 25
+  s_3c433e3c1964d4::t_9243bd4a57c775 4
+agents/verifier.md
+  s_3c433e3c1964d4::t_06e81096a02741 13,27-30
+web/src/ui/ticket-actions.tsx
+  s_3c433e3c1964d4::t_867b590dd939f3 10,67,82
+  s_3c433e3c1964d4::t_b2b43335405d14 1-9,11-66,68-81,83-121
+web/src/app/chats/page.tsx
+  s_3c433e3c1964d4::t_89599800bf4a22 1,3,6,8-13,17-18,20-24,26-36
+  s_3c433e3c1964d4::t_1c170c938aff00 2,4-5,7,14-16,19,25
+web/src/core/agents/context-factory.ts
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 1
+  s_3c433e3c1964d4::t_04b79e2b641f68 18,64
+  s_3c433e3c1964d4::t_06e81096a02741 13,33,124-125
+web/src/app/api/workitems/[name]/ticket/route.ts
+  s_3c433e3c1964d4::t_c900eabf803c26 1-8
+docs/ai-dlc-glossary.md
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 91
+  s_3c433e3c1964d4::t_83fb0204c3bff6 177
+  s_3c433e3c1964d4::t_2373dfc05842be 170-173
+  s_3c433e3c1964d4::t_e080707b415789 174-176,178
+  s_3c433e3c1964d4::t_61f6d30ca7c8d0 92
+  s_3c433e3c1964d4::t_9243bd4a57c775 162-163
+  s_3c433e3c1964d4::t_a25c844ccc91ae 166-167
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 157-159
+docs/adr/0035-standalone-kubernetes-cr-mcp.md
+  s_3c433e3c1964d4::t_f2612c671cfd1e 17
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 1-16,18-53
+web/src/core/ports/integration.ts
+  s_3c433e3c1964d4::t_59958369c90ff7 198
+  s_3c433e3c1964d4::t_86896d5dac34f3 230
+web/src/core/agents/agent-chat.ts
+  s_3c433e3c1964d4::t_61beb4d438fc82 114-115,119,121
+  s_3c433e3c1964d4::t_04b79e2b641f68 1-6,8-10,12-18,22,27,39,41-42,46-56,65-67,69,72-97,99-101,111-112,122,127-135
+  s_3c433e3c1964d4::t_828bd552955077 40,44-45
+  s_3c433e3c1964d4::t_9c66e7139ab060 7,19-21,28-38,98,102-103,105-110,113,116-118,120,123-126
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 11,23-26,43,57-64,68,70-71
+  s_3c433e3c1964d4::t_fe62e905718b87 104
+web/src/core/gate-evidence.test.ts
+  s_3c433e3c1964d4::t_71cb66be6ad6dc 39-58
+  s_3c433e3c1964d4::t_694d25483e093b 38
+web/src/core/workflow/checks.ts
+  s_3c433e3c1964d4::t_1164560dbd4ceb 5,66
+  s_3c433e3c1964d4::t_3a700f1546711e 26,28,67,77,86
+web/src/app/items/[name]/page.tsx
+  s_3c433e3c1964d4::t_557332b6691d72 98
+  s_3c433e3c1964d4::t_0528e6296b2ea2 37,52,103-104,278,312
+  s_3c433e3c1964d4::t_89599800bf4a22 117
+  s_3c433e3c1964d4::t_b2b43335405d14 38,131-132
+  s_3c433e3c1964d4::t_1c170c938aff00 15,36,51,53,71,92,97,105-116
+  s_243bad6a8136aa::t_fb601f79146671 39,134
+  s_d6eb80618995ac::t_46977c797671c1 40,133
+web/src/app/api/workitems/[name]/verification/route.ts
+  s_d6eb80618995ac::t_716694359897d1 5
+  s_d6eb80618995ac::t_46977c797671c1 1-4,6-22
+schemas/common.schema.json
+  s_3c433e3c1964d4::t_3a700f1546711e 8
+web/src/core/factory.ts
+  s_3c433e3c1964d4::t_c900eabf803c26 71,83-84,271-273,276-277,295,355
+  s_3c433e3c1964d4::t_b9aa8e5acd9ce1 66-68,223-224,233-234,307,311-315,340
+  s_3c433e3c1964d4::t_548a35818571b4 77-81,208-212,215-216,220,235,253,282-283,287,290,326,357
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 53,308,310,322
+  s_3c433e3c1964d4::t_867b590dd939f3 274-275
+  s_3c433e3c1964d4::t_66f10c842dd2b0 82,309
+  s_3c433e3c1964d4::t_af7dfead6ba085 291
+  s_3c433e3c1964d4::t_40c055bacd6a1d 299-304
+  s_3c433e3c1964d4::t_97945edca1a7e4 341-342
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 7,139-147
+  s_3c433e3c1964d4::t_3a700f1546711e 72-76,132,284-286,289,356,371
+  s_3c433e3c1964d4::t_58150261e849b0 288
+.gitignore
+  s_3c433e3c1964d4::t_cfdc54e23d72e1 5
+components/kubernetes-cr-mcp/config/controlplane.yaml
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1-44
+docs/adr/0038-explicit-chat-completion.md
+  s_3c433e3c1964d4::t_ea6a23c930f172 18-19
+  s_3c433e3c1964d4::t_6b3f47ce7b50a9 29-30,37
+  s_3c433e3c1964d4::t_5f5b374562a2fd 1-17,20-28,31-36,38-40
+web/src/ui/api.ts
+  s_3c433e3c1964d4::t_9243bd4a57c775 83,86-87,91
+  s_3c433e3c1964d4::t_7e7b2a27414393 84-85
+web/src/core/tickets.test.ts
+  s_3c433e3c1964d4::t_f40408b2525263 1-3,6-13,15-18,20-35,38-76,78-119,149-153,155-157,159-166,168-184,195-200
+  s_3c433e3c1964d4::t_a24e419a3b5d98 14,36-37,77,154
+  s_3c433e3c1964d4::t_d09ffcced1dd9e 4-5,120-148
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 158,167,191-194
+  s_3c433e3c1964d4::t_9da64b8bda91a1 19,185-190
+web/src/core/checks/scheduler.ts
+  s_3c433e3c1964d4::t_1136dc53e5fa89 32,64,147-148
+  s_4203ed21af3929::t_b757925782ec67 37-40,44-45,47-48,233
+  s_3c433e3c1964d4::t_139db3fa71ab5e 42
+  s_4203ed21af3929::t_397fd962a1ce84 26-27
+  s_4203ed21af3929::t_ee393a91501716 52-53,236,238
+  s_4203ed21af3929::t_b0ae0f550d0e75 1-2,4-25,28-31,33-36,50-51,54-63,65-68,72-109,111-143,145-146,149-232,234-235,237,239-250
+  s_4203ed21af3929::t_42b8f8bd2c58f8 3,69-71
+  s_4203ed21af3929::t_2d9dcc6834c763 110,144
+  s_4203ed21af3929::t_8b071533dee1a6 41,43,46,49
+web/src/core/verification.test.ts
+  s_3c433e3c1964d4::t_af7dfead6ba085 118,338
+  s_3c433e3c1964d4::t_2d7ac7c5a95764 227,230-232,245-256,259-270,363-365
+  s_3c433e3c1964d4::t_d6aaf44f817901 48
+  s_3c433e3c1964d4::t_e9a4861cec3014 1-6,8-12,14-16,18-21,24-32,35-47,49-97,99,222-226,228-229,233-244,257-258,271-309,323-328,330-337,339-345,347-361,366-388,415-416
+  s_3c433e3c1964d4::t_96f3fd82ac94a4 7,17,22-23,33-34,98,100-117,119-149,171-207,210,218-221
+  s_3c433e3c1964d4::t_9dfa3b38de7463 208-209,211-217
+  s_3c433e3c1964d4::t_0d6c819ea468b7 150-170
+  s_3c433e3c1964d4::t_ed1fea9d0fb27f 13,389-414
+  s_3c433e3c1964d4::t_4e4c38f5e0f8c9 310-322
+  s_3c433e3c1964d4::t_fd8f601ecfedd7 329,346,362
+web/src/ui/check-runs.tsx
+  s_243bad6a8136aa::t_757807e56fdef1 118-119
+  s_243bad6a8136aa::t_518c79bf8818b6 1-17,19-83,85-86,89-112,114-117,120-130,133-137,139-142,145-181
+  s_243bad6a8136aa::t_98ded93cfcea98 18
+  s_3c433e3c1964d4::t_9dfa3b38de7463 84,87-88,113,131-132,138,143-144
+web/src/core/checks.test.ts
+  s_3c433e3c1964d4::t_33fdde480b76b0 124,242-247
+  s_3c433e3c1964d4::t_a712abf1590993 6,25,89-96,111,188-206
+  s_3c433e3c1964d4::t_818eac11e5bb74 1-5,7-10,12-15,17-24,26-33,35,37-83,85-88,97-110,112-123,127-187,207-241,248-249
+  s_3c433e3c1964d4::t_40f0b283a87a3a 125-126
+  s_3c433e3c1964d4::t_6b95d5940a8f69 11,16,34,36
+  s_3c433e3c1964d4::t_5161e1004c831a 84
+web/src/core/ports/index.ts
+  s_3c433e3c1964d4::t_08e97e5d4217f3 12
+  s_3c433e3c1964d4::t_d7ed68d603b4d0 15
+  s_3c433e3c1964d4::t_6e899c429af08b 16
+  s_3c433e3c1964d4::t_e3a0c78ecf6ce2 13
+  s_3c433e3c1964d4::t_e34cd7bbb7e3fa 14
+web/src/core/agents/tool-loop.ts
+  s_3c433e3c1964d4::t_59958369c90ff7 25,64,167
+  s_3c433e3c1964d4::t_04b79e2b641f68 24,62,206,215,218
+web/src/app/api/chats/[name]/workitem/route.ts
+  s_3c433e3c1964d4::t_89599800bf4a22 1-12
+web/src/app/api/workitems/[name]/followups/route.ts
+  s_3c433e3c1964d4::t_0dc5ab9ec052ac 1-10
+web/src/core/adapters/sources/jira.ts
+  s_3c433e3c1964d4::t_867b590dd939f3 79,131,136
+  s_3c433e3c1964d4::t_eb08f306be426e 2,53,75,77-78,80,129-130,132-135,137-171
+web/src/core/app/gate-evidence.ts
+  s_3c433e3c1964d4::t_71cb66be6ad6dc 31,33-34,82,95
+web/src/core/ports/agent-chat.ts
+  s_3c433e3c1964d4::t_fe62e905718b87 3
+  s_3c433e3c1964d4::t_08e97e5d4217f3 2,4-12,14-17,19-23,38-48,51-56
+  s_3c433e3c1964d4::t_5f5b374562a2fd 49-50
+  s_3c433e3c1964d4::t_052f20beb5ce4b 1,13,18,24-37
+web/src/app/chats/[name]/page.tsx
+  s_3c433e3c1964d4::t_1c170c938aff00 44-46,49-52
+  s_3c433e3c1964d4::t_76671a18c51287 32,64-82
+  s_3c433e3c1964d4::t_89599800bf4a22 1-31,33-43,47-48,53-63,83-116
+web/src/core/ports/checks.ts
+  s_3c433e3c1964d4::t_d7ed68d603b4d0 1-28
+web/src/core/runtime/controller-manager.ts
+  s_3c433e3c1964d4::t_1772a4041e368f 37
+  s_3c433e3c1964d4::t_93f266b5a70aeb 15,20,36,38-39,56,60,65,131
+  s_3c433e3c1964d4::t_632bb488768bdd 43
+web/src/core/app/factory-app.ts
+  s_3c433e3c1964d4::t_d400693aa1a9c0 325-348
+  s_3c433e3c1964d4::t_40c055bacd6a1d 243-244,260
+  s_3c433e3c1964d4::t_0dc5ab9ec052ac 491-492
+  s_3c433e3c1964d4::t_eb08f306be426e 530
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 292,294-295,305,310-312,315-317,355
+  s_3c433e3c1964d4::t_4cf40ac0d2d88c 372,672,677-683
+  s_3c433e3c1964d4::t_a1633185334cc5 324,349
+  s_3c433e3c1964d4::t_cbf64fd38b33a4 551-556
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 364-368
+  s_3c433e3c1964d4::t_b9aa8e5acd9ce1 3,56-59,91,119-121,189-191,215,225-230,267,285-291,296-304,306-309,313-314,321-323,350-354,356-363,369,617,684
+  s_3c433e3c1964d4::t_78d357ad2f633b 293
+  s_3c433e3c1964d4::t_71cb66be6ad6dc 153,157,163,539-542
+  s_3c433e3c1964d4::t_99044d98dea904 66,74,525-528,543
+  s_3c433e3c1964d4::t_97945edca1a7e4 60-65,68,71,92-93,122-124,192,203,206,216-224,231-242,245-259,261-266,268-284
+  s_3c433e3c1964d4::t_adb2456b5db621 370
+  s_3c433e3c1964d4::t_b69d5fa564dffd 685
+web/src/core/agents/recorded-tool-turns.ts
+  s_3c433e3c1964d4::t_04b79e2b641f68 1-11,13-15,17-33
+  s_3c433e3c1964d4::t_9c66e7139ab060 16
+  s_3c433e3c1964d4::t_fe62e905718b87 12
+web/src/core/runtime/controllers/conversation.ts
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 44,49,73,91-92
+  s_3c433e3c1964d4::t_828bd552955077 9-16,19,24-31,33-43,45-48,50-66,71,78,80-90,93-94,101
+  s_3c433e3c1964d4::t_89599800bf4a22 32,74,95-100,102
+web/src/core/checks/classifiers.ts
+  s_4203ed21af3929::t_6a21e8ca79c5f4 1-19,21-78
+  s_4203ed21af3929::t_ee227f12dc9480 20
+web/src/core/agents/work-item-record.ts
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 1-22
+web/src/core/ports/tickets.ts
+  s_3c433e3c1964d4::t_86896d5dac34f3 1
+  s_3c433e3c1964d4::t_e34cd7bbb7e3fa 2-48,50-53,55-58,60-65
+  s_3c433e3c1964d4::t_867b590dd939f3 49
+  s_3c433e3c1964d4::t_66f10c842dd2b0 54,59
+web/src/core/ports/verification.ts
+  s_3c433e3c1964d4::t_1136dc53e5fa89 48-51
+  s_3c433e3c1964d4::t_6e899c429af08b 1-4,6-39,52,54-60
+  s_3c433e3c1964d4::t_99044d98dea904 5,42-45
+  s_3c433e3c1964d4::t_9e3c13d4a15953 40-41,46-47
+  s_3c433e3c1964d4::t_47233f36707f9d 53
+web/src/core/verification/service.ts
+  s_3c433e3c1964d4::t_cbf64fd38b33a4 66,88-92,139,259
+  s_3c433e3c1964d4::t_5f53d4e0d8971b 81-83,420
+  s_3c433e3c1964d4::t_13de987b045ff5 194-197
+  s_3c433e3c1964d4::t_c9e25b93a8151a 19-21,24,144,253
+  s_3c433e3c1964d4::t_fd8f601ecfedd7 341-344,427-430
+  s_3c433e3c1964d4::t_2d7ac7c5a95764 22-23,59,435
+  s_3c433e3c1964d4::t_06e81096a02741 400-401,403,415
+  s_3c433e3c1964d4::t_99044d98dea904 2,154,159-161,163-164,167-169,171,175-188,203-205,248-249,323-324
+  s_3c433e3c1964d4::t_139db3fa71ab5e 406-408,419
+  s_3c433e3c1964d4::t_082ad0848a9464 1,3-5,8-9,11-18,25,54-58,60-65,67-77,79-80,84-87,93-121,127-138,140-143,145-153,155-158,162,165-166,250-252,254-258,260-261,263,268-299,302,304-322,325-336,338-340,345,347-381,384-393,397,417-418,421-426,431-434,436-462,464-469
+  s_3c433e3c1964d4::t_af7dfead6ba085 10,40-44,53,122-126,172,189-193,198-202,206-247,262,264-267,337,394-396,398-399,402,404-405,409-414,416
+  s_3c433e3c1964d4::t_234ccdc855ea26 7,26-39,45-52,78,170,173-174,300-301,303,463
+  s_3c433e3c1964d4::t_4e4c38f5e0f8c9 6,346,382-383
+web/src/core/workflow-check-runtime.test.ts
+  s_4203ed21af3929::t_d334c0eb194fe5 226,343-353
+  s_4203ed21af3929::t_679eb8a7ee4132 1-15,17-28,30-33,35-42,44-56,58,60-87,89-95,98,100-108,110,112-119,152-192,211-225,227-233,274-285,289-342,354-367
+  s_4203ed21af3929::t_019885da9af075 234-255
+  s_3c433e3c1964d4::t_9dfa3b38de7463 16,29,34,43,57,59,99,109,111,120-151
+  s_4203ed21af3929::t_459d7457928f2f 256-273,286-288
+  s_4203ed21af3929::t_e0c9b6e941c5ed 193-210
+  s_4203ed21af3929::t_ae54dc220ff56e 368-407
+  s_3c433e3c1964d4::t_139db3fa71ab5e 88,96-97
+web/src/core/checks/controller.ts
+  s_3c433e3c1964d4::t_58150261e849b0 6,21,139-150
+  s_3c433e3c1964d4::t_1136dc53e5fa89 45,65-66,106-107,268,300,305,310,333
+  s_4203ed21af3929::t_06d6aaabe2205e 32-34,47
+  s_4203ed21af3929::t_97b0b9cca9c779 1-5,7-20,22-31,35-39,42-44,52-54,60-64,67-79,86-105,108-135,137-138,151-170,172,175-267,269-288,291-296,298-299,301-304,314-332,334-338,340,342-425
+  s_4203ed21af3929::t_aafcb9d9358795 306-309,311-313
+  s_4203ed21af3929::t_9f48ec045981b3 339,341
+  s_4203ed21af3929::t_38f02eed51a345 289-290,297
+  s_4203ed21af3929::t_b38892d4be54be 55,173-174
+  s_4203ed21af3929::t_11036abd5b110a 40-41,48-49,56-58,171
+  s_4203ed21af3929::t_14f4aa2f5b02a3 80-85,136
+  s_3c433e3c1964d4::t_139db3fa71ab5e 46
+  s_4203ed21af3929::t_3d757cfb8c8ee5 50-51,59
+web/src/app/api/workitems/[name]/ticket/publish/route.ts
+  s_3c433e3c1964d4::t_c900eabf803c26 1-6
+web/src/core/mcp.test.ts
+  s_3c433e3c1964d4::t_a25c844ccc91ae 6-8,97-98,105,108,128-145,163,170-172,176
+  s_3c433e3c1964d4::t_ca579031a8e4f3 106-107,161-162,169
+tools/validate.py
+  s_3c433e3c1964d4::t_4cf40ac0d2d88c 23-24
+  s_3c433e3c1964d4::t_828bd552955077 28
+  s_3c433e3c1964d4::t_f2612c671cfd1e 46-48
+web/src/core/checks/actions.ts
+  s_3c433e3c1964d4::t_4cf40ac0d2d88c 10-11
+  s_3c433e3c1964d4::t_ea3ce5df320988 1-9,12-127
+web/src/core/checks/admission.ts
+  s_4203ed21af3929::t_a20e8db1f2715d 164-165
+  s_4203ed21af3929::t_e303e491f141af 5,10-12,25,40,44,160
+  s_4203ed21af3929::t_3d4458c0fe9c62 33,79,81
+  s_3c433e3c1964d4::t_139db3fa71ab5e 24
+  s_4203ed21af3929::t_8df62a795e5052 28-29,37
+  s_3c433e3c1964d4::t_9dfa3b38de7463 23,55-56,61-62
+  s_4203ed21af3929::t_a02bf97ea93b8e 1-4,6-9,13-17,20-22,30-32,38-39,41-43,45-54,57-60,63-75,77-78,80,82-159,161-163,166-171
+  s_4203ed21af3929::t_306dc7614c355d 18-19,26-27,34-36,76
+web/src/core/runtime/outbox.ts
+  s_3c433e3c1964d4::t_4f5c81b776e025 97,100,122
+  s_3c433e3c1964d4::t_eb08f306be426e 22-23,82,90,101,108-111,120-121,125,135,137,144
+  s_3c433e3c1964d4::t_d09ffcced1dd9e 102,124,126,134
+  s_3c433e3c1964d4::t_86896d5dac34f3 119
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 94-96,123,127
+docs/adr/0043-candidate-preparation-and-drift-recovery.md
+  s_3c433e3c1964d4::t_47233f36707f9d 1-48
+workflows/servicedesk.yaml
+  s_3c433e3c1964d4::t_c900eabf803c26 8-9,70-79
+  s_3c433e3c1964d4::t_e5214a6b5ce64c 80
+web/src/ui/verification-contract.tsx
+  s_d6eb80618995ac::t_716694359897d1 88-93,137
+  s_d6eb80618995ac::t_46977c797671c1 1-87,94-136,138-145
+components/kubernetes-cr-mcp/src/cr-mcp.test.ts
+  s_3c433e3c1964d4::t_a25c844ccc91ae 208
+  s_3c433e3c1964d4::t_d368253571e6f8 162-185
+  s_3c433e3c1964d4::t_a7f3b48a2a26f6 234-235,283
+  s_3c433e3c1964d4::t_27183d3be3ff73 1-161,186-207,209-233,236-282,284-301
+web/src/core/agents/skills.ts
+  s_3c433e3c1964d4::t_04b79e2b641f68 1-18
+web/src/app/api/workitems/[name]/followups/preview/route.ts
+  s_3c433e3c1964d4::t_0dc5ab9ec052ac 1-10
+docs/adr/0027-gate-evidence-and-guarded-approvals.md
+  s_3c433e3c1964d4::t_5161e1004c831a 3
+workflows/factory-verified.yaml
+  s_3c433e3c1964d4::t_17cd28bbd39f5a 1-13,15-142
+  s_3c433e3c1964d4::t_58150261e849b0 14
+web/src/core/ports/workflow.ts
+  s_3c433e3c1964d4::t_6e899c429af08b 23-24,43
+  s_3c433e3c1964d4::t_e34cd7bbb7e3fa 6
+web/src/core/app/work-item-followups.ts
+  s_3c433e3c1964d4::t_97945edca1a7e4 1-49
+web/src/core/agent-chat.test.ts
+  s_3c433e3c1964d4::t_bb9e9fd123eb58 12,14,20-21,49-76,78,80-82,84-111,114-127,129-142,144-168
+  s_3c433e3c1964d4::t_78d357ad2f633b 128
+  s_3c433e3c1964d4::t_fe62e905718b87 11,243
+  s_3c433e3c1964d4::t_9f4f8b046cd2d8 28-32,173,363,366,401,408-409,433-452
+  s_3c433e3c1964d4::t_60a0ff6417adc5 77,79,112-113,143
+  s_3c433e3c1964d4::t_3141dfaf802277 83
+  s_3c433e3c1964d4::t_61beb4d438fc82 25,27,206,329
+  s_3c433e3c1964d4::t_d400693aa1a9c0 410-432
+  s_3c433e3c1964d4::t_a1633185334cc5 1-10,13,15-19,22-24,26,33-48,169-172,174-196,287-328,330-362,364-365,367-400,402-407,453-504
+  s_3c433e3c1964d4::t_5f5b374562a2fd 197-205,207-235,285-286
+  s_3c433e3c1964d4::t_d8ae7758820417 236-242,244-284
+sources/sources.yaml
+  s_3c433e3c1964d4::t_c900eabf803c26 65,67-69
+web/src/ui/badges.tsx
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 20
+repositories/repositories.yaml
+  s_3c433e3c1964d4::t_f99fbfc8ba715c 111
+  s_3c433e3c1964d4::t_17cd28bbd39f5a 67-71,98-110,112
+web/src/core/workflow/compiler.ts
+  s_3c433e3c1964d4::t_9e3c13d4a15953 17-19,27-28,35,39,44
+web/src/core/v02.test.ts
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 167
+docs/adr/0041-agent-retrospectives.md
+  s_3c433e3c1964d4::t_2373dfc05842be 1-103,107-124
+  s_3c433e3c1964d4::t_f018c684a62a64 104-106
+web/src/core/agents/prompt-builder.ts
+  s_3c433e3c1964d4::t_0dc5ab9ec052ac 53-55
+skills/validation-planning.md
+  s_3c433e3c1964d4::t_17cd28bbd39f5a 1-33
+components/kubernetes-cr-mcp/src/kubernetes.ts
+  s_3c433e3c1964d4::t_ca579031a8e4f3 2-4,25-29
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1,5-24,30-79
+web/src/app/api/workitems/[name]/ticket/transition/route.ts
+  s_3c433e3c1964d4::t_c900eabf803c26 1-6
+web/src/core/adapters/sandbox/process.ts
+  s_3c433e3c1964d4::t_1164560dbd4ceb 24,33,39,42
+  s_3c433e3c1964d4::t_33fdde480b76b0 20-22,25-28,37,41,46
+web/src/ui/work-item-followups.tsx
+  s_3c433e3c1964d4::t_0528e6296b2ea2 1-7,10-53,55-66,78-82,84-91,93-107,111,114-118
+  s_3c433e3c1964d4::t_9243bd4a57c775 8-9,54,67-77,83,92,109-110,112-113
+  s_3c433e3c1964d4::t_7e7b2a27414393 108
+artifacts/artifact-types.yaml
+  s_3c433e3c1964d4::t_17cd28bbd39f5a 8-12
+web/src/core/checks/config.ts
+  s_4203ed21af3929::t_668ec62d9c2845 8-10,12-13
+  s_3c433e3c1964d4::t_1164560dbd4ceb 1-7,11,15-16,18
+  s_4203ed21af3929::t_b6138638b1f8ef 14,17
+web/src/core/agents/item-explain-responder.ts
+  s_3c433e3c1964d4::t_5f0e8d41fd9a20 1,8,14,30,40-41,52
+web/src/core/ports/work-item-followups.ts
+  s_3c433e3c1964d4::t_e3a0c78ecf6ce2 1-13,15-29
+  s_3c433e3c1964d4::t_40c055bacd6a1d 14
+web/src/core/agents/sandbox-tools.ts
+  s_3c433e3c1964d4::t_59958369c90ff7 21-23,28-30
+  s_3c433e3c1964d4::t_58150261e849b0 24-27
+web/src/core/store/sqlite-store.ts
+  s_3c433e3c1964d4::t_cbf64fd38b33a4 67-68,73-79
+docs/adr/0023-real-checks-and-draft-prs.md
+  s_3c433e3c1964d4::t_5161e1004c831a 3
+docs/adr/0036-direct-agent-conversations.md
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 35
+  s_3c433e3c1964d4::t_eb8a4860f007b4 48-49
+  s_3c433e3c1964d4::t_08e97e5d4217f3 1-34,36-47,50-55
+web/src/core/ports/sandbox.ts
+  s_3c433e3c1964d4::t_d7ed68d603b4d0 33
+web/src/ui/start-agent-chat.tsx
+  s_3c433e3c1964d4::t_1c170c938aff00 1-38
+web/src/core/tickets/review.ts
+  s_3c433e3c1964d4::t_8d504cddfd0e71 31,37-38,40
+  s_3c433e3c1964d4::t_db0b8bb4f7b856 1-2,4-28,30,32-35,41,43-49,53-57,59-62
+  s_3c433e3c1964d4::t_86896d5dac34f3 36
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 39,42,51-52
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 3,29
+  s_3c433e3c1964d4::t_867b590dd939f3 50,58
+docs/architecture.md
+  s_3c433e3c1964d4::t_61f6d30ca7c8d0 207-208,210-212
+  s_3c433e3c1964d4::t_83fb0204c3bff6 146,162-171
+  s_3c433e3c1964d4::t_6b3f47ce7b50a9 209
+  s_3c433e3c1964d4::t_fd6ac5807e46b1 116-134
+  s_3c433e3c1964d4::t_e080707b415789 50,157-161,172-191
+  s_3c433e3c1964d4::t_5161e1004c831a 8,23-26,143-145,147-156
+  s_3c433e3c1964d4::t_95ef6d88aeaae4 192
+  s_3c433e3c1964d4::t_fb2dd0f8731a50 39-40,42,51,115,193-206,213-216
+  s_3c433e3c1964d4::t_9243bd4a57c775 96-114
+  s_3c433e3c1964d4::t_a25c844ccc91ae 36-37,54
+  s_3c433e3c1964d4::t_2373dfc05842be 135-142
+  s_3c433e3c1964d4::t_1c170c938aff00 41,217-225
+agents/support-engineer.md
+  s_3c433e3c1964d4::t_ca579031a8e4f3 39
+  s_3c433e3c1964d4::t_828bd552955077 21-27
+  s_3c433e3c1964d4::t_a25c844ccc91ae 18,20,40-44
+tool-servers/tool-servers.yaml
+  s_3c433e3c1964d4::t_a25c844ccc91ae 14-31
+web/src/app/resources/[plural]/[name]/page.tsx
+  s_3c433e3c1964d4::t_89599800bf4a22 2,6,9-10,16-17,35-40
+web/src/core/factory.test.ts
+  s_3c433e3c1964d4::t_6ecd3b2f3745c2 239,258,269-272
+web/src/core/verification/context.ts
+  s_3c433e3c1964d4::t_59958369c90ff7 2-4,6,8-21,24-25,27-28,30-31,45-47,49-53,55-62
+  s_3c433e3c1964d4::t_58150261e849b0 22-23,26,29,32-39
+  s_3c433e3c1964d4::t_f9c4c1b567712e 1,5,7,40-44,48,54
+web/src/app/api/checks/[name]/logs/route.ts
+  s_243bad6a8136aa::t_fb601f79146671 1-3,5-13
+  s_243bad6a8136aa::t_5ba7ed4882ab0f 4
+web/src/core/runtime/controllers/agentrun.ts
+  s_3c433e3c1964d4::t_06e81096a02741 141
+  s_3c433e3c1964d4::t_cbf64fd38b33a4 179-182
+  s_3c433e3c1964d4::t_40c055bacd6a1d 17,35,47,49,209,249-252
+web/src/core/runtime/reconcile-errors.test.ts
+  s_3c433e3c1964d4::t_632bb488768bdd 6,11-36
+  s_47778ce1ac5fcb::t_b799313d8ab7b7 37
+components/kubernetes-cr-mcp/src/config.ts
+  s_3c433e3c1964d4::t_27183d3be3ff73 44
+  s_3c433e3c1964d4::t_c26eba6f3e5d29 1-33,35-43,45-93
+  s_3c433e3c1964d4::t_ca579031a8e4f3 34
+components/kubernetes-cr-mcp/package-lock.json
+  s_3c433e3c1964d4::t_ee66f21fb308a0 1-2188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6fe186c58fedc7724117cc21336416a2a5f76e1c",
+  "prompts": {},
+  "sessions": {
+    "s_243bad6a8136aa": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "f40b8675-639e-4c6d-9749-9cab6b9bb01d",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_3c433e3c1964d4": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9eb06620-232e-4d2c-9191-f51cf9838b75",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_4203ed21af3929": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "4bc55b4d-3a35-44ec-a50f-4c568cbc181b",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_47778ce1ac5fcb": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "73f78bb6-3397-4620-b927-5683f5c261ec",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_d6eb80618995ac": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "c071cd2d-a3cd-4f3d-a057-90196ff02a68",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
