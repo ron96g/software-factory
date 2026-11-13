@@ -148,6 +148,14 @@ Configured candidate preparation runs before AI and human review, including Cont
 freshness; later drift returns to fresh code-review with a bounded recovery budget, never approval by chat reply.
 The **Check evidence** card identifies preparation, preflight, verification and standalone jobs.
 
+Controlplane's named build/test checks automatically select modules changed since the pinned workspace baseline
+plus transitive dependents from its CI graph (ADR-0044). This covers committed and dirty changes, and applies to
+preparation, gates, agent requests and manual checks. Documentation does not expand code scope; shared tooling,
+dependency changes or unknown paths retain full validation. The card shows the exact command and scope.
+`full-build` / `full-tests` remain available when acceptance requires the whole monorepo. Other repositories can
+opt in with `moduleScope: {graph, sharedPaths, nonBuildPaths}` and `moduleScoped: true` on named `make <target>` checks.
+Policy changes require a fresh human-reviewed validation plan; deploying this does not restart existing items.
+
 Missing required evidence blocks verification. Policy-permitted exceptions require an explicit, reasoned,
 revision-bound waiver and remain **Waived**, not Passed. Migrated items retain their publication hold even after
 approvals. The legacy `factory-loop` workflow is unchanged.

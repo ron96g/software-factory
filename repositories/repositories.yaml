@@ -95,10 +95,16 @@ spec:
   context:
     docs: [AGENTS.md, README.md]
   sandboxRef: { name: go-build }
-  checks:                    # Keep full-suite coverage; longer budgets are explicit and reviewed with the plan.
-    build: { command: make build-all, timeoutMs: 1800000 }
-    unit-tests: { command: make test-all, timeoutMs: 3600000 }
-    focused-tests: { command: "make test-all MODULES='rover rover-server'", timeoutMs: 900000 }
+  moduleScope:
+    graph: .github/ci/module-graph.json
+    sharedPaths: [Makefile, "hack/**", ".github/**", ".golangci.yml", ".ko.yaml", "**/go.mod", "**/go.sum", "go.work*"]
+    nonBuildPaths: ["docs/**"]
+  checks:                    # Affected modules + transitive dependents; shared/unknown changes retain full validation.
+    build: { command: make build-all, timeoutMs: 1800000, moduleScoped: true }
+    unit-tests: { command: make test-all, timeoutMs: 3600000, moduleScoped: true }
+    focused-tests: { command: make test-all, timeoutMs: 900000, moduleScoped: true }
+    full-build: { command: make build-all, timeoutMs: 1800000 }
+    full-tests: { command: make test-all, timeoutMs: 3600000 }
     preflight:
       command: >-
         go version && command -v make && command -v gotestsum &&

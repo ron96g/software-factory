@@ -3,9 +3,9 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { checkConfig } from "./config.ts";
+import { resolveCheckConfig } from "./config.ts";
 
 export interface CheckControllerDeps {
   reader: ResourceReader;
@@ -19,6 +19,7 @@ export interface CheckControllerDeps {
   onError: (message: string) => void;
   classifiers?: Lookup<CheckResultClassifier>;
   contracts?: VerificationContracts;
+  scopes?: ModuleScopePlanner;
 }
 
 type CheckContext = { item: WorkItem; workspace: Workspace; repository: Repository };
@@ -123,15 +124,15 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         repository.metadata.resourceVersion !== run.spec.repositoryVersion) {
       return { reason: "repository identity or definition changed" };
     }
-    let config: ReturnType<typeof checkConfig>;
+    let config: Awaited<ReturnType<typeof resolveCheckConfig>>;
     try {
-      config = checkConfig(repository, run.spec.check);
+      config = await resolveCheckConfig(repository, run.spec.check, workspace, d.scopes);
     } catch (error) {
       return { reason: error instanceof Error ? error.message : "check configuration is invalid" };
     }
     if (config.command !== run.spec.command || config.timeoutMs !== run.spec.timeoutMs ||
-        config.resultFormat !== run.spec.resultFormat) {
-      return { reason: "repository command, budget or result format differs from the submitted check" };
+        config.resultFormat !== run.spec.resultFormat || JSON.stringify(config.scope) !== JSON.stringify(run.spec.scope)) {
+      return { reason: "repository command, budget, scope or result format differs from the submitted check" };
     }
     if (d.redactor.redact(config.command) !== config.command) return { reason: "configured command contains a factory secret" };
     if (workflowOrigin && !configuredForOrigin(repository, workflowOrigin, run.spec.check)) {

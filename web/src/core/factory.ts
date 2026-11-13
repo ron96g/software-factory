@@ -73,6 +73,7 @@ import { CheckActions } from "./checks/actions.ts";
 import { checkRunValidator } from "./checks/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
+import { GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
 import { SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
@@ -124,12 +125,13 @@ export async function createFactory(o: FactoryOptions) {
   const definitions = await new DefinitionStore(new GitDefinitionLoader(o.definitionsRoot)).init();
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
+  const scopes = new GitModuleScopePlanner();
   admission.addMutator(namespaceDefaulter(kinds));
   admission.addMutator(sourceDefaultsMutator());
   admission.addValidator(nameValidator());
   admission.addValidator(refValidator());
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
-  admission.addValidator(checkRunValidator());
+  admission.addValidator(checkRunValidator(scopes));
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
 
@@ -207,7 +209,7 @@ export async function createFactory(o: FactoryOptions) {
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
-  const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor });
+  const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes });
   const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
     snapshots, environments, scheduler: checkScheduler, events, clock, redactor });
   const contexts = new DefaultContextFactory({
@@ -247,7 +249,7 @@ export async function createFactory(o: FactoryOptions) {
   const checks = new Registry<GateCheck>();
   const gates = new Registry<GateEvaluator>();
   const runner = new SandboxCommandRunner(store, environments);
-  for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, redactor, pollMs: o.checkPollMs })]) {
+  for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, redactor, scopes, pollMs: o.checkPollMs })]) {
     gates.register(g.type, g);
   }
   for (const gate of verification.gates) gates.register(gate.type, gate);
@@ -282,9 +284,9 @@ export async function createFactory(o: FactoryOptions) {
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
-    transcripts, snapshots, environments, redactor });
+    transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
-    runner: new SandboxCheckRunner(store, environments), snapshots, clock, events, redactor, classifiers,
+    runner: new SandboxCheckRunner(store, environments), snapshots, clock, events, redactor, classifiers, scopes,
     contracts: verification, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
   manager.register(checkRunController);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,

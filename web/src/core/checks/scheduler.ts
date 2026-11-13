@@ -3,9 +3,9 @@ import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfil
 import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
-import { SandboxUnavailableError, StoreError, isStoreError, type CheckRunScheduler, type ExecutionEnvironmentSelector, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, StoreError, isStoreError, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { checkConfig } from "./config.ts";
+import { resolveCheckConfig } from "./config.ts";
 
 type Request = Parameters<CheckRunScheduler["submit"]>[0];
 
@@ -15,6 +15,7 @@ export interface CheckRunSchedulerDeps {
   snapshots: WorkspaceSnapshotter;
   environments: ExecutionEnvironmentSelector;
   redactor: Redactor;
+  scopes?: ModuleScopePlanner;
 }
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -149,7 +150,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       if (!policyChecks?.includes(request.check)) {
         throw new StoreError(`check "${request.check}" is not authorized for ${origin.purpose}`, "Invalid");
       }
-      const config = checkConfig(repository, request.check);
+      const config = await resolveCheckConfig(repository, request.check, workspace, this.d.scopes);
       if (this.d.redactor.redact(config.command) !== config.command) throw new StoreError("check command contains a factory secret", "Invalid");
 
       const profile = repository.spec.sandboxRef

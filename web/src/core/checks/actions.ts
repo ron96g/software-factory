@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import type { AgentRun, CheckRun, Repository, SandboxProfile, WorkItem, Workspace } from "../model/kinds.ts";
 import { API_VERSION } from "../model/resource.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
-import { StoreError, isStoreError, type CheckRunCommands, type CheckRunQueries, type ExecutionEnvironmentSelector, type Principal, type Redactor, type ResourceReader, type ResourceWriter, type TranscriptReader, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { StoreError, isStoreError, type CheckRunCommands, type CheckRunQueries, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Principal, type Redactor, type ResourceReader, type ResourceWriter, type TranscriptReader, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { checkConfig } from "./config.ts";
+import { checkConfig, resolveCheckConfig } from "./config.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stopped = (item: WorkItem) => ["Failed", "Done", "Closed"].includes(item.status?.phase ?? "") &&
@@ -18,6 +18,7 @@ export interface CheckActionsDeps {
   snapshots: WorkspaceSnapshotter;
   environments: ExecutionEnvironmentSelector;
   redactor: Redactor;
+  scopes?: ModuleScopePlanner;
 }
 
 export class CheckActions implements CheckRunCommands, CheckRunQueries {
@@ -95,7 +96,7 @@ export class CheckActions implements CheckRunCommands, CheckRunQueries {
       }
       const repo = await resolveRef<Repository>(this.d.reader, "Repository", workspace.spec.repositoryRef, this.d.namespace);
       if (!repo) throw new StoreError("workspace repository not found", "NotFound");
-      const config = checkConfig(repo, input.check);
+      const config = await resolveCheckConfig(repo, input.check, workspace, this.d.scopes);
       if (this.d.redactor.redact(config.command) !== config.command) throw new StoreError("check command contains a factory secret", "Invalid");
       const profile = repo.spec.sandboxRef && await resolveRef<SandboxProfile>(this.d.reader, "SandboxProfile", repo.spec.sandboxRef, this.d.namespace);
       if (repo.spec.sandboxRef && !profile) throw new StoreError("sandbox profile not found", "NotFound");
@@ -109,7 +110,7 @@ export class CheckActions implements CheckRunCommands, CheckRunQueries {
         spec: {
           workItemRef: { name }, workItemUid: item.metadata.uid!,
           workspaceRef: { name: workspace.metadata.name }, workspaceUid: workspace.metadata.uid!,
-          repositoryRef: { name: repo.metadata.name, namespace: nsOf(repo) }, repositoryVersion: repo.metadata.resourceVersion!,
+          repositoryRef: { name: repo.metadata.name, namespace: nsOf(repo) === nsOf(item) ? undefined : nsOf(repo) }, repositoryVersion: repo.metadata.resourceVersion!,
           check: input.check, ...config, snapshot,
           environment: { runtime: health.runtime, version: health.version, profileVersion: profile?.metadata.resourceVersion ?? "default" },
           requestedBy: p.id, requestFingerprint: fingerprint,

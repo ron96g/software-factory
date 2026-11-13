@@ -23,8 +23,10 @@ Makefiles and CI before planning. Produce a `validation-plan` artifact containin
 ```
 
 Use the actual repository and named check identities from policy, not the example placeholders. Include every
-mandatory check and preflight; map every criterion and every verification check. Full-suite requirements remain
-mandatory even if focused checks are available. Commands, arguments and budgets come from repository configuration,
+mandatory check and preflight; map every criterion and every verification check. Module-scoped checks cover changed
+modules and transitive dependents using repository policy, not a model-selected list. Use explicit full checks when
+acceptance requires whole-repository coverage; do not add them indiscriminately to duplicate affected-module checks.
+Commands, arguments and budgets come from repository configuration,
 not this artifact. Identify missing integration/acceptance/security evidence honestly: unsupported named requirements
 remain in the plan and cannot pass without evidence or a policy-permitted, explicit human waiver later.
 

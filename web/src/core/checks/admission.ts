@@ -2,9 +2,9 @@ import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfil
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
-import type { ResourceReader, Validator } from "../ports/index.ts";
+import type { ModuleScopePlanner, ResourceReader, Validator } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { checkConfig } from "./config.ts";
+import { resolveCheckConfig } from "./config.ts";
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
   const owners = candidate.metadata.ownerReferences ?? [];
@@ -89,7 +89,7 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
   return [];
 }
 
-export function checkRunValidator(): Validator {
+export function checkRunValidator(scopes?: ModuleScopePlanner): Validator {
   return {
     name: "checkrun",
     appliesTo: (kind) => kind === "CheckRun",
@@ -138,10 +138,11 @@ export function checkRunValidator(): Validator {
         errors.push("CheckRun repository reference/version is not current");
       } else {
         try {
-          const config = checkConfig(repository, spec.check ?? "");
+          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes);
+          if (!config) throw new Error("check workspace is unavailable");
           if (config.command !== spec.command || config.timeoutMs !== spec.timeoutMs ||
-              config.resultFormat !== spec.resultFormat) {
-            errors.push("CheckRun command, budget or result format differs from repository policy");
+              config.resultFormat !== spec.resultFormat || JSON.stringify(config.scope) !== JSON.stringify(spec.scope)) {
+            errors.push("CheckRun command, budget, scope or result format differs from repository policy");
           }
         } catch (error) {
           errors.push(error instanceof Error ? error.message : "CheckRun references an invalid repository check");

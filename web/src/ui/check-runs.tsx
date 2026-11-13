@@ -139,6 +139,10 @@ function CheckRunCard({ run }: { run: CheckRun }) {
       </Group>
       <Text size="xs" c="dimmed">Run {run.metadata.name} · requested by {run.spec.requestedBy} · timeout {duration(run.spec.timeoutMs)} · duration {status?.durationMs == null ? "not available" : duration(status.durationMs)}</Text>
       <Text size="xs" style={{ overflowWrap: "anywhere" }}>Tested snapshot: {run.spec.snapshot}{status?.finalSnapshot && status.finalSnapshot !== run.spec.snapshot ? ` · final snapshot: ${status.finalSnapshot}` : ""}</Text>
+      {run.spec.scope && <Text size="xs" style={{ overflowWrap: "anywhere" }}>
+        Scope: {run.spec.scope.mode === "affected" ? run.spec.scope.modules.join(", ") : "full repository"} · {run.spec.scope.reason} Base: {run.spec.scope.baseCommit}
+      </Text>}
+      <Text size="xs" ff="monospace" style={{ overflowWrap: "anywhere" }}>{run.spec.command}</Text>
       <Text size="xs" c="dimmed">Runtime: {run.spec.environment.runtime}{run.spec.environment.version ? ` ${run.spec.environment.version}` : ""} · profile {run.spec.environment.profileVersion}{status?.exitCode != null ? ` · exit ${status.exitCode}` : ""}{status?.signal ? ` · signal ${status.signal}` : ""}</Text>
       {preparationFinished && <Alert color="yellow">Preparation command succeeded. Its resulting tree requires review; this is not final verification evidence.</Alert>}
       {status?.message && <Alert color={preparationFinished ? "yellow" : status.outcome === "Passed" ? "blue" : "red"}>{status.message}</Alert>}

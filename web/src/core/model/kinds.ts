@@ -140,7 +140,9 @@ export interface RepositorySpec {
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
   /** ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`. */
-  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string }>;
+  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string; moduleScoped?: boolean }>;
+  /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
+  moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
   verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[] };
   /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
   workspace?: { baseRef?: string; setup?: string[] };
@@ -304,6 +306,14 @@ export interface CheckWorkflowOrigin {
   agentRunUid?: string;
 }
 
+export interface ModuleCheckScope {
+  mode: "affected" | "full";
+  baseCommit: string;
+  graphHash: string;
+  modules: string[];
+  reason: string;
+}
+
 export interface CheckRunSpec {
   workItemRef: Ref;
   workItemUid: string;
@@ -319,6 +329,7 @@ export interface CheckRunSpec {
   requestedBy: string;
   requestFingerprint: string;
   resultFormat?: string;
+  scope?: ModuleCheckScope;
   workflow?: CheckWorkflowOrigin;
 }
 

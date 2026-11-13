@@ -187,6 +187,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X23b | Evidence-driven recovery | Typed failure routing, separate execution/code retry budgets, durable human attention and developer check-failure input (ADR-0042; after X23a) | Timeout, cancellation and setup failure do not trigger blind code-edit loops; repeated unchanged failures escalate with actionable evidence | ✅ |
 | X23c | Verification contracts | Reviewed validation plans, same-environment preflight, shared agent/gate check runner, snapshot freshness and required-evidence enforcement (ADR-0042; after X23b) | Required evidence or explicit policy-permitted waivers are bound to plan/candidate; stale or simulated evidence cannot pass; existing gates and publication permissions remain intact | ✅ |
 | X24 | Candidate preparation and recovery | Pre-review named preparation checks, active-job waits, bounded return-to-review on drift and explicit check selectors (ADR-0043) | Builds cannot race review; regenerated code gets fresh review; clarification answers cannot impersonate approval; preparation never replaces verification | ✅ |
+| X25 | Affected-module verification | Repository dependency graph selects changed modules and transitive dependents for named build/test checks across preparation, agents, gates and manual execution (ADR-0044) | Immutable scope provenance; committed and dirty changes covered; shared/unknown changes use explicit full scope; plans and human approvals remain revision-bound | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

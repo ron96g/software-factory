@@ -18,12 +18,12 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
         content: JSON.stringify({
           workflowVersions: compiled.versions, policy: compiled.verification,
           repositories: ctx.repositories.map((repo) => ({ name: repo.metadata.name, resourceVersion: repo.metadata.resourceVersion,
-            checks: repo.spec.checks, verification: repo.spec.verification })),
+            checks: repo.spec.checks, moduleScope: repo.spec.moduleScope, verification: repo.spec.verification })),
           workspaces: ctx.workspaces.map((workspace) => ({ workspace: workspace.metadata.name, repositoryAlias: workspace.spec.repositoryRef.name,
             checkSyntax: `${workspace.spec.repositoryRef.name}/<configured-check>` })),
           planFormat: { criteria: [{ id: "AC-1", description: "Exact acceptance criterion from the specification", checks: ["repository/check"] }],
             checks: ["repository/check"], preflight: ["repository/preflight"] },
-          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence. run_check accepts workspace or repositoryAlias above, and a bare check name or matching repository/check. Reuse requestId to inspect the same job; pending is not Passed.",
+          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. moduleScoped checks deterministically select changed modules plus transitive dependents from the pinned workspace baseline, including committed and dirty changes; shared/unknown changes require full validation. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence. run_check accepts workspace or repositoryAlias above, and a bare check name or matching repository/check. Reuse requestId to inspect the same job; pending is not Passed.",
         }, null, 2),
       }];
       const allRuns = (await d.reader.list<CheckRun>("CheckRun", {
@@ -34,7 +34,7 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
       if (prepared.length) sections.push({ title: "Candidate preparation provenance", source: "verification-contract",
         content: "Preparation ran before this review. Read the actual current workspace code, including generated files; the earlier source-code artifact may predate generation. Inspect generated changes and their cause rather than reverting them solely as unrelated: the supported build may reproduce them. These jobs are preparation, not final verification evidence.\n" +
           JSON.stringify(prepared.map((run) => ({ checkRun: run.metadata.name, check: run.spec.check, command: run.spec.command,
-            before: run.spec.snapshot, after: run.status?.finalSnapshot, executionOutcome: run.status?.executionOutcome,
+            scope: run.spec.scope, before: run.spec.snapshot, after: run.status?.finalSnapshot, executionOutcome: run.status?.executionOutcome,
             outcome: run.status?.outcome, logRef: run.status?.logRef })), null, 2) });
       const runs = allRuns.filter((r) => r.spec.workflow?.purpose !== "preparation" && r.status?.outcome && r.status.outcome !== "Passed").slice(-6);
       const historical = (await d.reader.list<FactoryEvent>("Event", { namespace: nsOf(ctx.workItem),
@@ -50,6 +50,7 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
         failures.push({
           checkRun: run.metadata.name, check: run.spec.check, repository: run.spec.repositoryRef.name,
           snapshot: run.spec.snapshot, outcome: run.status?.outcome, message: run.status?.message,
+          scope: run.spec.scope,
           logRef: run.status?.logRef, logsIncomplete: run.status?.logsIncomplete,
           excerpt: d.redactor.redact(messages.map((m) => m.content).join("\n").slice(-6000)),
         });

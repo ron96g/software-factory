@@ -185,10 +185,30 @@ restarts at validation planning with fresh human reviews, and sets a durable pub
 anything or enables pushes.
 
 Legacy gate caching, retry routing and warnings for unsupported checks remain unchanged for non-migrated workflows.
-No existing item is migrated or restarted automatically. Full Controlplane build/test targets remain mandatory with
-explicit 30/60-minute budgets; focused tests are additional, not a substitute. Its preflight checks Go/make/gotestsum
-and prepares Rover envtest assets through repository-supported targets. Missing integration/acceptance/security
+No existing item is migrated or restarted automatically. Controlplane build/test checks retain explicit 30/60-minute
+budgets; their module scope follows ADR-0044 below. Its existing preflight checks Go/make/gotestsum and prepares
+Rover envtest assets; selected modules' supported Makefile targets also prepare their own assets. Missing integration/acceptance/security
 checks remain visible requirements needing evidence or explicit permitted waivers.
+
+### Affected-module verification (ADR-0044)
+`Repository.spec.moduleScope` declares a repository-maintained JSON graph (`name → {path, depends_on}`),
+shared-path globs and optional `nonBuildPaths`. Named checks opt in with `moduleScoped: true` and a single
+`make <target>` command. One `ModuleScopePlanner` serves preparation, final verification, recorded agent requests,
+manual checks and legacy automated gates. Repositories/checks without this policy keep their existing behavior.
+
+The planner compares all candidate contents to the Workspace's pinned `baseCommit`, including committed, staged,
+unstaged, deleted, renamed and non-ignored untracked paths. It selects changed modules plus transitive dependents,
+then executes the existing Makefile target with a validated `MODULES` argument. Shared tooling/manifests/graph
+changes, unknown paths or no build changes use full Makefile discovery with an explicit reason, never an empty suite.
+Declared documentation paths do not expand code scope but remain in candidate fingerprints and acceptance evidence.
+Invalid/missing graphs or baselines fail visibly. Repository CI remains responsible for maintaining the graph.
+
+Immutable CheckRun specs pin the resolved command and scope (modules, baseline, graph hash and reason). Admission
+and execution revalidate them; snapshot, environment and approved-plan checks remain unchanged. The UI shows scope
+and exact commands; legacy events explain full-scope selection. Controlplane defaults build/test/preparation to
+affected-module coverage; `full-build` and `full-tests` remain available when acceptance requires broader evidence.
+Changing repository policy invalidates existing approved contracts and requires fresh human plan review.
+See [ADR-0044](adr/0044-affected-module-verification.md).
 
 ## Direct agent conversations (ADR-0036)
 

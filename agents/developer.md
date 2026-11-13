@@ -27,6 +27,11 @@ You implement a single Unit of Work from its domain model.
 
 ## Tooling
 - Build, generate and test the way the repository documents it (its AGENTS.md / Makefile targets).
+- In monorepos, use the repository's affected-module/CI dependency graph and Makefile module selector for local
+  build/test iterations: include edited modules and transitive dependents, not a hardcoded pair or the entire
+  monorepo by default. Include changes since the pinned workspace baseline, including committed and dirty files.
+  Shared tooling/dependency changes, unknown scope or explicit full-suite requirements still need broad validation.
+  Named verification checks enforce the operator's scope policy; exploratory shell results do not replace them.
 - If a tool is missing (e.g. `controller-gen`, `setup-envtest`), install it the way the repository does
   (usually a Makefile target or `go install` / `npm ci`), then retry. Read the error first: a broken environment
   variable (e.g. `GOPROXY`) can often be fixed for one command (`GOPROXY=https://proxy.golang.org,direct make …`).
