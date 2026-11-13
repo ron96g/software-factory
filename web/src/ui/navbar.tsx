@@ -15,6 +15,7 @@ import {
   IconPlugConnected,
   IconRobot,
   IconRoute,
+  IconMessages,
   type Icon,
 } from "@tabler/icons-react";
 import Link from "next/link";
@@ -35,6 +36,7 @@ const SECTIONS: { title: string; entries: Entry[] }[] = [
     title: "Work",
     entries: [
       { label: "Work items", href: "/", icon: IconLayoutList, kind: "WorkItem" },
+      { label: "Agent chats", href: "/chats", icon: IconMessages },
       { label: "Workspaces", href: "/resources/workspaces", icon: IconGitBranch, kind: "Workspace" },
       { label: "Agent runs", href: "/resources/agentruns", icon: IconBolt, kind: "AgentRun" },
       { label: "Knowledge", href: "/knowledge", icon: IconBulb, kind: "KnowledgeEntry" },

@@ -13,6 +13,7 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "ToolServer", plural: "toolservers", scope: "definition" },
   { kind: "WorkItem", plural: "workitems", scope: "runtime" },
   { kind: "AgentRun", plural: "agentruns", scope: "runtime" },
+  { kind: "CheckRun", plural: "checkruns", scope: "runtime" },
   { kind: "Artifact", plural: "artifacts", scope: "runtime" },
   { kind: "Workspace", plural: "workspaces", scope: "runtime" },
   { kind: "Clarification", plural: "clarifications", scope: "runtime" },

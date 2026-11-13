@@ -16,6 +16,8 @@ export interface AgentSpec {
   tools?: string[];
   /** ADR-0034: MCP servers whose (allowed) tools this agent may call in the tool loop. */
   toolServerRefs?: Ref[];
+  /** Opt-in, human-curated read-only MCP tool names for direct conversations (ADR-0036). */
+  chat?: { allowedTools: string[] };
   humanCounterpart?: { role: string };
 }
 export type Agent = DocumentResource<AgentSpec>;
@@ -76,6 +78,7 @@ export interface GateSpec {
   checks?: string[];
   onReject?: GateRoute;
   onFailure?: Record<string, unknown>;
+  publication?: { artifactRef: Ref; reviewStage: string };
 }
 
 export interface StageSpec {
@@ -92,6 +95,18 @@ export interface StageSpec {
 }
 
 export interface WorkflowSpec {
+  verification?: {
+    planningStage: string;
+    reviewStage: string;
+    preflightStage: string;
+    verifyStage: string;
+    implementationStage: string;
+    /** Named checks prepare the candidate on entry, before this stage's AI and human review. */
+    preparationStage?: string;
+    maxCodeAttempts: number;
+    maxExecutionAttempts: number;
+    retryDelayMs: number;
+  };
   timebox?: string;
   trigger?: { sourceRefs?: Ref[] };
   phases: { name: string; stages: StageSpec[] }[];
@@ -111,6 +126,8 @@ export interface SourceSpec {
   };
   mapping?: Record<string, string>;
   defaults?: { workflowRef?: Ref; repositoryRefs?: Ref[] };
+  /** Explicit human-reviewed actions, independent of automatic clarification synchronization. */
+  writeBack?: { replyVisibilities?: ("public" | "internal")[]; transitions?: boolean };
 }
 export type Source = Resource<SourceSpec>;
 
@@ -123,7 +140,8 @@ export interface RepositorySpec {
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
   /** ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`. */
-  checks?: Record<string, string>;
+  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string }>;
+  verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[] };
   /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
   workspace?: { baseRef?: string; setup?: string[] };
 }
@@ -189,8 +207,22 @@ export interface WorkItemSpec {
   externalRef?: { id: string; url?: string };
   workflowRef?: Ref;
   repositoryRefs?: Ref[];
+  /** Human-created handoff from a direct agent conversation (ADR-0036). */
+  conversationRef?: Ref;
+  /** Historical provenance, validated at creation; not a live dependency or cascade owner. */
+  originWorkItemRef?: Ref;
+  originSnapshot?: {
+    uid: string;
+    resourceVersion: string;
+    capturedAt: string;
+    versions: Record<string, string>;
+    content: string;
+    truncated: boolean;
+  };
   /** Human request to re-run the workflow from `stage` (default: first stage). A new `id` triggers it once. */
   restart?: { id: string; stage?: string; requestedBy?: string };
+  /** Explicit human hold; never implicitly lifted by restarting or approving a gate. */
+  publicationDisabled?: boolean;
 }
 
 /** On artifacts that a restart replaced: kept for history, never used as agent input again. */
@@ -258,6 +290,56 @@ export interface AgentRunStatus {
 }
 export type AgentRun = Resource<AgentRunSpec, AgentRunStatus>;
 
+export type CheckOutcome = "Passed" | "AssertionFailed" | "SetupFailed" | "UnknownFailure" | "Unavailable" | "TimedOut" | "Cancelled" | "NotVerified";
+
+export interface CheckWorkflowOrigin {
+  stage: string;
+  round: number;
+  purpose: "preflight" | "preparation" | "verification";
+  planFingerprint: string;
+  attempt: number;
+  /** Only this recorded caller may still be active while its requested check starts. */
+  agentRunRef?: Ref;
+  agentRequestId?: string;
+  agentRunUid?: string;
+}
+
+export interface CheckRunSpec {
+  workItemRef: Ref;
+  workItemUid: string;
+  workspaceRef: Ref;
+  workspaceUid: string;
+  repositoryRef: Ref;
+  repositoryVersion: string;
+  check: string;
+  command: string;
+  timeoutMs: number;
+  snapshot: string;
+  environment: { runtime: string; version?: string; profileVersion: string };
+  requestedBy: string;
+  requestFingerprint: string;
+  resultFormat?: string;
+  workflow?: CheckWorkflowOrigin;
+}
+
+export interface CheckRunStatus {
+  conditions?: Condition[];
+  phase: "Running" | "Completed" | "Interrupted";
+  startedAt?: string;
+  finishedAt?: string;
+  outcome?: CheckOutcome;
+  /** Command classification before candidate/origin freshness invalidates authoritative evidence. */
+  executionOutcome?: CheckOutcome;
+  message?: string;
+  exitCode?: number;
+  signal?: string;
+  durationMs?: number;
+  logRef?: { namespace: string; id: string };
+  logsIncomplete?: boolean;
+  finalSnapshot?: string;
+}
+export type CheckRun = Resource<CheckRunSpec, CheckRunStatus>;
+
 /** Everything needed to explain or re-run a run (ADR-0012). */
 export interface RunProvenance {
   executor: string;
@@ -314,21 +396,29 @@ export interface KnowledgeSourceSpec {
 export type KnowledgeSource = Resource<KnowledgeSourceSpec>;
 
 export interface ConversationSpec {
-  /** Set for conversations about a work item (`explain`, `explain-item`). */
+  /** Item being explained or supplied as evidence to `agent-chat` (ADR-0037). */
   workItemRef?: Ref;
   /** Set for `explain` (one run); absent for `explain-item` (the whole work item, X4). */
   agentRunRef?: Ref;
   agentRef?: Ref;
   /** Set for `refine-knowledge` (ADR-0030). */
   knowledgeRef?: Ref;
-  /** Selects the registered ConversationResponder. */
-  purpose: "explain" | "explain-item" | "refine-knowledge";
+  /** Selects the registered responder or durable turn runner. */
+  purpose: "explain" | "explain-item" | "refine-knowledge" | "agent-chat";
+  title?: string;
+  turn?: { id: string; text: string; submittedBy: string };
   startedBy?: string;
 }
 export interface ConversationStatus {
   transcriptRef?: { namespace: string; id: string };
   messageCount?: number;
   lastMessageAt?: string;
+  phase?: "Queued" | "Running" | "Waiting" | "Ready" | "Failed";
+  activeTurn?: string;
+  completedTurn?: string;
+  message?: string;
+  retryAt?: string;
+  modelWaits?: number;
 }
 export type Conversation = Resource<ConversationSpec, ConversationStatus>;
 
@@ -363,6 +453,29 @@ export interface ClarificationStatus {
 }
 export type Clarification = Resource<ClarificationSpec, ClarificationStatus>;
 
+export interface TicketTransition {
+  id: string;
+  name: string;
+  to: { id: string; name: string };
+  requiresFields: boolean;
+}
+
+export interface TicketPublication {
+  workItemUid: string;
+  source: string;
+  sourceVersion: string;
+  externalId: string;
+  artifact: { name: string; uid: string; version: string };
+  body: string;
+  reviewed?: {
+    revision: string;
+    visibility: "public" | "internal";
+    fromStatusId: string;
+    transition?: TicketTransition;
+    by: string;
+  };
+}
+
 export interface ApprovalSpec {
   workItemRef: Ref;
   stage: string;
@@ -374,6 +487,13 @@ export interface ApprovalSpec {
   comment?: string;
   /** Approved despite blocking evidence (ADR-0027); the comment holds the reason. */
   overridden?: boolean;
+  ticketPublication?: TicketPublication;
+  verification?: {
+    kind: "plan" | "candidate" | "waiver";
+    fingerprint: string;
+    planFingerprint: string;
+    requirements?: string[];
+  };
 }
 export interface ApprovalStatus {
   phase: "Pending" | "Approved" | "Rejected";
@@ -396,7 +516,7 @@ export interface OutboxMessageSpec {
   payload: Record<string, unknown>;
 }
 export interface OutboxMessageStatus {
-  phase: "Pending" | "Delivered" | "Failed";
+  phase: "Pending" | "Delivering" | "Delivered" | "Failed";
   /** Handler result, e.g. `{ url }` of an opened pull request. */
   result?: Record<string, unknown>;
   attempts?: number;

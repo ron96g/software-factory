@@ -1,4 +1,4 @@
-import type { AgentRun, Approval, Artifact, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
+import type { AgentRun, Approval, Artifact, CheckRun, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
@@ -18,6 +18,10 @@ import {
   type ResourceWriter,
   type StatusWriter,
   type WorkflowCompiler,
+  type ApprovalGateEvaluator,
+  type StageEntryPolicy,
+  type StageResumptionPolicy,
+  type VerificationPublicationGuard,
 } from "../../ports/index.ts";
 import { routeToDecision } from "../../model/routes.ts";
 import { resolveRef } from "../../refs/refs.ts";
@@ -36,6 +40,9 @@ export interface WorkItemControllerDeps {
   outbox: Outbox;
   /** Which repositories can get a Workspace (ADR-0021). */
   workspaces: WorkspaceSupport;
+  stagePolicy?: StageEntryPolicy;
+  resumptionPolicy?: StageResumptionPolicy;
+  publicationGuard?: VerificationPublicationGuard;
 }
 
 export const runName = (wi: WorkItem, stage: string, step: number, round: number) =>
@@ -210,7 +217,16 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             workItemRef: { name: wi.metadata.name },
             stage: stage.name,
             approvers: stage.gate?.approvers ?? [],
-            criteria: stage.gate?.criteria,
+            criteria: decision.verification ? [
+              ...(stage.gate?.criteria ?? []),
+              `Verification ${decision.verification.kind} review. Binding: ${decision.verification.fingerprint}`,
+              ...(decision.verification.kind === "waiver" ? [
+                `Waiver requested for: ${decision.verification.requirements?.join(", ")}. These requirements remain Waived, never Passed.`,
+                "Approval requires an explicit reason of at least 10 characters; rejection keeps verification blocked.",
+              ] : []),
+            ] : stage.gate?.criteria,
+            ticketPublication: decision.ticketPublication,
+            verification: decision.verification,
           },
           status: { phase: "Pending" },
         };
@@ -248,6 +264,10 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       if (!affected.has(r.spec.stage) || r.metadata.labels?.[LABEL_SUPERSEDED]) continue;
       await d.writer.update<AgentRun>({ ...r, metadata: { ...r.metadata, labels: { ...r.metadata.labels, ...supersede } } });
     }
+    for (const check of await d.reader.list<CheckRun>("CheckRun", { namespace: ns, ownedBy: owned })) {
+      if (!check.spec.workflow || !affected.has(check.spec.workflow.stage) || check.metadata.labels?.[LABEL_SUPERSEDED]) continue;
+      await d.writer.update<CheckRun>({ ...check, metadata: { ...check.metadata, labels: { ...check.metadata.labels, ...supersede } } });
+    }
     await ensureWorkspaces(wi);
     const round = (wi.status?.round ?? 0) + 1;
     return write(
@@ -261,7 +281,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
   return {
     name: "workitem",
     primaryKind: "WorkItem",
-    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace"],
+    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () =>
       (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w)).map(keyOf),
@@ -292,12 +312,19 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return;
           }
           if (!c) return;
+          const permission = await d.resumptionPolicy?.beforeResume(wi);
+          if (permission?.action === "wait") return { requeueAfterMs: permission.retryAfterMs ?? 1000 };
           return write(wi, enterStage(wf, stage, st.round! + 1), "Resumed", `${stage.name}: clarification answered, re-running stage`);
         }
 
         if (st.phase === "AwaitingApproval") {
           const a = await d.reader.get<Approval>("Approval", namespace, st.blockedBy?.name ?? "");
           if (!a?.spec.decision) return;
+          const evaluator = stage.gate && d.gates.get(stage.gate.type);
+          const approvalEvaluator = evaluator as Partial<ApprovalGateEvaluator> | undefined;
+          if (approvalEvaluator?.evaluateApproval) {
+            return apply(wi, wf, stage, await approvalEvaluator.evaluateApproval({ workItem: wi, stage, gate: stage.gate! }, a));
+          }
           await d.events.normal(wi, a.spec.decision === "approve" ? "Approved" : "Rejected", `${stage.name} by ${a.spec.decidedBy ?? "unknown"}${a.spec.comment ? `: ${a.spec.comment}` : ""}`);
           const decision: GateDecision =
             a.spec.decision === "approve"
@@ -307,12 +334,22 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         }
 
         const stepIdx = st.step ?? 0;
+        if (stage.publish?.pullRequest) {
+          if (wi.spec.publicationDisabled) {
+            if (st.phase !== "Waiting" || st.message !== "Publication disabled by human policy") return write(wi, { phase: "Waiting", message: "Publication disabled by human policy" }, "PublicationHeld", "No commit, push or pull request will be published.");
+            return;
+          }
+          const reason = await d.publicationGuard?.check(wi);
+          if (reason) return block(wi, stage, [reason]);
+        }
         if (stepIdx === 0) await publishPullRequests(wi, stage); // level-triggered; enqueue is idempotent
         if (stepIdx < stage.steps.length) {
           const step = stage.steps[stepIdx];
           const rn = runName(wi, stage.name, stepIdx, st.round!);
           const run = await d.reader.get("AgentRun", namespace, rn);
           if (!run) {
+            const permission = await d.stagePolicy?.beforeStage(wi, stage);
+            if (permission && permission.action !== "advance") return apply(wi, wf, stage, permission);
             const ws = await workspacesState(wi);
             if (ws === "waiting") return; // re-triggered by the Workspace watch
             if (ws !== "ready") return write(wi, { phase: "Failed", message: ws }, "Failed", ws);

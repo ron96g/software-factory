@@ -79,6 +79,79 @@ Data lives in `web/data/factory.db`. Delete the file to reset.
 Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless you opt in. Start the server with
 `NODE_USE_ENV_PROXY=1 npm run dev`. Otherwise source sync and LLM calls fail with `fetch failed: Connect Timeout Error`.
 
+## Direct agent chats (ADR-0036)
+
+Open **Agent chats** in the sidebar, select **support-engineer**, and **Start chat** (also available on the agent's
+definition page). Describe the cluster issue and namespace; the agent can discover supported CRs, inspect their
+current state/hierarchy and search knowledge using its explicitly allowed MCP tools. Conversations resume from the
+chat list. Tool activity, failures and model-quota waits are visible; missing models wait instead of simulating.
+The model must explicitly complete its answer (ADR-0038): announcements stay interim while investigation continues.
+Models that repeatedly fail to complete hit a visible step limit instead of silently marking the turn answered.
+Send with **Ctrl+Enter** (or **Cmd+Enter** on macOS); plain Enter inserts a new line.
+
+For an existing item, use **Chat with agent** on its detail page, or choose **Work item context** when starting
+a chat. The selected chat-enabled agent receives the item's details, runs, artifacts and human input plus its usual
+read-only MCP tools. Evidence refreshes each turn and is recorded with resource versions (ADR-0037). Resume these
+chats from the item or chat list. **Open work item** returns to the original; no duplicate item is created.
+**Ask about this item** remains the recorded-evidence-only explanation mode.
+
+This mode is read-only: no shell, repository workspace, publication or gate actions. For code research or a workflow,
+finish the investigation, click **Create work item**, review the findings and choose the workflow/repositories.
+The item links back to the conversation and keeps normal human approvals. No item is created automatically.
+Live cluster tools still require the [Kubernetes MCP setup](components/kubernetes-cr-mcp/README.md), including the
+host stdio opt-in. Other agents must explicitly opt in with `spec.chat.allowedTools`.
+
+## Follow-up work items (ADR-0039)
+
+On an item page, select **Create follow-up** to carry an investigation into another workflow. Choose the workflow
+and repositories, edit the new title/objective, and add free-text **Additional context / instructions** (for example,
+"Address this with a feature that does XYZ"). Refresh and review the inherited context, then **Create & start workflow**.
+
+The original item and its pending reviews stay unchanged. The new manual item starts its own workflow and human
+gates, links back to the origin, and keeps an immutable, redacted evidence snapshot. New instructions stay separate
+and reach every agent. The combined context limit is 20,000 characters: inherited evidence is shortened first,
+with a warning; your instructions are never silently truncated. Later origin edits do not change the snapshot.
+If the creation response is lost, **Retry original request** recovers the same item rather than creating a duplicate.
+
+## Reviewed Jira replies and status changes (ADR-0040)
+
+The service-desk workflow now ends with **response-review → publish-response**. The first review approves the draft;
+the new publication review shows the exact reply and requires an explicit **Public** (customer-visible) or **Internal**
+selection. Optionally select a Jira transition to apply after delivery, confirm the review, and **Approve & publish**.
+The workflow completes only when the reply and selected transition are delivered. Rejecting returns to drafting.
+
+For an already completed service-desk item, use **Jira ticket actions → Start publication review**. It reuses the
+existing response without repeating investigation. Old approvals never publish automatically after an upgrade.
+The same panel supports **Change ticket status independently → Review status change** without posting a comment.
+Transitions come from Jira's current allowed transitions, not hardcoded statuses. Transitions requiring extra Jira
+form fields must be performed in Jira. Account permissions still apply.
+
+`Source.spec.writeBack.replyVisibilities` and `.transitions` explicitly allow these human-reviewed actions;
+`jira-servicedesk` keeps `sync.bidirectional: false`, so automatic questions and comment-answer sync remain disabled.
+Delivery receipts and errors appear on the item. A visible factory receipt marker is appended to replies.
+Interrupted delivery is checked against Jira before recovery; uncertain/failed writes are not blindly repeated.
+If a reply succeeds but its status change fails, the receipt remains visible—inspect Jira and use a fresh reviewed
+status-only action rather than publishing the reply again.
+
+## Reliable verification (ADR-0042)
+
+Use **Use verified workflow** on a stopped item's detail page to explicitly migrate to `factory-verified`.
+This preserves its workspace/history, restarts validation planning and disables publication. Deployment alone
+never migrates or restarts existing items.
+
+Review the JSON validation plan and its criterion/check mappings at the fresh spec-review gate. Only after human
+approval do configured same-environment preflights and construction start. Required checks run as durable CheckRuns;
+timeout/setup/unknown failures request bounded recovery and then human attention, not blind code rewrites.
+Human code review binds the candidate; subsequent changes invalidate it. Logs show truncation/interruption explicitly.
+Configured candidate preparation runs before AI and human review, including Controlplane's build/generation
+(ADR-0043). Preparation is not final verification evidence. Active jobs are awaited before checking candidate
+freshness; later drift returns to fresh code-review with a bounded recovery budget, never approval by chat reply.
+The **Check evidence** card identifies preparation, preflight, verification and standalone jobs.
+
+Missing required evidence blocks verification. Policy-permitted exceptions require an explicit, reasoned,
+revision-bound waiver and remain **Waived**, not Passed. Migrated items retain their publication hold even after
+approvals. The legacy `factory-loop` workflow is unchanged.
+
 ## MCP (ADR-0034)
 
 The factory is an MCP server for your local agent harness, and its agents can use MCP servers.
@@ -101,6 +174,10 @@ The factory is an MCP server for your local agent harness, and its agents can us
   ```
 - **Agents as clients:** define a `ToolServer` in `tool-servers/` (`http` url, or `stdio` command with the `host`
   runtime only), list the `allowedTools`, and add it to an agent's `toolServerRefs`. Tools appear as `<server>__<tool>`.
+- **Kubernetes CR investigation:** [standalone Kubernetes CR MCP server](components/kubernetes-cr-mcp/README.md)
+  (ADR-0035). Runs without the app; the support engineer uses it over stdio to discover configured CR types,
+  list by namespace/labels, read spec/status and follow configured reference hierarchies. Requires separate component
+  installation, a local YAML catalog and a read-only kubeconfig; no cluster writes.
 
 ## Validation
 

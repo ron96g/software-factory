@@ -64,14 +64,19 @@ export class SqliteStore implements ResourceStore {
     const obj = clone(input);
     obj.apiVersion ??= API_VERSION;
     obj.metadata.namespace ??= DEFAULT_NAMESPACE;
-    if (!obj.metadata.name && obj.metadata.generateName) {
-      obj.metadata.name = obj.metadata.generateName + randomUUID().slice(0, 5);
-    }
-    if (!obj.metadata.name) throw new StoreError("metadata.name is required", "Invalid");
+    const generated = !obj.metadata.name && !!obj.metadata.generateName;
+    if (!obj.metadata.name && !generated) throw new StoreError("metadata.name is required", "Invalid");
     obj.metadata.uid = randomUUID();
     obj.metadata.creationTimestamp = this.clock.now().toISOString();
     const ns = obj.metadata.namespace;
     this.tx(() => {
+      if (generated) {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          obj.metadata.name = obj.metadata.generateName + randomUUID().replaceAll("-", "").slice(0, 16);
+          if (!this.exists(obj.kind, ns, obj.metadata.name)) break;
+          if (attempt === 7) throw new StoreError("could not allocate a unique generated resource name", "Conflict");
+        }
+      }
       if (this.exists(obj.kind, ns, obj.metadata.name)) {
         throw new StoreError(`${obj.kind} ${ns}/${obj.metadata.name} already exists`, "AlreadyExists");
       }

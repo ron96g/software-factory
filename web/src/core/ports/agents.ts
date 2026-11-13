@@ -45,6 +45,7 @@ export interface ExecutionContext {
   workspaces: Workspace[];
   /** Filled by context providers. */
   sections: ContextSection[];
+  workflowVersions?: Record<string, string>;
   /** ADR-0012: every executor MUST record its interaction here. */
   transcript: TranscriptRecorder;
   /** Resolved LLM for this run (ADR-0014); undefined when no provider is configured. */

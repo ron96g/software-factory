@@ -9,3 +9,8 @@ export * from "./app.ts";
 export * from "./sandbox.ts";
 export * from "./knowledge.ts";
 export * from "./tools.ts";
+export * from "./agent-chat.ts";
+export * from "./work-item-followups.ts";
+export * from "./tickets.ts";
+export * from "./checks.ts";
+export * from "./verification.ts";

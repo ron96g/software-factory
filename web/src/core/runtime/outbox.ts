@@ -19,6 +19,8 @@ import {
   type ResourceWriter,
   type SourceConnector,
   type StatusWriter,
+  type SourceWritePolicy,
+  type RecoverableOutboxHandler,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 
@@ -77,6 +79,7 @@ export function createOutboxController(d: {
   clock: Clock;
   handlers: Lookup<OutboxHandler>;
   redactor: Redactor;
+  policies: Lookup<SourceWritePolicy>;
 }): Controller & InitialKeys {
   return {
     name: "outbox",
@@ -84,24 +87,28 @@ export function createOutboxController(d: {
     watches: ["OutboxMessage"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>
-      (await d.reader.list<OutboxMessage>("OutboxMessage")).filter((m) => m.status?.phase === "Pending").map(keyOf),
+      (await d.reader.list<OutboxMessage>("OutboxMessage")).filter((m) => m.status?.phase === "Pending" || m.status?.phase === "Delivering").map(keyOf),
     resyncMs: 60_000,
     async reconcile(key) {
       const { namespace, name } = parseKey(key);
-      const msg = await d.reader.get<OutboxMessage>("OutboxMessage", namespace, name);
-      if (!msg || msg.status?.phase !== "Pending") return;
-      const due = msg.status.nextAttemptAt ? Date.parse(msg.status.nextAttemptAt) - d.clock.now().getTime() : 0;
+      const loaded = await d.reader.get<OutboxMessage>("OutboxMessage", namespace, name);
+      if (!loaded || (loaded.status?.phase !== "Pending" && loaded.status?.phase !== "Delivering")) return;
+      let msg: OutboxMessage = loaded;
+      const due = msg.status?.nextAttemptAt ? Date.parse(msg.status.nextAttemptAt) - d.clock.now().getTime() : 0;
       if (due > 0) return { requeueAfterMs: due };
 
-      const attempts = (msg.status.attempts ?? 0) + 1;
+      const attempts = (msg.status?.attempts ?? 0) + 1;
+      let recoverable = false;
+      let invokingHandler = false;
       try {
         let source: Source | undefined;
         if (msg.spec.sourceRef) {
           source = (await resolveRef<Source>(d.reader, "Source", msg.spec.sourceRef, namespace)) ?? undefined;
           if (!source) throw new Error(`source ${msg.spec.sourceRef.name} not found`);
-          // Read-only sources never receive writes, whoever enqueued the message. Final, no retries.
-          if (!source.spec.sync?.bidirectional) {
-            const lastError = `source ${source.metadata.name} is read-only (sync.bidirectional is not true); nothing was sent`;
+          const policy = d.policies.get(msg.spec.action);
+          const blocked = policy ? policy.check(source) : `no source write policy for ${msg.spec.action}`;
+          if (blocked) {
+            const lastError = `source ${source.metadata.name}: ${blocked}; nothing was sent`;
             await d.status.updateStatus({ ...msg, status: { phase: "Failed", attempts: msg.status?.attempts ?? 0, lastError } });
             await d.events.warning(msg, "DeliveryBlocked", lastError);
             return;
@@ -109,24 +116,32 @@ export function createOutboxController(d: {
         }
         const handler = d.handlers.get(msg.spec.action);
         if (!handler) throw new Error(`no outbox handler for action "${msg.spec.action}"`);
-        const result = (await handler.deliver({ source, externalId: msg.spec.externalId, payload: msg.spec.payload })) ?? undefined;
-        await d.status.updateStatus({ ...msg, status: { phase: "Delivered", attempts, result: result ? JSON.parse(d.redactor.redact(JSON.stringify(result))) : undefined } });
+        const delivery = { namespace, source, externalId: msg.spec.externalId, payload: msg.spec.payload };
+        const recovery = handler as Partial<RecoverableOutboxHandler>;
+        recoverable = typeof recovery.recover === "function";
+        const resuming = msg.status?.phase === "Delivering";
+        if (recoverable && !resuming) msg = await d.status.updateStatus<OutboxMessage>({ ...msg, status: { phase: "Delivering", attempts } });
+        invokingHandler = true;
+        const result = (resuming && recovery.recover ? await recovery.recover(delivery) : await handler.deliver(delivery)) ?? undefined;
+        invokingHandler = false;
+        msg = await d.status.updateStatus<OutboxMessage>({ ...msg, status: { phase: "Delivered", attempts, result: result ? JSON.parse(d.redactor.redact(JSON.stringify(result))) : undefined } });
         await d.events.normal(
           msg,
           "Delivered",
           `${msg.spec.action}${msg.spec.sourceRef ? ` → ${msg.spec.sourceRef.name}#${msg.spec.externalId}` : ""}${result && typeof result.url === "string" ? ` · ${result.url}` : ""}`,
         );
       } catch (e) {
-        if (isStoreError(e, "Conflict")) return { requeueAfterMs: 0 };
+        if (isStoreError(e, "Conflict") && !(recoverable && invokingHandler)) return { requeueAfterMs: 0 };
+        if (msg.status?.phase === "Delivered") throw e;
         const lastError = d.redactor.redact(e instanceof Error ? e.message : String(e));
-        const failed = attempts >= MAX_ATTEMPTS;
+        const failed = recoverable || attempts >= MAX_ATTEMPTS;
         const delay = Math.min(1000 * 2 ** attempts, 15 * 60_000);
         await d.status.updateStatus({
           ...msg,
           status: {
             phase: failed ? "Failed" : "Pending",
             attempts,
-            lastError,
+            lastError: recoverable ? `${lastError}. Delivery may be incomplete; inspect Jira before requesting another action. No automatic POST retry.` : lastError,
             nextAttemptAt: failed ? undefined : new Date(d.clock.now().getTime() + delay).toISOString(),
           },
         });

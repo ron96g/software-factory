@@ -18,6 +18,16 @@ const tool = (info: Omit<AgentTool, "bind">, bind: (caps: ToolCapabilities) => B
  * `write`/`exec`/`artifacts` require a sandbox (ADR-0019).
  */
 export const SANDBOX_TOOLS: AgentTool[] = [
+  tool({ name: "run_check", readOnly: false, capabilities: ["checks"], description: "Submit or inspect an approved named check" }, (caps) => {
+    const checks = need(caps.checks, "checks");
+    return {
+      schema: { name: "run_check", description: "Submit a durable named check from the human-approved validation plan. Workspace identifiers and aliases are listed in Verification policy context. Reuse requestId to inspect the same job. Pending/Running is not a pass. The workflow gate waits for authoritative evidence.",
+        parameters: { type: "object", properties: { workspace: { type: "string", description: "Exact workspace name or unique repository alias from context, e.g. controlplane" },
+          check: { type: "string", description: "Approved bare check name or matching repository/check, e.g. focused-tests or controlplane/focused-tests" },
+          requestId: { type: "string", description: "Stable identity; reuse when polling the same check" } }, required: ["workspace", "check", "requestId"] } },
+      invoke: async (a) => JSON.stringify(await checks.run({ workspace: str(a.workspace, "workspace"), check: str(a.check, "check"), requestId: str(a.requestId, "requestId") })),
+    };
+  }),
   tool({ name: "search_code", readOnly: true, capabilities: ["search"], description: "Search the workspace code" }, (caps) => {
     const search = need(caps.search, "search");
     return {

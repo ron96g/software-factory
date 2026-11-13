@@ -236,7 +236,7 @@ test("FACTORY_SIMULATION=wait: runs without a real executor wait instead of prod
   });
 });
 
-test("servicedesk workflow: investigate → respond → human review (reject → redraft, approve → Done), never writes to the ticket", async () => {
+test("servicedesk workflow: response review rejects/redrafts, then a fresh publication review prevents automatic ticket writes", async () => {
   const writes: string[] = [];
   let updated = "2026-11-12T10:00:00.000+0000";
   const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -255,7 +255,7 @@ test("servicedesk workflow: investigate → respond → human review (reject →
     const name = "jira-servicedesk-desk-1";
     let d = await waitFor(phaseIs(f, name, "AwaitingApproval"), "response-review");
     assert.equal(d.workItem.spec.workflowRef?.name, "servicedesk");
-    assert.deepEqual(d.stages.map((s) => s.name), ["classify", "investigate", "respond", "response-review"]);
+    assert.deepEqual(d.stages.map((s) => s.name), ["classify", "investigate", "respond", "response-review", "publish-response"]);
     assert.equal(d.workItem.status?.stage, "response-review");
     for (const t of ["research-notes", "support-analysis", "customer-response"]) assert.ok(d.artifacts.some((a) => a.spec.artifactTypeRef.name === t), t);
 
@@ -266,7 +266,10 @@ test("servicedesk workflow: investigate → respond → human review (reject →
     }, "second review");
     assert.equal(d.artifacts.filter((a) => a.spec.artifactTypeRef.name === "customer-response").length, 2, "redrafted");
     await f.app.decideApproval(p, d.workItem.status!.blockedBy!.name, "approve");
-    await waitFor(phaseIs(f, name, "Done"), "Done");
+    await waitFor(async () => {
+      const x = await f.app.getWorkItem(p, name);
+      return x?.workItem.status?.phase === "AwaitingApproval" && x.workItem.status.stage === "publish-response" ? x : undefined;
+    }, "fresh publication review");
 
     // Human context survives a re-sync that updates title/description (sync writes only what it owns).
     await f.app.updateWorkItemContext(p, name, "Customer uses the Rover CLI in eu-central.");

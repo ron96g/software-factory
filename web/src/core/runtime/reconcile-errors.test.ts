@@ -3,10 +3,37 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { SqliteStore } from "../store/sqlite-store.ts";
 import { StoreEventRecorder } from "./event-recorder.ts";
-import { ControllerManager } from "./controller-manager.ts";
+import { ControllerManager, KeyedQueue } from "./controller-manager.ts";
 import { EventingReconcileErrorReporter } from "./reconcile-errors.ts";
 import { SecretRedactor } from "../transcripts/recorder.ts";
 import type { FactoryEvent } from "../model/kinds.ts";
+
+test("queue shutdown drains active reconciliation and discards queued or late requeues", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((r) => { release = r; });
+  const calls: string[] = [];
+  let completed = false;
+  const queue = new KeyedQueue(async (key) => {
+    calls.push(key);
+    await hold;
+    queue.addAfter("late", 60_000);
+    completed = true;
+  });
+  queue.add("active");
+  await new Promise<void>((r) => queueMicrotask(r));
+  queue.add("pending");
+  let stopped = false;
+  const stopping = queue.stop().then(() => { stopped = true; });
+  try {
+    await new Promise<void>((r) => queueMicrotask(r));
+    assert.equal(stopped, false, "closing the database here would race the active reconcile");
+    release();
+    await stopping;
+    assert.equal(completed, true);
+    assert.deepEqual(calls, ["active"]);
+    assert.equal(queue.idle(), true, "shutdown leaves no late retry timers");
+  } finally { release(); await stopping; }
+});
 
 test("Q2: repeated reconcile failures become a Warning event on the object; recovery is reported; secrets redacted", async () => {
   const clock = { now: () => new Date() };

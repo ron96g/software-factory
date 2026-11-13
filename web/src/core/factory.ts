@@ -4,6 +4,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import type { ModelProvider, ToolServer, Source, Repository } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
@@ -49,6 +50,7 @@ import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/client
 import { DefaultModelResolver } from "./agents/model-resolver.ts";
 import { ExplainResponder } from "./agents/explain-responder.ts";
 import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
+import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
 import { GithubConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
@@ -61,8 +63,25 @@ import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { ToolLoopExecutor } from "./agents/tool-loop.ts";
+import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
+import { AgentChatRunner } from "./agents/agent-chat.ts";
+import type { ConversationTurnRunner } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
+import { TicketActions } from "./tickets/actions.ts";
+import { CheckActions } from "./checks/actions.ts";
+import { checkRunValidator } from "./checks/admission.ts";
+import { createCheckRunController } from "./checks/controller.ts";
+import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
+import { SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
+import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
+import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
+import { VerificationService } from "./verification/service.ts";
+import { verificationContext } from "./verification/context.ts";
+import type { CheckResultClassifier } from "./ports/index.ts";
+import { DEFAULT_NAMESPACE } from "./model/resource.ts";
+import { ticketHandlers, ticketPublicationGate } from "./tickets/publication.ts";
+import type { SourceWritePolicy } from "./ports/index.ts";
 
 /** Composition-root convenience alias; consumers depend on the individual ports. */
 type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport & WorkspaceSweeper;
@@ -110,12 +129,22 @@ export async function createFactory(o: FactoryOptions) {
   admission.addValidator(nameValidator());
   admission.addValidator(refValidator());
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
+  admission.addValidator(checkRunValidator());
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
 
   // ── secrets & transcripts ────────────────────────────────────────────
   const redactor = new SecretRedactor();
   const secrets = new RedactingSecretResolver(new EnvSecretResolver(o.env ?? process.env), redactor);
+  // Queued chat text is persisted before any model/tool connection resolves its credentials.
+  const [providers, servers, sources, repositories] = await Promise.all([
+    store.list<ModelProvider>("ModelProvider"), store.list<ToolServer>("ToolServer"),
+    store.list<Source>("Source"), store.list<Repository>("Repository"),
+  ]);
+  for (const ref of [
+    ...providers.map((r) => r.spec.secretRef), ...servers.map((r) => r.spec.secretRef),
+    ...sources.map((r) => r.spec.connection?.secretRef), ...repositories.map((r) => r.spec.git?.secretRef),
+  ]) secrets.resolve(ref);
   const transcripts = new SqliteTranscriptStore(db, clock);
   const recorders = new DefaultRecorderFactory(transcripts, redactor);
 
@@ -176,14 +205,23 @@ export async function createFactory(o: FactoryOptions) {
   const knowledge = new DefaultKnowledgeSearcher({ reader: store, sources: knowledgeSources, redactor });
 
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
+  const compiler = new DefaultWorkflowCompiler(store);
+  const snapshots = new GitWorkspaceSnapshotter();
+  const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor });
+  const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
+    snapshots, environments, scheduler: checkScheduler, events, clock, redactor });
   const contexts = new DefaultContextFactory({
     reader: store,
-    providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge)],
+    providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
+      verificationContext({ reader: store, logs: transcripts, compiler, redactor })],
     models,
     recorders,
     environments,
+    compiler,
   });
   const prompts = new DefaultPromptBuilder();
+  const recordedTurns = new DefaultRecordedToolTurns();
+  const toolProvider = new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor });
   const realExecutors = [
     new ToolLoopExecutor({
       reader: store,
@@ -192,7 +230,9 @@ export async function createFactory(o: FactoryOptions) {
       environments,
       readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()),
       knowledge,
-      toolProvider: new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor }),
+      toolProvider,
+      turns: recordedTurns,
+      checks: verification,
     }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
@@ -204,13 +244,13 @@ export async function createFactory(o: FactoryOptions) {
   const executionGate = simulation === "wait" ? new RequireRealExecutor(realExecutors) : undefined;
 
   // ── workflow & gates ─────────────────────────────────────────────────
-  const compiler = new DefaultWorkflowCompiler(store);
   const checks = new Registry<GateCheck>();
   const gates = new Registry<GateEvaluator>();
   const runner = new SandboxCommandRunner(store, environments);
   for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, redactor, pollMs: o.checkPollMs })]) {
     gates.register(g.type, g);
   }
+  for (const gate of verification.gates) gates.register(gate.type, gate);
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();
@@ -228,32 +268,62 @@ export async function createFactory(o: FactoryOptions) {
     codeHosts: o.codeHosts ?? [new GithubCodeHost(secrets, o.fetch)],
   });
   outboxHandlers.register(pr.action, pr);
+  for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);
+  const sourcePolicies = new Registry<SourceWritePolicy>();
+  sourcePolicies.register("comment", { check: (s) => s.spec.sync?.bidirectional ? undefined : "read-only (sync.bidirectional is not true)" });
+  sourcePolicies.register("service-desk-reply", { check: (s) => Array.isArray(s.spec.writeBack?.replyVisibilities) && s.spec.writeBack.replyVisibilities.length ? undefined : "reviewed replies are not permitted" });
+  sourcePolicies.register("ticket-transition", { check: (s) => s.spec.writeBack?.transitions === true ? undefined : "ticket transitions are not permitted" });
+  const publicationGate = ticketPublicationGate({ reader: store, outbox, redactor });
+  gates.register(publicationGate.type, publicationGate);
 
   // ── controllers ──────────────────────────────────────────────────────
   const reconcileErrors = new EventingReconcileErrorReporter({ reader: store, events, redactor, clock });
   const manager = new ControllerManager(store, o.log, reconcileErrors);
-  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend }));
+  const classifiers = new Registry<CheckResultClassifier>();
+  registerCheckResultClassifiers(classifiers);
+  const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
+    transcripts, snapshots, environments, redactor });
+  const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
+    runner: new SandboxCheckRunner(store, environments), snapshots, clock, events, redactor, classifiers,
+    contracts: verification, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
+  manager.register(checkRunController);
+  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
+    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification }));
   manager.register(
     createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor }),
   );
-  manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor }));
+  manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor, policies: sourcePolicies }));
   manager.register(
     createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
   );
-  manager.register(createAgentRunController({ reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor, gate: executionGate && { policy: executionGate, previews: contexts } }));
+  const agentRunController = createAgentRunController({
+    reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
+    gate: executionGate && { policy: executionGate, previews: contexts },
+    onError: (message) => (o.log ?? console.error)(`[agentrun] ${message}`),
+  });
+  manager.register(agentRunController);
   manager.register(createClarificationController({ reader: store, status: store, clock }));
   manager.register(createApprovalController({ reader: store, status: store }));
-  manager.register(createConversationController({ reader: store, status: store, recorders }));
+  const conversationTurns = new Registry<ConversationTurnRunner>();
+  const itemRecords = new DefaultWorkItemRecordReader(store);
+  const tickets = new TicketActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, connectors, outbox, clock, redactor, compiler, records: itemRecords, events });
+  conversationTurns.register("agent-chat", new AgentChatRunner({ reader: store, transcripts, models, tools: toolProvider, turns: recordedTurns, environments, redactor, records: itemRecords }));
+  const conversationController = createConversationController({
+    reader: store, status: store, recorders, transcripts, turns: conversationTurns, clock, redactor, events,
+    onError: (message) => (o.log ?? console.error)(`[conversation] ${message}`),
+  });
+  manager.register(conversationController);
   manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
 
   const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events });
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));
-  responders.register("explain-item", new ItemExplainResponder({ reader: store, transcripts, recorders, models, redactor }));
+  responders.register("explain-item", new ItemExplainResponder({ records: itemRecords, transcripts, recorders, models, redactor }));
   responders.register("refine-knowledge", new KnowledgeRefineResponder({ reader: store, transcripts, recorders, models, redactor }));
 
   const app = new FactoryApp({
+    verificationGuard: verification,
     reader: store,
     writer: store,
     kinds,
@@ -267,6 +337,9 @@ export async function createFactory(o: FactoryOptions) {
     events,
     responders,
     simulation,
+    redactor,
+    records: itemRecords,
+    clock,
   });
 
   // ── MCP server (ADR-0034): what local agent harnesses may do; gates stay in the UI ──
@@ -279,6 +352,9 @@ export async function createFactory(o: FactoryOptions) {
 
   return {
     app,
+    tickets,
+    checkRuns,
+    verification,
     /** Streamable HTTP MCP endpoint handler (Request → Response). */
     mcp,
     /** The exposed tool catalog (also used by tests). */
@@ -292,6 +368,7 @@ export async function createFactory(o: FactoryOptions) {
     },
     async stop() {
       await manager.stop();
+      await Promise.all([agentRunController.stop(), conversationController.stop(), checkRunController.stop()]);
       db.close();
     },
   };

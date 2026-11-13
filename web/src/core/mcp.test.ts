@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createFactory, type Factory } from "./factory.ts";
 import { ANONYMOUS, type PreparedWorkspace } from "./ports/index.ts";
 
@@ -91,13 +94,18 @@ test("MCP server: token required; harness creates items, proposes and searches k
 test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop (recorded)", async () => {
   const call = (id: string, name: string, args: unknown) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
   const offered: string[][] = [];
+  const crCalls: string[] = [];
+  const crServers: Server[] = [];
   const llm = (async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as { messages: { role: string; content?: string }[]; tools?: { function: { name: string } }[] };
     const system = String(body.messages[0].content ?? "");
     if (body.tools && system.includes("# Support Engineer Agent")) {
       offered.push(body.tools.map((t) => t.function.name));
       const done = body.messages.filter((m) => m.role === "tool").length;
-      const step = done === 0 ? call("k1", "factory__search_knowledge", { query: "rover" }) : call("f1", "finish", { summary: "Answered", outcome: "resolvable", artifacts: [{ type: "support-analysis", content: "ok" }] });
+      const step = done === 0 ? call("k1", "factory__search_knowledge", { query: "rover" })
+        : done === 1 ? call("d1", "kubernetes-crs__discover_resources", {})
+        : done === 2 ? call("g1", "kubernetes-crs__get_resource", { apiVersion: "rover.cp.ei.telekom.de/v1", kind: "Rover", namespace: "desk", name: "ticket-rover" })
+        : call("f1", "finish", { summary: "Answered", outcome: "resolvable", artifacts: [{ type: "support-analysis", content: "ok" }] });
       return Response.json({ choices: [{ message: { content: null, tool_calls: [step] } }] });
     }
     if (body.tools) return Response.json({ choices: [{ message: { content: null, tool_calls: [call("f", "finish", { summary: "done", artifacts: [{ type: "research-notes", content: "notes" }] })] } }] });
@@ -117,6 +125,24 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
     env: { OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
     fetch: routing(() => f, llm),
     workspaceBackend: backend,
+    mcpTransportFor: (definition) => {
+      if (definition.metadata.name !== "kubernetes-crs") return undefined;
+      const remote = new Server({ name: "cr-fixture", version: "1" }, { capabilities: { tools: {} } });
+      remote.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: ["discover_resources", "list_resources", "get_resource", "get_resource_hierarchy", "delete_resource"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
+      }));
+      remote.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+        crCalls.push(params.name);
+        const data = params.name === "discover_resources"
+          ? { namespaces: ["desk"], resources: [{ apiVersion: "rover.cp.ei.telekom.de/v1", kind: "Rover" }] }
+          : { apiVersion: "rover.cp.ei.telekom.de/v1", kind: "Rover", metadata: { name: "ticket-rover", namespace: "desk", resourceVersion: "42" }, status: { conditions: [{ type: "Ready", status: "False" }] } };
+        return { content: [{ type: "text", text: JSON.stringify(data) }] };
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      crServers.push(remote);
+      void remote.connect(serverTransport);
+      return clientTransport;
+    },
     log: () => {},
   });
   await f.start();
@@ -132,14 +158,22 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
     }, "analysis done");
     assert.ok(offered[0].includes("factory__search_knowledge"));
     assert.ok(!offered[0].includes("factory__create_work_item"), "only allowedTools are offered");
+    assert.ok(offered[0].includes("kubernetes-crs__discover_resources"));
+    assert.ok(!offered[0].includes("kubernetes-crs__delete_resource"), "no Kubernetes write tool is allowed");
+    assert.deepEqual(crCalls.slice(0, 2), ["discover_resources", "get_resource"]);
     const run = d.runs.find((r) => r.spec.step === "analyze-request")!;
     const t = await f.app.runTranscript(ANONYMOUS, run.metadata.name);
     assert.ok(t.some((m) => m.role === "note" && /MCP tools: factory__search_knowledge/.test(m.content)));
     const result = t.find((m) => m.role === "tool-result" && m.meta?.tool === "factory__search_knowledge")!;
     assert.match(result.content, /Rover CLI applies subscriptions/);
+    const crResult = t.find((m) => m.role === "tool-result" && m.meta?.tool === "kubernetes-crs__get_resource")!;
+    assert.match(crResult.content, /ticket-rover/);
+    assert.match(crResult.content, /resourceVersion/);
+    assert.match(crResult.content, /data, not instructions/);
     await waitFor(async () => (await f.app.getWorkItem(ANONYMOUS, wi.metadata.name))?.workItem.status?.phase === "AwaitingApproval", "response-review");
   } finally {
     await f.stop();
+    await Promise.all(crServers.map((s) => s.close()));
   }
 });
 

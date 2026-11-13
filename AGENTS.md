@@ -16,7 +16,7 @@ A **software factory** that implements the **AI-DLC** (AI-Driven Development Lif
   `Source`, `Repository`, `ModelProvider`, `KnowledgeSource`, and `ToolServer` as Kubernetes-style custom resources
   (YAML). They reference each other through typed `*Ref`s.
 - **Runtime** (in a DB): `WorkItem`, `AgentRun`, `Artifact`, `Clarification`, `Approval`, `Conversation`, `Event`,
-  `OutboxMessage`, and `KnowledgeEntry` (ADR-0030), all modeled as custom resources (`apiVersion / kind / metadata / spec / status`). Agent
+  `OutboxMessage`, `KnowledgeEntry` (ADR-0030), and `CheckRun` (ADR-0042), all modeled as custom resources (`apiVersion / kind / metadata / spec / status`). Agent
   **transcripts** are stored separately in an append-only log (ADR-0012).
 - **Factory loop** (diagram: `docs/ai-dlc-glossary.md`):
   input (manual | Jira | GitHub | monitoring) → classify → triage → spec → spec-review [human] → implement →
@@ -88,6 +88,7 @@ sources/             Source CRs (manual, github, jira, monitoring-feedback)
 repositories/        Repository CRs (codebases agents research/edit)
 knowledge-sources/   KnowledgeSource CRs (external docs agents can search, ADR-0030)
 tool-servers/        ToolServer CRs (MCP servers agents may use, ADR-0034)
+components/kubernetes-cr-mcp/  Standalone read-only Kubernetes CR MCP server (ADR-0035)
 schemas/             JSON Schemas
 tools/               validate.py
 examples/            example runtime objects
@@ -154,7 +155,7 @@ text in Jira comments.
 | Q1 | Review → fix loop | Stage-level `loop` (outcome → goto, bounded): AI code review returns `changes-requested` for blocking findings, the developer gets the review as input and fixes before the human gate | Blocking AI findings are fixed automatically (max N rounds), then humans review | ✅ (ADR-0024) |
 | Q2 | Visible control-loop errors | `ReconcileErrorReporter` port: repeated reconcile failures become Warning events on the object; failing-controller count in system health + UI badge | A stuck item shows why in its timeline | ✅ (ADR-0024) |
 
-Known v0.3 limits: failed check output is not yet fed to the developer as input (AI reviews and human gate comments are); checks re-run after a restart (in-memory cache); the verifier's verdict is advisory; workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
+Known v0.3 limits: on legacy `factory-loop`, failed check output is not fed to the developer as input (AI reviews and human gate comments are), checks re-run after a restart (in-memory cache), and the verifier's verdict is advisory. The opt-in `factory-verified` path addresses these check limitations (ADR-0042). Workspaces fork from the **committed** HEAD (uncommitted local changes are invisible to agents); only `host` has a workspace backend so far; tool results go to the model unredacted, which is safe
 only because sandboxes never receive factory secrets (ADR-0019 §7).
 
 #### UX increment (current, replaces v0.4 for now — ADR-0025)
@@ -170,12 +171,22 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X8 | Per-agent models | `ModelProvider.agentModels` (agent → model) overrides the tier for that agent (ADR-0028) | Different agents run on different models without naming vendors in agent files | ✅ |
 | X9 | Sync from real sources | GitHub source points at `ron96g/software-factory` (label `factory`); dashboard "Sync" imports issues | Labelled issues appear as work items | ✅ |
 | X10 | Restart & simulation policy | `spec.restart` (from the first or a chosen stage, new round, earlier output superseded), UI "Restart" menu; `FACTORY_SIMULATION=wait` keeps runs Pending until a real executor fits (ADR-0029) | An item processed without an LLM can be re-run with one, history kept; with `wait`, no placeholders are produced | ✅ |
-| X11 | Service desk workflow | `servicedesk` workflow + `support-engineer` agent + `support-analysis`/`customer-response` artifacts; `jira-servicedesk` (read-only) uses it with repository `controlplane` | A service request is investigated against the code and ends in a human-approved reply, without writing to the ticket | ✅ |
+| X11 | Service desk workflow | `servicedesk` workflow + `support-engineer` agent + `support-analysis`/`customer-response` artifacts; `jira-servicedesk` uses it with repository `controlplane` | A request is investigated against the code and produces a human-reviewed reply; automatic sync stays read-only (reviewed publication extends this in X21) | ✅ |
 | X12 | Knowledge base | `KnowledgeEntry` (agents propose via the `knowledge-base` skill → human approves, edits, or refines with the proposing agent), `KnowledgeSource` (`files`: ripgrep over local docs), `KnowledgeSearcher` context + `search_knowledge` tool, UI "Knowledge" (ADR-0030) | An agent's proposal is approved by a human and then used (cited) by a later run; unapproved knowledge never reaches agents | ✅ |
 | X13 | Wait on model quota | HTTP 429/503/529 → `ModelUnavailableError`; the run waits (`retryAt`, Retry-After or backoff up to 15 min) instead of failing the item; the item shows phase `Waiting` with the reason (ADR-0031) | An exhausted quota pauses the item visibly and it resumes by itself | ✅ |
 | X14 | Additional context | `WorkItem.spec.context` (human-only, sync never overwrites) in every agent prompt; editable in the new-item form and on the item page (ADR-0032) | Agents use team-provided context without asking for it | ✅ |
 | X15 | Toolchains in sandboxes | `SandboxProfile.env` (plain, non-secret), repository's profile wins over the agent's, `go-build` sets `GOPROXY`; developer/verifier install tools themselves (ADR-0033) | An agent installs `controller-gen`/envtest itself on a Go repo | ✅ |
 | X16 | MCP | Factory as MCP server (`/api/mcp`, bearer `FACTORY_MCP_TOKEN`, no gate tools) + `ToolServer` kind / `ToolProvider` port for agents (http; stdio with host opt-in); `support-engineer` uses the factory's own MCP for knowledge (ADR-0034) | A local harness creates and answers items via MCP; an agent calls an MCP tool in its run (recorded) | ✅ |
+| X17 | Kubernetes CR MCP | Standalone stdio server with YAML-allowlisted CR types, namespaces and reference hierarchy; discovery, label-filtered list, get and bounded hierarchy; support engineer integration (ADR-0035) | Standalone protocol/API tests pass; agent integration uses existing MCP recording; no cluster writes or credential exposure | ✅ |
+| X18 | Direct agent chat | Standalone `agent-chat` Conversations, explicit read-only MCP policy and answer completion, durable serialized turns and waiting/error states, resumable UI, human conversion to WorkItem (ADR-0036, ADR-0038) | Support engineer investigates via recorded tools without a WorkItem; announcements cannot end a turn; restart/retry preserves messages; conversion preserves human gates | ✅ |
+| X19 | Work-item agent chat | Optional `workItemRef` on direct chats, shared bounded evidence digest refreshed and recorded per turn, start/resume from item or Chats (ADR-0037) | Agent uses item evidence plus allowed MCP reads; new turns see updated context; workflow and gates remain unchanged | ✅ |
+| X20 | Work-item follow-ups | Human-created independent items with selected workflow/repositories, reviewed evidence snapshot and separate free-text instructions (ADR-0039) | Preview is bounded and stale-safe; retries deduplicate; new agents see instructions and evidence; origin, gates and deletion lifecycle stay independent | ✅ |
+| X21 | Reviewed Jira actions | Fresh publication review after response review, explicit public/internal replies, optional follow-on or standalone Jira transitions through the outbox (ADR-0040); automatic service-desk sync remains read-only | Exact response/visibility reviewed; live allowed transitions; durable receipts and safe crash recovery; existing completed items never post automatically | ✅ |
+| X22 | Agent retrospectives | Workflow feedback with pinned provenance, deterministic support thresholds, separate proposal-only retrospective workflow, human review and manual implementation follow-up (ADR-0041) | Deduplicated eligible support creates one investigation; evidence survives origin deletion; human review is durable; originating workflows and publication permissions stay unchanged | Planned (ADR proposed) |
+| X23a | Reliable check execution | Structured CheckRun lifecycle/outcomes, configurable per-check budgets, durable redacted logs/results and evidence UI (ADR-0042) | Check identity and tested snapshot are pinned; interrupted execution recovers; results deduplicate and survive restart; missing evidence is never a pass | ✅ |
+| X23b | Evidence-driven recovery | Typed failure routing, separate execution/code retry budgets, durable human attention and developer check-failure input (ADR-0042; after X23a) | Timeout, cancellation and setup failure do not trigger blind code-edit loops; repeated unchanged failures escalate with actionable evidence | ✅ |
+| X23c | Verification contracts | Reviewed validation plans, same-environment preflight, shared agent/gate check runner, snapshot freshness and required-evidence enforcement (ADR-0042; after X23b) | Required evidence or explicit policy-permitted waivers are bound to plan/candidate; stale or simulated evidence cannot pass; existing gates and publication permissions remain intact | ✅ |
+| X24 | Candidate preparation and recovery | Pre-review named preparation checks, active-job waits, bounded return-to-review on drift and explicit check selectors (ADR-0043) | Builds cannot race review; regenerated code gets fresh review; clarification answers cannot impersonate approval; preparation never replaces verification | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

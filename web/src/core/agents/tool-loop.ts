@@ -21,6 +21,8 @@ import {
   type KnowledgeSearcher,
   type ToolProvider,
   type ToolSession,
+  type RecordedToolTurns,
+  type AgentCheckRequests,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
@@ -57,7 +59,9 @@ export interface ToolLoopDeps {
   knowledge?: KnowledgeSearcher;
   /** ADR-0034: opens the agent's ToolServers (MCP). */
   toolProvider?: ToolProvider;
+  turns: RecordedToolTurns;
   maxSteps?: number;
+  checks?: AgentCheckRequests;
 }
 
 /**
@@ -160,6 +164,7 @@ export class ToolLoopExecutor implements AgentExecutor {
     all: ToolCapabilities,
     diff: () => Promise<string>,
   ): Promise<AgentResult> {
+    if (this.d.checks) all = { ...all, checks: { run: (input) => this.d.checks!.run(ctx, input) } };
     const model = ctx.model!;
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
     const sys = { type: "system" as const, id: "tool-loop" };
@@ -198,14 +203,7 @@ export class ToolLoopExecutor implements AgentExecutor {
         const maxSteps = this.d.maxSteps ?? 30;
 
         for (let step = 1; step <= maxSteps; step++) {
-          const started = Date.now();
-          const reply = await model.client.completeWithTools({ messages, tools: schemas, tier: model.tier });
-          await ctx.transcript.record({
-            role: "assistant",
-            author: agentAuthor,
-            content: reply.text ?? (reply.toolCalls.length ? "" : "(empty)"),
-            meta: { step, latencyMs: Date.now() - started, model: model.model, toolCalls: reply.toolCalls.map((c) => c.name) },
-          });
+          const reply = await this.d.turns.complete({ model, messages, tools: schemas, transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
           if (!reply.toolCalls.length) {
             messages.push({ role: "assistant", content: reply.text ?? "" });
             messages.push({ role: "user", content: "Continue using the tools, or call `finish` when you are done." });
@@ -213,18 +211,11 @@ export class ToolLoopExecutor implements AgentExecutor {
           }
           messages.push({ role: "assistant", content: reply.text, toolCalls: reply.toolCalls });
           for (const call of reply.toolCalls) {
-            await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
             if (call.name === "finish") {
+              await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
               return await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step });
             }
-            let result: string;
-            const tool = bound.get(call.name);
-            try {
-              result = tool ? await tool.invoke(call.arguments) : `error: unknown tool "${call.name}"`;
-            } catch (e) {
-              result = `error: ${e instanceof Error ? e.message : String(e)}`;
-            }
-            await ctx.transcript.record({ role: "tool-result", author: sys, content: result, meta: { tool: call.name, step } });
+            const result = await this.d.turns.invoke({ call, tool: bound.get(call.name), transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
           }
         }

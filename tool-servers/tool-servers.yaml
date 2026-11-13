@@ -11,3 +11,21 @@ spec:
   url: http://localhost:3000/api/mcp
   secretRef: { name: factory-mcp-token }
   allowedTools: [search_knowledge]
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ToolServer
+metadata:
+  name: kubernetes-crs
+spec:
+  description: Read-only Kubernetes CR discovery and state for service desk investigation (ADR-0035). Install the standalone component and create the local catalog first.
+  transport: stdio
+  command: node
+  args:
+    - ../components/kubernetes-cr-mcp/src/index.ts
+    - --config
+    - ~/.config/software-factory/kubernetes-cr-mcp.yaml
+    - --kubeconfig
+    - ~/git/dhei/products/controlplane/workspace/config/ephemeral/clusters/pr-816/kubeconfig
+    - --context
+    - pr-816
+  allowedTools: [discover_resources, list_resources, get_resource, get_resource_hierarchy]

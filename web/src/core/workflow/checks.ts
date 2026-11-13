@@ -2,6 +2,7 @@ import type { Repository, Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import type { CommandRunner, EventRecorder, GateCheckLookup, GateContext, GateDecision, GateEvaluator, Redactor, ResourceReader } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { checkConfig } from "../checks/config.ts";
 
 type Result = { passed: boolean; message: string };
 
@@ -22,9 +23,9 @@ export function automatedGate(d: {
   const results = new Map<string, Result>();
   const warned = new Set<string>();
 
-  async function runCommand(key: string, ctx: GateContext, ws: Workspace, repos: Repository[], name: string, command: string) {
+  async function runCommand(key: string, ctx: GateContext, ws: Workspace, repos: Repository[], name: string, command: string, timeoutMs: number) {
     try {
-      const r = await d.runner.run(ws, repos, command);
+      const r = await d.runner.run(ws, repos, command, timeoutMs);
       const tail = d.redactor.redact(r.output.slice(-1500)); // ADR-0015: command output can echo env/config
       const passed = r.exitCode === 0;
       results.set(key, { passed, message: `${ws.spec.repositoryRef.name}: \`${command}\` → exit ${r.exitCode} (${r.durationMs} ms)\n${tail}` });
@@ -62,8 +63,8 @@ export function automatedGate(d: {
           continue;
         }
         const targets = workspaces.flatMap((ws) => {
-          const cmd = repos.find((r) => r.metadata.name === ws.spec.repositoryRef.name)?.spec.checks?.[name];
-          return cmd ? [{ ws, cmd }] : [];
+          const repo = repos.find((r) => r.metadata.name === ws.spec.repositoryRef.name);
+          return repo?.spec.checks?.[name] ? [{ ws, ...checkConfig(repo, name) }] : [];
         });
         if (!targets.length) {
           const wkey = `${base}/${name}`;
@@ -73,7 +74,7 @@ export function automatedGate(d: {
           }
           continue;
         }
-        for (const { ws, cmd } of targets) {
+        for (const { ws, command, timeoutMs } of targets) {
           const key = `${base}/${name}/${ws.metadata.name}`;
           const done = results.get(key);
           if (done) {
@@ -82,7 +83,7 @@ export function automatedGate(d: {
           }
           pending = true;
           if (!running.has(key)) {
-            running.set(key, runCommand(key, ctx, ws, repos, name, cmd).finally(() => running.delete(key)));
+            running.set(key, runCommand(key, ctx, ws, repos, name, command, timeoutMs).finally(() => running.delete(key)));
           }
         }
       }

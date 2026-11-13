@@ -1,16 +1,17 @@
-import type { AgentRun, Approval, Artifact, Clarification, Conversation, FactoryEvent, WorkItem } from "../model/kinds.ts";
+import type { AgentRun, Artifact, Conversation } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import type {
   ChatMessage,
   ConversationResponder,
   ModelResolver,
   Redactor,
-  ResourceReader,
+  WorkItemRecordReader,
   TranscriptAuthor,
   TranscriptMessage,
   TranscriptReader,
   TranscriptRecorderFactory,
 } from "../ports/index.ts";
+import { workItemDigest } from "./work-item-digest.ts";
 
 const RULES = `You answer questions about one work item of the Software Factory, using ONLY the record below
 (agent runs with their results, artifacts, human input, and events). This is explain mode (ADR-0012):
@@ -20,14 +21,13 @@ const RULES = `You answer questions about one work item of the Software Factory,
 - Be concise; use Markdown (lists, tables) where it helps.`;
 
 const roundOf = (r: AgentRun) => /-r(\d+)(?:-replay-\d+)?$/.exec(r.metadata.name)?.[1] ?? "?";
-const clip = (s: string | undefined, n: number) => (!s ? "" : s.length > n ? `${s.slice(0, n)} …[truncated]` : s);
 
 /**
  * X4: explains the whole work item. The context is a digest (bounded size) of all runs, artifacts, human input and
  * key events, so one question can span every agent. Side-effect free apart from the conversation transcript.
  */
 export class ItemExplainResponder implements ConversationResponder {
-  private readonly d: { reader: ResourceReader; transcripts: TranscriptReader; recorders: TranscriptRecorderFactory; models: ModelResolver; redactor: Redactor };
+  private readonly d: { records: WorkItemRecordReader; transcripts: TranscriptReader; recorders: TranscriptRecorderFactory; models: ModelResolver; redactor: Redactor };
   constructor(d: ItemExplainResponder["d"]) {
     this.d = d;
   }
@@ -37,16 +37,8 @@ export class ItemExplainResponder implements ConversationResponder {
     const ns = nsOf(conv);
     if (!conv.spec.workItemRef) throw new Error("explain-item conversations need a work item");
     const name = conv.spec.workItemRef.name;
-    const owned = { kind: "WorkItem", name, namespace: ns };
-    const [wi, runs, artifacts, clarifications, approvals, events] = await Promise.all([
-      this.d.reader.get<WorkItem>("WorkItem", ns, name),
-      this.d.reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned }),
-      this.d.reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned }),
-      this.d.reader.list<Clarification>("Clarification", { namespace: ns, ownedBy: owned }),
-      this.d.reader.list<Approval>("Approval", { namespace: ns, ownedBy: owned }),
-      this.d.reader.list<FactoryEvent>("Event", { namespace: ns, labelSelector: { "factory.ai-dlc.io/workitem": name } }),
-    ]);
-    if (!wi) throw new Error(`work item ${name} not found`);
+    const record = await this.d.records.read(ns, name);
+    const { runs, artifacts } = record;
 
     const recorder = await this.d.recorders.forConversation(conv);
     const history = await this.d.transcripts.read(recorder.ref);
@@ -57,7 +49,7 @@ export class ItemExplainResponder implements ConversationResponder {
     if (model) {
       const messages: ChatMessage[] = [
         // Defence in depth (ADR-0015): human answers/comments in the digest are not redacted at write time.
-        { role: "system", content: `${RULES}\n\n${this.d.redactor.redact(digest(wi, runs, artifacts, clarifications, approvals, events))}` },
+        { role: "system", content: `${RULES}\n\n${this.d.redactor.redact(workItemDigest(record))}` },
         ...history.filter((m) => m.role === "user" || m.role === "assistant").map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user", content: humanMessage },
       ];
@@ -69,42 +61,6 @@ export class ItemExplainResponder implements ConversationResponder {
     const all = await this.d.transcripts.read(recorder.ref);
     return all[all.length - 1];
   }
-}
-
-/** Bounded, chronological record of the item (budget keeps prompts manageable for long items). */
-export function digest(wi: WorkItem, runs: AgentRun[], artifacts: Artifact[], clar: Clarification[], appr: Approval[], events: FactoryEvent[]): string {
-  const parts: string[] = [
-    `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
-    clip(wi.spec.description, 2000),
-    wi.spec.context ? `## Additional context from the team\n${clip(wi.spec.context, 4000)}` : "",
-    `Status: ${wi.status?.phase} · stage ${wi.status?.stage} · round ${wi.status?.round}`,
-    "## Agent runs (chronological)",
-    ...runs.map((r) => {
-      const res = r.status?.result;
-      const p = r.status?.provenance;
-      return [
-        `- **${r.spec.agentRef.name}** · ${r.spec.stage}/${r.spec.step} · round ${roundOf(r)}${r.spec.replayOf ? " · replay" : ""} · ${r.status?.phase} · ${p?.executor ?? ""}${p?.model ? ` (${p.model.name})` : ""} · run \`${r.metadata.name}\``,
-        res?.summary ? `  - summary: ${clip(res.summary, 800)}` : "",
-        res?.outcome ? `  - outcome: ${res.outcome}` : "",
-        res?.questions?.length ? `  - asked: ${res.questions.join(" | ")}` : "",
-        r.status?.message ? `  - message: ${clip(r.status.message, 400)}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    }),
-    "## Artifacts (latest content per run, truncated)",
-    ...artifacts.map((a) => `### ${a.spec.artifactTypeRef.name} by ${a.spec.producedBy?.agentRef.name} (run \`${a.spec.producedBy?.agentRunRef.name}\`)\n${clip(a.spec.content, 6000)}`),
-    "## Human input",
-    ...clar.map((c) => `- clarification (${c.spec.stage}): ${c.spec.questions.join(" | ")} → ${c.spec.answers?.join(" | ") ?? "(open)"}`),
-    ...appr.map((a) => `- approval (${a.spec.stage}): ${a.spec.decision ?? "pending"}${a.spec.comment ? ` — ${a.spec.comment}` : ""}`),
-    "## Key events",
-    ...events
-      .filter((e) => e.spec.type === "Warning" || !["Started", "Succeeded", "Preparing"].includes(e.spec.reason))
-      .slice(-40)
-      .map((e) => `- ${e.metadata.creationTimestamp} ${e.spec.type === "Warning" ? "⚠ " : ""}${e.spec.reason}: ${clip(e.spec.message, 300)}`),
-  ];
-  const text = parts.join("\n");
-  return text.length > 60_000 ? `${text.slice(0, 60_000)}\n…[record truncated]` : text;
 }
 
 /** Without an LLM: list the runs (and artifacts) of agents mentioned in the question, else all. */
