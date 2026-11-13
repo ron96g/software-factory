@@ -1,0 +1,80 @@
+web/src/core/checks/admission.ts
+  s_3c433e3c1964d4::t_373304e0212a79 5,7,92,141-142,144-145
+web/src/core/verification/context.ts
+  s_3c433e3c1964d4::t_aedc4ac6546188 21,26,37,53
+web/src/core/checks/controller.ts
+  s_3c433e3c1964d4::t_373304e0212a79 6,8,22,127,129,134-135
+web/src/core/workflow/checks.ts
+  s_3c433e3c1964d4::t_373304e0212a79 3,5,21,66-67,69-70
+  s_3c433e3c1964d4::t_5a5196500b37fd 1,27,33,79,88
+web/src/core/module-scope.test.ts
+  s_3c433e3c1964d4::t_17dca4ba48c5a3 135-147
+  s_3c433e3c1964d4::t_c56d6e0d056be8 4-5,23,38-39,74,122,175,180-182
+  s_3c433e3c1964d4::t_3c3275001e65bc 8,10,12,14,16-19,22,24-25,192-193,204-212,214-268,271-281
+  s_3c433e3c1964d4::t_4cdd5310cb36e7 179
+  s_3c433e3c1964d4::t_bafb316bf3970d 269-270
+  s_3c433e3c1964d4::t_765f9334425c69 1-3,6-7,9,11,15,20-21,26-37,40-73,75-121,123-134,148-174,176-178,183-191,282
+  s_3c433e3c1964d4::t_3f5955b64ba210 13,194-203,213
+docs/architecture.md
+  s_3c433e3c1964d4::t_5a5196500b37fd 188,193-211
+  s_3c433e3c1964d4::t_35e2feef94052f 189-190
+  s_3c433e3c1964d4::t_308f0252ece069 212
+web/src/core/factory.ts
+  s_3c433e3c1964d4::t_aedc4ac6546188 76,128,134,212,252,287,289
+agents/verifier.md
+  s_3c433e3c1964d4::t_aedc4ac6546188 29-31
+web/src/core/model/kinds.ts
+  s_3c433e3c1964d4::t_17dca4ba48c5a3 145
+  s_3c433e3c1964d4::t_d7006dd344ede9 143-144,309-316,332
+web/src/core/checks/config.ts
+  s_3c433e3c1964d4::t_8b46036c771327 1-2,14-15,18-20,23-34
+  s_3c433e3c1964d4::t_552593ed493990 35
+repositories/repositories.yaml
+  s_3c433e3c1964d4::t_aedc4ac6546188 98-100,102-107
+  s_3c433e3c1964d4::t_6ddfa0bdcbe71d 101
+skills/validation-planning.md
+  s_3c433e3c1964d4::t_aedc4ac6546188 26-29
+web/src/core/checks/actions.ts
+  s_3c433e3c1964d4::t_678ae7913d7a01 113
+  s_3c433e3c1964d4::t_373304e0212a79 5,7,21,99
+docs/adr/0044-affected-module-verification.md
+  s_3c433e3c1964d4::t_d7006dd344ede9 1-26,30-52
+  s_3c433e3c1964d4::t_17dca4ba48c5a3 27-29
+README.md
+  s_3c433e3c1964d4::t_5a5196500b37fd 151-158
+web/src/core/adapters/workspaces/module-scope.ts
+  s_3c433e3c1964d4::t_17dca4ba48c5a3 47-49,77-78,81
+  s_3c433e3c1964d4::t_c56d6e0d056be8 10
+  s_3c433e3c1964d4::t_8b46036c771327 1-9,11-46,50-76,79-80,82-98
+AGENTS.md
+  s_3c433e3c1964d4::t_6ddfa0bdcbe71d 190
+web/src/core/ports/checks.ts
+  s_3c433e3c1964d4::t_d7006dd344ede9 1,10-11
+  s_3c433e3c1964d4::t_9323ef3a326d29 12-13
+web/src/ui/check-runs.tsx
+  s_3c433e3c1964d4::t_aedc4ac6546188 142-145
+docs/adr/0042-reliable-verification-and-recovery.md
+  s_3c433e3c1964d4::t_35e2feef94052f 3
+docs/ai-dlc-glossary.md
+  s_3c433e3c1964d4::t_5a5196500b37fd 178
+agents/developer.md
+  s_3c433e3c1964d4::t_aedc4ac6546188 30-34
+web/src/core/checks/scheduler.ts
+  s_3c433e3c1964d4::t_373304e0212a79 6,8,18,153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "717d015f1a28d5eafb037358967496b5b00c8bd3",
+  "prompts": {},
+  "sessions": {
+    "s_3c433e3c1964d4": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9eb06620-232e-4d2c-9191-f51cf9838b75",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
