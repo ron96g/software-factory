@@ -504,6 +504,8 @@ export interface KnowledgeSourceSpec {
   include?: string[];
   exclude?: string[];
   scope?: KnowledgeScope;
+  /** External sources are always read-only (default). Managed knowledge is KnowledgeEntry (ADR-0030). */
+  access?: "read-only";
 }
 export type KnowledgeSource = Resource<KnowledgeSourceSpec>;
 

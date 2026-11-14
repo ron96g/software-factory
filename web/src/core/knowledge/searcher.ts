@@ -1,3 +1,4 @@
+import { knowledgeSourceAccess } from "./access.ts";
 import type { KnowledgeEntry, KnowledgeScope, KnowledgeSource } from "../model/kinds.ts";
 import { DEFAULT_NAMESPACE, SYSTEM_NAMESPACE } from "../model/resource.ts";
 import type { KnowledgeHit, KnowledgeQuery, KnowledgeSearcher, KnowledgeSourceSearch, Lookup, Redactor, ResourceReader } from "../ports/index.ts";
@@ -42,6 +43,10 @@ export class DefaultKnowledgeSearcher implements KnowledgeSearcher {
     const docs: KnowledgeHit[] = [];
     for (const source of await this.d.reader.list<KnowledgeSource>("KnowledgeSource", { namespace: SYSTEM_NAMESPACE })) {
       if (!sourceInScope(source.spec.scope, q) || docs.length >= limit) continue;
+      try { knowledgeSourceAccess(source.spec); } catch (e) {
+        docs.push({ kind: "doc", title: `${source.metadata.name}: unavailable`, ref: source.metadata.name, excerpt: e instanceof Error ? e.message : String(e) });
+        continue;
+      }
       const search = this.d.sources.get(source.spec.type);
       if (!search) {
         // Visible, not silent: the hit tells the agent (and the transcript) why this source is missing.
