@@ -370,3 +370,10 @@ test("additional context: every agent prompt carries it, so agents don't ask for
     assert.equal((await f.app.getWorkItem(p, wi.metadata.name))?.workItem.spec.context, undefined, "clearing removes it");
   }, fetchImpl);
 });
+
+test("AC-3: truncation marker is stable and actionable", async () => {
+  const { clipResult, parseMarker, MAX_RESULT } = await import("./agents/truncation.ts");
+  const out = clipResult("a".repeat(MAX_RESULT * 2), "list_files", "narrow_glob");
+  assert.ok(out.length <= MAX_RESULT);
+  assert.equal(parseMarker(out)?.next, "narrow_glob");
+});
