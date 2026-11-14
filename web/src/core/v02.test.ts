@@ -176,7 +176,7 @@ test("read-only source: the Jira connector refuses writes and the outbox never d
 
 test("W5: re-run creates a replay with pinned inputs; workflow state unchanged; replay artifacts not used", async () => {
   await withFactory(fetch, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Replay me", description: "x" });
+    const wi = await f.app.createWorkItem(p, { title: "Replay me", description: "x", workflowRef: "factory-loop" });
     const before = await waitFor(async () => {
       const x = await f.app.getWorkItem(p, wi.metadata.name);
       return x?.workItem.status?.phase === "Blocked" ? x : undefined;

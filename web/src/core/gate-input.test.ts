@@ -16,7 +16,7 @@ test("X7: gate comments reach later agents (delegation on approve; feedback on r
   const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Delegate decisions", description: "A long enough description for triage to accept it directly." });
+    const wi = await f.app.createWorkItem(p, { title: "Delegate decisions", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
     let decided = 0;
     for (let i = 0; i < 1000 && decided < 2; i++) {
       const d = (await f.app.getWorkItem(p, wi.metadata.name))!;

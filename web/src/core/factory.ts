@@ -93,7 +93,7 @@ import { RetrospectiveActions } from "./retrospectives/actions.ts";
 import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/review.ts";
 import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
 import { DEFAULT_RETROSPECTIVE_POLICY } from "./retrospectives/evidence.ts";
-import { PlanningService, implementationPlanCheck } from "./planning/service.ts";
+import { PlanningService } from "./planning/service.ts";
 import { outputFeedbackContext } from "./agents/output-feedback.ts";
 import { planningContext } from "./planning/context.ts";
 import { planningReview } from "./planning/review.ts";
@@ -288,7 +288,7 @@ export async function createFactory(o: FactoryOptions) {
   gates.register(retrospectiveReview.type, retrospectiveReview);
   gates.register(units.gate.type, units.gate);
   const artifactChecks = new Registry<ArtifactCheck>();
-  for (const check of [verification.artifactCheck, implementationPlanCheck]) artifactChecks.register(check.artifactType, check);
+  for (const check of [verification.artifactCheck, planning.artifactCheck]) artifactChecks.register(check.artifactType, check);
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();

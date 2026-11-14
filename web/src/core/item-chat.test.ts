@@ -11,7 +11,7 @@ const p = ANONYMOUS;
 async function blockedItem(env: Record<string, string>, fetchImpl?: typeof fetch) {
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env, fetch: fetchImpl, log: () => {} });
   await f.start();
-  const wi = await f.app.createWorkItem(p, { title: "Ask the item", description: "x" });
+  const wi = await f.app.createWorkItem(p, { title: "Ask the item", description: "x", workflowRef: "factory-loop" });
   for (let i = 0; i < 400; i++) {
     const d = await f.app.getWorkItem(p, wi.metadata.name);
     if (d?.workItem.status?.phase === "Blocked") break;

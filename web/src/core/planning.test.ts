@@ -92,6 +92,40 @@ async function fixture() {
     }
     return artifacts;
   }
+  async function seedSingleRun(plan: PlanningDocument = document) {
+    const artifacts = await seed(plan);
+    const wi = await item();
+    const freshWorkflow = (await store.get<Workflow>("Workflow", "factory-system", "planned"))!;
+    const inception = freshWorkflow.spec.phases.find((phase) => phase.name === "inception")!;
+    const stages = inception.stages.filter((stage) => !["spec", "validation-plan", "implementation-plan"].includes(stage.name));
+    const reviewIndex = stages.findIndex((stage) => stage.name === "spec-review");
+    stages.splice(reviewIndex, 0, { name: "plan", steps: [{ name: "produce-plan", agentRef: { name: "planner" },
+      outputs: ["spec", "units-of-work", "validation-plan", "implementation-plan"].map((name) => ({ artifactRef: { name } })) }] });
+    await store.update({ ...freshWorkflow, spec: { ...freshWorkflow.spec,
+      planning: { plannerStage: "plan", reviewStage: "spec-review" },
+      verification: { ...freshWorkflow.spec.verification!, planningStage: "plan" },
+      phases: freshWorkflow.spec.phases.map((phase) => phase.name === "inception" ? { ...phase, stages } : phase),
+    } });
+    const planner = await store.create<AgentRun>({ apiVersion: API_VERSION, kind: "AgentRun",
+      metadata: { name: `planner-${generation}`, namespace: "default", ownerReferences: [ownerRef(wi)] },
+      spec: { workItemRef: { name: "item" }, agentRef: { name: "planner" }, stage: "plan", step: "produce-plan",
+        inputs: [], outputs: ["spec", "units-of-work", "validation-plan", "implementation-plan"].map((name) => ({ name })), skillRefs: [] },
+      status: { phase: "Succeeded", executor: "llm", provenance: { executor: "llm", definitions: {}, inputs: {},
+        contexts: { "planning-intent": planningIntent(wi) } } } });
+    const planningArtifacts = artifacts.slice(0, 4);
+    const updatedArtifacts: Artifact[] = [];
+    for (const artifact of planningArtifacts) updatedArtifacts.push(await store.update({ ...artifact, spec: { ...artifact.spec,
+      producedBy: { agentRunRef: { name: planner.metadata.name }, agentRef: { name: "planner" } },
+    } }));
+    const review = updatedArtifacts.length > 0 ? artifacts[4] : undefined;
+    const reviewRun = await store.get<AgentRun>("AgentRun", "default", review!.spec.producedBy!.agentRunRef.name);
+    await store.updateStatus({ ...reviewRun!, status: { ...reviewRun!.status!,
+      provenance: { ...reviewRun!.status!.provenance!,
+        inputs: Object.fromEntries(updatedArtifacts.map((artifact) => [artifact.metadata.name, artifact.metadata.resourceVersion!])),
+      },
+    } });
+    return updatedArtifacts;
+  }
   async function openReview() {
     const wi = await item();
     const compiled = await compiler.compile(wi.spec.workflowRef!, "default");
@@ -115,8 +149,44 @@ async function fixture() {
     await seed(plan);
     return openReview();
   }
-  return { db, store, compiler, planning, verification, workflow, item, controller, seed, openReview, revise, regenerate, clock, redactor };
+  return { db, store, compiler, planning, verification, workflow, item, controller, seed, seedSingleRun, openReview, revise, regenerate, clock, redactor };
 }
+
+test("legacy planning can migrate explicitly and supersedes old-workflow evidence", async () => {
+  const f = await fixture();
+  try {
+    const artifacts = await f.seed();
+    await f.openReview();
+    const source = structuredClone(f.workflow.spec);
+    const inception = source.phases.find((phase) => phase.name === "inception")!;
+    const stages = inception.stages.filter((stage) => !["spec", "validation-plan", "implementation-plan"].includes(stage.name));
+    const reviewIndex = stages.findIndex((stage) => stage.name === "spec-review");
+    stages.splice(reviewIndex, 0, { name: "plan", steps: [{ name: "produce-plan", agentRef: { name: "planner" },
+      outputs: ["spec", "units-of-work", "validation-plan", "implementation-plan"].map((name) => ({ artifactRef: { name } })) }] });
+    await f.store.create<Workflow>({ apiVersion: API_VERSION, kind: "Workflow",
+      metadata: { name: "factory-plan", namespace: "factory-system" },
+      spec: { ...source, planning: { plannerStage: "plan", reviewStage: "spec-review" },
+        verification: { ...source.verification!, planningStage: "plan" },
+        phases: source.phases.map((phase) => phase.name === "inception" ? { ...phase, stages } : phase),
+      } });
+
+    const workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.canMigrate, true);
+    const input: PlanningRevisionInput = { action: "migrate", requestId: "move-to-one-planner",
+      revision: workspace.revision, workflow: "factory-plan" };
+    const migrated = await f.planning.revise(p, "item", input);
+    assert.equal(migrated.spec.workflowRef?.name, "factory-plan");
+    assert.equal(migrated.spec.restart?.stage, "plan");
+    assert.deepEqual(migrated.spec.restart?.supersedeFrom, { workflow: "planned", stage: "spec" });
+    assert.equal((await f.planning.revise(p, "item", input)).spec.restart?.id, migrated.spec.restart?.id);
+
+    await f.controller.reconcile(keyOf(migrated));
+    assert.equal((await f.item()).status?.stage, "plan");
+    for (const artifact of artifacts) {
+      assert.ok((await f.store.get<Artifact>("Artifact", "default", artifact.metadata.name))?.metadata.labels?.[LABEL_SUPERSEDED]);
+    }
+  } finally { f.db.close(); }
+});
 
 test("plan edits preserve originals, invalidate approval and regenerate requirements with idempotent optimistic requests", async () => {
   const f = await fixture();
@@ -148,6 +218,77 @@ test("plan edits preserve originals, invalidate approval and regenerate requirem
     await f.verification.validate(next, "approve");
     await assert.rejects(f.verification.validate(approval, "approve"), /stale/);
   } finally { f.db.close(); }
+});
+
+test("one-run planning requires all four artifacts from the same real planner and exact independent review", async () => {
+  const f = await fixture();
+  try {
+    const bundle = await f.seedSingleRun();
+    const approval = await f.openReview();
+    assert.equal((await f.planning.inspect(p, "item")).ready, true);
+    assert.equal((await f.verification.plan(await f.item(), false)).artifact.metadata.uid, bundle[2].metadata.uid,
+      "validation accepts a plan produced alongside its specification in one planner run");
+    await f.verification.validate(approval, "approve");
+
+    const wi = await f.item();
+    const second = await f.store.create<AgentRun>({ apiVersion: API_VERSION, kind: "AgentRun",
+      metadata: { name: "planner-second", namespace: "default", ownerReferences: [ownerRef(wi)] },
+      spec: { workItemRef: { name: "item" }, agentRef: { name: "planner" }, stage: "plan", step: "second",
+        inputs: [], outputs: [{ name: "units-of-work" }], skillRefs: [] },
+      status: { phase: "Succeeded", executor: "llm", provenance: { executor: "llm", definitions: {}, inputs: {},
+        contexts: { "planning-intent": planningIntent(wi) } } } });
+    const units = bundle[1];
+    await f.store.update({ ...units, spec: { ...units.spec,
+      producedBy: { agentRunRef: { name: second.metadata.name }, agentRef: { name: "planner" } },
+    } });
+    await assert.rejects(f.planning.binding(await f.item()), /one current planner run/);
+    await assert.rejects(f.verification.validate(approval, "approve"), /one current planner run/);
+  } finally { f.db.close(); }
+});
+
+test("decision-sheet workflows accept only risks and decisions and expose the planner's source artifacts", async () => {
+  const sheet: PlanningDocument = { risks: "Assumption: hits are shown in one place.", decisions: [] };
+  const useDecisionSheet = async (f: Awaited<ReturnType<typeof fixture>>) => {
+    const workflow = (await f.store.get<Workflow>("Workflow", "factory-system", "planned"))!;
+    await f.store.update({ ...workflow, spec: { ...workflow.spec, planning: { plannerStage: "plan", reviewStage: "spec-review", planFormat: "decision-sheet" } } });
+  };
+  const f = await fixture();
+  try {
+    const bundle = await f.seedSingleRun(sheet);
+    await useDecisionSheet(f);
+    const approval = await f.openReview();
+    const workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.ready, true, workspace.issues.join("; "));
+    assert.equal(workspace.format, "decision-sheet");
+    assert.deepEqual(workspace.sources.map((source) => [source.type, source.artifact]),
+      bundle.slice(0, 3).map((artifact) => [artifact.spec.artifactTypeRef.name, artifact.metadata.name]));
+    assert.equal(workspace.document?.outcome, undefined);
+    await f.verification.validate(approval, "approve");
+
+    const plan = bundle[3];
+    assert.equal(await f.planning.artifactCheck.check(await f.item(), plan), undefined);
+    assert.match(await f.planning.artifactCheck.check(await f.item(), { ...plan, spec: { ...plan.spec, content: JSON.stringify(document) } }) ?? "",
+      /only risks and decisions; remove outcome, scope, approach, delivery, acceptance/);
+    await assert.rejects(f.revise("revise", "full-draft", { draft: { ...document } }), /only risks and decisions/);
+    const revised = await f.revise("revise", "risks-draft", { draft: { risks: "Hits may be cached." } });
+    assert.deepEqual(revised.spec.planning?.draft, { risks: "Hits may be cached." });
+  } finally { f.db.close(); }
+
+  const legacy = await fixture();
+  try {
+    await legacy.seedSingleRun();
+    await useDecisionSheet(legacy);
+    const workspace = await legacy.planning.inspect(p, "item");
+    assert.equal(workspace.ready, false);
+    assert.match(workspace.issues.join("\n"), /does not match this workflow's decision-sheet format/);
+    assert.ok(workspace.document?.outcome, "an existing six-section plan remains readable");
+  } finally { legacy.db.close(); }
+});
+
+test("full-format workflows still require all six plan sections; either complete shape parses without a format", () => {
+  assert.throws(() => parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [] }), "full"), /Plan section outcome is required/);
+  assert.throws(() => parsePlanningDocument(JSON.stringify({ outcome: "o", risks: "r", decisions: [] })), /Plan section scope is required/);
+  assert.deepEqual(parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [] })), { risks: "r", decisions: [] });
 });
 
 test("submitted answers remain directly editable and changed decision semantics require fresh answers, not reopening", async () => {
@@ -185,6 +326,38 @@ test("submitted answers remain directly editable and changed decision semantics 
     assert.equal(fresh.spec.decision, undefined, "answering never approves the regenerated proposal");
     await f.verification.validate(fresh, "approve");
     assert.equal((await f.store.list("Clarification")).length, 0, "decision submission never starts a clarification interview");
+  } finally { f.db.close(); }
+});
+
+test("withdrawing a planning answer removes it from intent and keeps bounded auditable history", async () => {
+  const f = await fixture();
+  try {
+    const plan = { ...document, decisions: [required] };
+    await f.seed(plan);
+    await f.openReview();
+    await f.revise("decisions", "answer-before-withdrawal", { answers: { "sensitive-data": "Exclude" } });
+    await f.regenerate(plan);
+    const answered = await f.item();
+    assert.ok(answered.spec.planning?.answers["sensitive-data"].answeredAt);
+    const before = await f.planning.inspect(p, "item");
+    const withdrawn = await f.planning.revise(p, "item", { action: "decisions", requestId: "withdraw-answer",
+      revision: before.revision, withdraw: ["sensitive-data"] });
+    assert.equal(withdrawn.spec.planning?.answers["sensitive-data"], undefined);
+    assert.equal(withdrawn.spec.planning?.withdrawn?.length, 1);
+    assert.deepEqual(withdrawn.spec.planning?.withdrawn?.[0], {
+      decisionId: "sensitive-data", question: required.question, answer: "Exclude", withdrawnBy: p.id,
+      at: withdrawn.spec.planning?.withdrawn?.[0].at,
+    });
+    assert.ok(!Number.isNaN(Date.parse(withdrawn.spec.planning!.withdrawn![0].at)));
+    const workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.recordedAnswers.length, 0);
+    assert.equal(workspace.withdrawnAnswers[0].answer, "Exclude");
+    assert.equal(workspace.withdrawnAnswers[0].question, required.question);
+    assert.equal(workspace.decisions[0].answer, undefined);
+    assert.equal(workspace.ready, false);
+    const retry = await f.planning.revise(p, "item", { action: "decisions", requestId: "withdraw-answer",
+      revision: before.revision, withdraw: ["sensitive-data"] });
+    assert.equal(retry.spec.planning?.withdrawn?.length, 1, "idempotent retries do not duplicate withdrawal history");
   } finally { f.db.close(); }
 });
 

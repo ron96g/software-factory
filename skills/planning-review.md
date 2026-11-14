@@ -12,6 +12,8 @@ spec:
 Read the current specification, Units, implementation plan, research and validation plan together.
 
 - Is the outcome understandable without reading transcripts?
+- If the plan is a decision sheet (only `risks` and `decisions`), does it avoid restating the other artifacts or
+  pre-empting the later design, and are its risks written in plain language?
 - Do scope, dependencies and testable delivery results agree across documents?
 - Does every acceptance criterion map to the operator-controlled validation plan without weakening mandatory checks?
 - Does the validation plan's `units` manifest use the decomposition's stable Unit IDs, cover all required work

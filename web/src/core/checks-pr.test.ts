@@ -76,7 +76,7 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Checks and PR", description: "A long enough description for triage to accept it directly." });
+    const wi = await f.app.createWorkItem(p, { title: "Checks and PR", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.outbox.some((m) => m.status?.phase === "Delivered"));
     assert.equal(d.workItem.status?.retries?.verify, 1, "one failed attempt consumed the retry budget");
     assert.ok(d.events.some((e) => e.spec.reason === "CheckFailed" && /build/.test(e.spec.message)));
@@ -106,7 +106,7 @@ test("S5c: checks that keep failing exhaust maxAttempts and fail the item with t
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Always red", description: "A long enough description for triage to accept it directly." });
+    const wi = await f.app.createWorkItem(p, { title: "Always red", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "Failed");
     assert.match(d.workItem.status!.message!, /checks failed after 3 attempt\(s\)/);
     assert.match(d.workItem.status!.message!, /exit 2/);

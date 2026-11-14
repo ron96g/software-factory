@@ -125,7 +125,11 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     if (!artifact) return invalid("a current real validation-plan artifact is required; restart validation planning");
     const specification = artifacts.filter((a) => eligible(a) && a.spec.artifactTypeRef.name === "spec").at(-1);
     const producer = runs.find((r) => r.metadata.name === artifact.spec.producedBy?.agentRunRef?.name);
-    if (!specification || producer?.status?.provenance?.inputs[specification.metadata.name] !== specification.metadata.resourceVersion) {
+    const samePlannerRun = !!compiled.planning?.plannerStage &&
+      producer?.spec.stage === compiled.planning.plannerStage &&
+      specification?.spec.producedBy?.agentRunRef.name === producer.metadata.name;
+    if (!specification || (!samePlannerRun &&
+        producer?.status?.provenance?.inputs[specification.metadata.name] !== specification.metadata.resourceVersion)) {
       return invalid("validation-plan must be produced from the current specification revision");
     }
     const { plan, repositories } = await this.contents(item, artifact, policy, unitPolicy);

@@ -55,7 +55,9 @@ test("MCP server: token required; harness creates items, proposes and searches k
     for (const n of ["list_work_items", "get_work_item", "create_work_item", "set_work_item_context", "answer_clarification", "search_knowledge", "propose_knowledge"]) assert.ok(names.includes(n), n);
     assert.ok(!names.some((n) => /approve|reject|decide|delete/.test(n)), `no gate tools: ${names.join(", ")}`);
 
-    const created = json(await client.callTool({ name: "create_work_item", arguments: { title: "From my harness", description: "short", context: "Env: prod" } }));
+    const created = json(await client.callTool({ name: "create_work_item", arguments: {
+      title: "From my harness", description: "short", context: "Env: prod", workflow: "factory-loop",
+    } }));
     const wi = await f.app.getWorkItem(ANONYMOUS, created.name);
     assert.equal(wi?.workItem.spec.context, "Env: prod");
 

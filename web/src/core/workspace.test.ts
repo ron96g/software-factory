@@ -27,7 +27,7 @@ test("S5a: workspace is created at start, agents wait for Ready, provenance pins
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Workspace gating", description: "Long enough description so triage proceeds without questions." });
+    const wi = await f.app.createWorkItem(p, { title: "Workspace gating", description: "Long enough description so triage proceeds without questions.", workflowRef: "factory-loop" });
     await sleep(300);
     let d = (await f.app.getWorkItem(p, wi.metadata.name))!;
     assert.equal(d.workspaces.length, 1);
@@ -65,7 +65,7 @@ test("S5a: a failed workspace fails the item with a visible reason", async () =>
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Broken setup", description: "x" });
+    const wi = await f.app.createWorkItem(p, { title: "Broken setup", description: "x", workflowRef: "factory-loop" });
     for (let i = 0; i < 200; i++) {
       const d = (await f.app.getWorkItem(p, wi.metadata.name))!;
       if (d.workItem.status?.phase === "Failed") {

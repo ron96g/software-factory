@@ -44,7 +44,7 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Where is setCondition?", description: "Find where conditions are set on resources and describe the impact of changing it." });
+    const wi = await f.app.createWorkItem(p, { title: "Where is setCondition?", description: "Find where conditions are set on resources and describe the impact of changing it.", workflowRef: "factory-loop" });
     let d = null;
     for (let i = 0; i < 400; i++) {
       d = await f.app.getWorkItem(p, wi.metadata.name);

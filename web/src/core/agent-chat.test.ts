@@ -74,7 +74,7 @@ test("contextual agent chat: fresh work-item evidence and MCP reads are recorded
   });
   await f.start();
   try {
-    const item = await f.app.createWorkItem(p, { title: "Contextual investigation", description: "x" });
+    const item = await f.app.createWorkItem(p, { title: "Contextual investigation", description: "x", workflowRef: "factory-loop" });
     await waitFor(async () => (await f.app.getWorkItem(p, item.metadata.name))?.workItem.status?.phase === "Blocked");
     await f.app.updateWorkItemContext(p, item.metadata.name, `Original team note ${SECRET}`);
     await f.manager.settle();

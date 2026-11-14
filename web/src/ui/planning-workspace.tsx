@@ -5,17 +5,28 @@ import { notifications } from "@mantine/notifications";
 import { useEffect, useRef, useState } from "react";
 import type { WorkItem } from "@/core/model/kinds.ts";
 import type { WorkItemDetail } from "@/core/ports/app.ts";
-import type { PlanningRevisionInput, PlanningSections, PlanningWorkspace as Workspace } from "@/core/ports/planning.ts";
+import type { PlanFormat, PlanningRevisionInput, PlanningSections, PlanningWorkspace as Workspace } from "@/core/ports/planning.ts";
 import { parsePlanningRevision } from "@/planning-request.ts";
 import { api, ApiError } from "./api.ts";
 import { MarkdownView } from "./markdown.tsx";
 
-const sections = ["outcome", "scope", "approach", "delivery", "acceptance", "risks"] as const;
-const labels: Record<keyof PlanningSections, string> = {
+const fullSections = ["outcome", "scope", "approach", "delivery", "acceptance", "risks"] as const;
+const sectionsOf = (format: PlanFormat): readonly (keyof PlanningSections)[] => format === "decision-sheet" ? ["risks"] : fullSections;
+// Old six-section plans stay fully readable even after the workflow switched to decision sheets (ADR-0051).
+const shownSections = (format: PlanFormat, ...documents: (Partial<PlanningSections> | undefined)[]): readonly (keyof PlanningSections)[] =>
+  documents.some((document) => document && fullSections.some((key) => key !== "risks" && document[key] !== undefined)) ? fullSections : sectionsOf(format);
+const labelsOf = (format: PlanFormat): Record<keyof PlanningSections, string> => ({
   outcome: "Outcome", scope: "Scope", approach: "Approach", delivery: "Delivery",
-  acceptance: "Acceptance", risks: "Risks",
+  acceptance: "Acceptance", risks: format === "decision-sheet" ? "Risks, assumptions and open points" : "Risks",
+});
+const sourceLabels: Record<string, string> = {
+  spec: "What will be built (specification)", "units-of-work": "Units of Work", "validation-plan": "How it is proven (validation plan)",
 };
-const empty: PlanningSections = { outcome: "", scope: "", approach: "", delivery: "", acceptance: "", risks: "" };
+const pick = (source: Partial<PlanningSections>, keys: readonly (keyof PlanningSections)[]): PlanningSections => {
+  const result: PlanningSections = { risks: "" };
+  for (const key of keys) result[key] = source[key] ?? "";
+  return result;
+};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 interface Edit {
@@ -30,23 +41,39 @@ interface Edit {
 
 /** After plan approval the plan is reference material: one compact card, full text on demand. */
 function ApprovedPlan({ workspace }: { workspace: Workspace }) {
+  const labels = labelsOf(workspace.format);
+  const document = workspace.document;
   return <Card className="sf-surface" withBorder>
     <Stack gap="xs">
       <Group justify="space-between"><Title order={4}>Approved plan</Title><Badge color="teal" variant="light">approved</Badge></Group>
-      {workspace.document ? <>
-        <MarkdownView>{workspace.document.outcome}</MarkdownView>
+      {document ? <>
+        {document.outcome && <MarkdownView>{document.outcome}</MarkdownView>}
         <Accordion variant="contained">
+          {workspace.sources.map((source) => <Accordion.Item key={source.artifact} value={source.artifact}>
+            <Accordion.Control>{sourceLabels[source.type] ?? source.type}</Accordion.Control>
+            <Accordion.Panel><SourceView source={source} /></Accordion.Panel>
+          </Accordion.Item>)}
           <Accordion.Item value="plan">
-            <Accordion.Control>Full plan</Accordion.Control>
-            <Accordion.Panel><Stack>{sections.slice(1).map((key) => <div key={key}>
+            <Accordion.Control>{workspace.format === "decision-sheet" ? "Decisions and risks" : "Full plan"}</Accordion.Control>
+            <Accordion.Panel><Stack>{shownSections(workspace.format, document).filter((key) => key !== "outcome").map((key) => <div key={key}>
               <Title order={5}>{labels[key]}</Title>
-              <MarkdownView>{workspace.document?.[key] || "_Not specified._"}</MarkdownView>
+              <MarkdownView>{document[key] || "_Not specified._"}</MarkdownView>
+            </div>)}
+            {workspace.decisions.map((decision) => <div key={decision.id}>
+              <Text size="sm" fw={600}>{decision.id}</Text>
+              <MarkdownView>{decision.question}</MarkdownView>
+              <MarkdownView>{`**Answer:** ${decision.answer ?? (decision.required ? "_none_" : `${decision.recommendation ?? ""} (recommended default)`)}`}</MarkdownView>
             </div>)}</Stack></Accordion.Panel>
           </Accordion.Item>
         </Accordion>
       </> : <Text size="sm" c="dimmed">The approved plan is not available in this revision.</Text>}
     </Stack>
   </Card>;
+}
+
+function SourceView({ source }: { source: Workspace["sources"][number] }) {
+  const json = source.format === "json" || /^\s*[[{]/.test(source.content);
+  return <MarkdownView>{json ? `\`\`\`json\n${source.content}\n\`\`\`` : source.content}</MarkdownView>;
 }
 
 export default function PlanningWorkspace({ workspace, error, reload, detail, onOpenRun, summary }: {
@@ -67,6 +94,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
   const inFlight = useRef(false);
   const [edit, setEdit] = useState<Edit | null>(null);
   const [confirmation, setConfirmation] = useState<{ action: "reject" | "defer"; revision: string } | null>(null);
+  const [migrationConfirm, setMigrationConfirm] = useState(false);
   const [comment, setComment] = useState("");
   const [override, setOverride] = useState(false);
 
@@ -89,10 +117,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
 
   function snapshot(): Edit {
     const source = workspace?.document ?? workspace?.draft;
-    const draft = source ? {
-      outcome: source.outcome, scope: source.scope, approach: source.approach,
-      delivery: source.delivery, acceptance: source.acceptance, risks: source.risks,
-    } : undefined;
+    const draft = source && workspace ? pick(source, sectionsOf(workspace.format)) : undefined;
     return {
       sectionsOpen: false,
       revision: workspace?.revision ?? "",
@@ -123,11 +148,14 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       setPending(null);
       setEdit(null);
       setConfirmation(null);
-      notifications.show({ message: request.action === "reject" ? "Proposal rejected" : request.action === "defer" ? "Proposal deferred" : "Planning revision requested. Review the regenerated proposal before approving.", color: "teal" });
+      notifications.show({ message: request.action === "migrate" ? "One-planner workflow migration requested. Review the regenerated plan before approving."
+        : request.action === "reject" ? "Proposal rejected" : request.action === "defer" ? "Proposal deferred"
+          : request.withdraw?.length ? "Answer withdrawn. Review the regenerated proposal before approving."
+            : "Planning revision requested. Review the regenerated proposal before approving.", color: "teal" });
       await reload();
     } catch (e) {
       if (e instanceof ApiError && [401, 403, 404, 409, 422].includes(e.status)) {
-        if (request.action === "revise" || request.action === "decisions") {
+        if (request.action === "revise" || request.action === "decisions" && !request.withdraw?.length) {
           setEdit((current) => current ?? {
             sectionsOpen: !!request.draft || request.context !== undefined,
             revision: request.revision, draft: request.draft,
@@ -165,9 +193,16 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
     }, true);
   }
 
+  function withdrawAnswer(decisionId: string) {
+    if (!workspace) return;
+    void submit({ revision: workspace.revision, requestId: crypto.randomUUID(), action: "decisions", withdraw: [decisionId] }, true);
+  }
+
   if (!workspace?.enabled) return error ? <Alert color="red" title="Planning workspace unavailable">{error}<Button variant="subtle" onClick={() => void reload()}>Retry</Button></Alert> : null;
   if (summary) return <ApprovedPlan workspace={workspace} />;
 
+  const sections = sectionsOf(workspace.format);
+  const labels = labelsOf(workspace.format);
   const decisions = edit?.decisions ?? workspace.decisions;
   const disabled = busy || !!pending || !storageReady || !workspace.canRevise || !!error;
   const staleEdit = !!edit && edit.revision !== workspace.revision;
@@ -214,11 +249,16 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
     <Stack>
       <Group justify="space-between">
         <Title order={3}>Proposed implementation plan</Title>
-        <Tooltip label={`Revision ${workspace.revision}`}>
-          <Badge color={workspace.disposition ? "gray" : workspace.ready ? "teal" : "yellow"}>
-            {workspace.disposition ?? (workspace.ready ? "Ready for review" : workspace.canRevise ? "Input needed" : "Agents working")}
-          </Badge>
-        </Tooltip>
+        <Group gap="xs">
+          {workspace.canMigrate && <Button size="xs" variant="light" disabled={disabled} onClick={() => setMigrationConfirm(true)}>
+            Use one-planner workflow
+          </Button>}
+          <Tooltip label={`Revision ${workspace.revision}`}>
+            <Badge color={workspace.disposition ? "gray" : workspace.ready ? "teal" : "yellow"}>
+              {workspace.disposition ?? (workspace.ready ? "Ready for review" : workspace.canRevise ? "Input needed" : "Agents working")}
+            </Badge>
+          </Tooltip>
+        </Group>
       </Group>
       {error && <Alert color="red" title="Planning refresh failed">{error}</Alert>}
       {actionError && <Alert color="red" title="Planning action needs attention">{actionError}</Alert>}
@@ -238,13 +278,20 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       {blockedMessage && !workspace.issues.some((issue) => issue.includes(blockedMessage))
         && <Alert color="yellow" title="Planning needs attention">{blockedMessage}</Alert>}
 
-      {workspace.document || edit?.sectionsOpen ? sections.map((key) => <Stack key={key} gap="xs">
+      {workspace.format === "decision-sheet" && workspace.sources.length > 0 && <Accordion variant="contained" multiple defaultValue={["spec"]}>
+        {workspace.sources.map((source) => <Accordion.Item key={source.artifact} value={source.type}>
+          <Accordion.Control>{sourceLabels[source.type] ?? source.type}</Accordion.Control>
+          <Accordion.Panel><SourceView source={source} /></Accordion.Panel>
+        </Accordion.Item>)}
+      </Accordion>}
+      {workspace.format === "decision-sheet" && <Text size="sm" c="dimmed">The technical design is produced and approved separately after this plan, before any code is written.</Text>}
+      {workspace.document || edit?.sectionsOpen ? (edit?.sectionsOpen ? sections : shownSections(workspace.format, workspace.document)).map((key) => <Stack key={key} gap="xs">
         <Title order={4}>{labels[key]}</Title>
         {edit?.sectionsOpen ? <Textarea aria-label={labels[key]} autosize minRows={3}
           value={edit.draft?.[key] ?? ""} disabled={disabled}
           onChange={(event) => {
             const text = event.currentTarget.value;
-            setEdit((current) => current && { ...current, draft: { ...(current.draft ?? empty), [key]: text } });
+            setEdit((current) => current && { ...current, draft: { ...(current.draft ?? pick({}, sections)), [key]: text } });
           }} /> : <MarkdownView>{workspace.document?.[key] || "_Not yet specified._"}</MarkdownView>}
       </Stack>) : <Alert color="blue">The planning agents are preparing a proposal. No plan is ready for approval yet.</Alert>}
       {workspace.historyError && <Alert color="yellow" title="Previous proposal unavailable">
@@ -253,7 +300,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       {workspace.previous && workspace.document && <Accordion variant="contained">
         <Accordion.Item value="comparison">
           <Accordion.Control>Previous / current proposal — section comparison</Accordion.Control>
-          <Accordion.Panel><Stack>{sections.map((key) => <Stack key={key} gap="xs">
+          <Accordion.Panel><Stack>{shownSections(workspace.format, workspace.previous, workspace.document).map((key) => <Stack key={key} gap="xs">
             <Title order={5}>{labels[key]} {workspace.previous?.[key] === workspace.document?.[key] ? "(unchanged)" : "(changed)"}</Title>
             <SimpleGrid cols={{ base: 1, md: 2 }}>
               <div><Text fw={600}>Before</Text><MarkdownView>{workspace.previous?.[key] || "_Empty._"}</MarkdownView></div>
@@ -265,7 +312,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       {workspace.previous && !workspace.document && <Accordion variant="contained">
         <Accordion.Item value="previous">
           <Accordion.Control>Previous proposal (history, not the current revision)</Accordion.Control>
-          <Accordion.Panel><Stack>{sections.map((key) => <div key={key}>
+          <Accordion.Panel><Stack>{shownSections(workspace.format, workspace.previous).map((key) => <div key={key}>
             <Title order={5}>{labels[key]}</Title>
             <MarkdownView>{workspace.previous?.[key] || "_Empty._"}</MarkdownView>
           </div>)}</Stack></Accordion.Panel>
@@ -297,6 +344,37 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
         </Stack>
       </Card>)}
       </>}
+      {(workspace.recordedAnswers.length > 0 || workspace.withdrawnAnswers.length > 0) && <Accordion variant="contained">
+        <Accordion.Item value="answer-history">
+          <Accordion.Control>Recorded and withdrawn answers</Accordion.Control>
+          <Accordion.Panel><Stack gap="sm">
+            {workspace.recordedAnswers.map((answer) => <Card key={`answer:${answer.decisionId}`} withBorder p="sm">
+              <Stack gap="xs">
+                <Group justify="space-between">
+                  <Text size="xs" ff="monospace">{answer.decisionId}</Text>
+                  <Badge color={answer.current ? "teal" : "gray"}>{answer.current ? "Current decision" : "Not in current plan"}</Badge>
+                </Group>
+                <Text size="xs" c="dimmed">Recorded {answer.answeredAt ? new Date(answer.answeredAt).toLocaleString() : "date unavailable"}</Text>
+                <MarkdownView>{answer.question}</MarkdownView>
+                <MarkdownView>{answer.answer}</MarkdownView>
+                <Button variant="light" color="red" size="xs" disabled={disabled || !!edit}
+                  onClick={() => withdrawAnswer(answer.decisionId)}>Withdraw answer</Button>
+              </Stack>
+            </Card>)}
+            {workspace.withdrawnAnswers.map((answer, index) => <Card key={`withdrawn:${answer.decisionId}:${answer.at}:${index}`} withBorder p="sm">
+              <Stack gap="xs">
+                <Group justify="space-between">
+                  <Text size="xs" ff="monospace">{answer.decisionId}</Text>
+                  <Badge color="gray">Withdrawn</Badge>
+                </Group>
+                <Text size="xs" c="dimmed">Withdrawn {new Date(answer.at).toLocaleString()} by {answer.withdrawnBy}</Text>
+                <MarkdownView>{answer.question}</MarkdownView>
+                <MarkdownView>{answer.answer}</MarkdownView>
+              </Stack>
+            </Card>)}
+          </Stack></Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>}
       {(workspace.issues.length > 0 || workspace.unansweredQuestions.length > 0) && <Alert color="yellow" title="Remaining issues / unanswered questions">
         <List size="sm">{[...workspace.issues, ...workspace.unansweredQuestions].map((issue, index) => <List.Item key={index}><MarkdownView>{issue}</MarkdownView></List.Item>)}</List>
       </Alert>}
@@ -376,6 +454,18 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
           <Button variant="default" disabled={busy} onClick={() => setConfirmation(null)}>Cancel</Button>
           <Button color={confirmation?.action === "reject" ? "red" : "blue"} loading={busy} disabled={disabled}
             onClick={() => confirmation && revise(confirmation.action, confirmation.revision)}>Confirm {confirmation?.action}</Button>
+        </Group>
+      </Stack>
+    </Modal>
+    <Modal opened={migrationConfirm && !pending} onClose={() => setMigrationConfirm(false)} title="Use the one-planner workflow?">
+      <Stack>
+        <Text>This changes the item to a workflow with a single planner run and restarts at its planner stage.</Text>
+        <Alert color="yellow">Planning and later evidence from the previous workflow will be superseded. Existing answers are preserved as planning context, but this migration is not approval; a fresh independent review and human plan approval are required.</Alert>
+        <Group justify="flex-end">
+          <Button variant="default" disabled={busy} onClick={() => setMigrationConfirm(false)}>Cancel</Button>
+          <Button loading={busy} disabled={disabled || !workspace.canMigrate} onClick={() => void submit({
+            revision: workspace.revision, requestId: crypto.randomUUID(), action: "migrate", workflow: "factory-plan",
+          }, true)}>Confirm migration</Button>
         </Group>
       </Stack>
     </Modal>

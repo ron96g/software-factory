@@ -276,6 +276,12 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     const ns = nsOf(wi);
     const owned = { kind: "WorkItem", name: wi.metadata.name, namespace: ns };
     const affected = new Set(wf.stages.slice(wf.stages.findIndex((s) => s.name === target.name)).map((s) => s.name));
+    if (restart.supersedeFrom) {
+      const previous = await d.compiler.compile({ name: restart.supersedeFrom.workflow }, ns);
+      const previousStart = previous.stages.findIndex((stage) => stage.name === restart.supersedeFrom!.stage);
+      if (previousStart < 0) throw new Error(`unknown previous workflow restart stage "${restart.supersedeFrom.stage}"`);
+      for (const stage of previous.stages.slice(previousStart)) affected.add(stage.name);
+    }
     const supersede = { [LABEL_SUPERSEDED]: restart.id };
     const runs = await d.reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned });
     const runStage = new Map(runs.map((r) => [r.metadata.name, r.spec.stage]));

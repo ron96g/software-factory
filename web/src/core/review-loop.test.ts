@@ -29,7 +29,7 @@ function fakeLLM(reviewOutcomes: string[]) {
 async function runUntilCodeReviewGate(reviewOutcomes: string[]) {
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(reviewOutcomes), log: () => {} });
   await f.start();
-  const wi = await f.app.createWorkItem(p, { title: "Review loop", description: "A long enough description for triage to accept it directly." });
+  const wi = await f.app.createWorkItem(p, { title: "Review loop", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
   for (let i = 0; i < 1000; i++) {
     const d = (await f.app.getWorkItem(p, wi.metadata.name))!;
     const st = d.workItem.status;

@@ -260,7 +260,7 @@ test("X22 end to end: recorded feedback -> manual investigation -> independent r
   let f: Factory = await createFactory(options);
   try {
     await f.start();
-    const origin = await f.app.createWorkItem(p, { title: "Investigate missing ticket history", description: "Investigate prior attempts and report whether the workflow supplied enough history." });
+    const origin = await f.app.createWorkItem(p, { title: "Investigate missing ticket history", description: "Investigate prior attempts and report whether the workflow supplied enough history.", workflowRef: "factory-loop" });
     const group = await until(async () => (await f.retrospectives.list(p)).find((g) => g.issueCode === "missing-ticket-history"), "feedback capture");
     assert.equal(group.origins, 1); assert.equal(group.thresholdMet, false);
     assert.ok(group.reports[0].feedback.spec.verified);
