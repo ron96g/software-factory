@@ -84,7 +84,7 @@ metadata:
 spec:
   type: manual               # items created via the dashboard form
   defaults:
-    workflowRef: { name: factory-loop }
+    workflowRef: { name: factory-plan }
     repositoryRefs:
       - name: software-factory
 ---

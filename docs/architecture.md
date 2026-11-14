@@ -100,24 +100,32 @@ stateDiagram-v2
 Actions: **New item** (manual), **Sync now** (per source), **Answer** (unblocks an item), **Approve / Reject** (gates),
 **Create follow-up** (independent item with inherited evidence).
 
-## Planning workspace (ADR-0045, ADR-0046)
+## Planning workspace (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
-The explicitly selected `factory-planned` workflow makes the reviewed plan the primary work-item surface.
-ADR-0047 implements the approved Units one at a time and keeps code review closed until every Unit is ready on the
-current candidate (see "Unit execution" below). Other workflows are unchanged.
-Research, requirements, Units, validation and implementation-plan synthesis run before human input is requested.
+The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.
+Its single planner run produces requirements, Units, validation and implementation plan together, followed by one
+independent review and the existing verified human plan gate. `factory-planned` remains available for items already
+using its multi-stage planning chain; they are not migrated automatically. A human can explicitly migrate an eligible
+stopped item or an item paused in its planning stages, restarting at the one-planner stage and superseding the old
+workflow's planning and later evidence. ADR-0047 implements approved Units one at a time and
+keeps code review closed until every Unit is ready on the current candidate (see "Unit execution" below).
 The implementation plan is a JSON Artifact with readable Markdown sections and structured human decisions;
-the existing policy-controlled validation-plan remains the verification contract. Independent AI review checks the
-complete bundle before the existing verified human plan gate.
+the existing policy-controlled validation plan remains the verification contract. In `factory-plan` it is a focused
+**decision sheet** (ADR-0051): only risks/assumptions and human decisions. The workspace shows the specification,
+Units and validation plan it is based on as source artifacts instead of restating them. The architect's `design`
+stage adds a logical design to the domain model, and a tech lead approves it at a separate `human-approval` gate
+before code is written; rejection reruns the design with the reason. Developers follow the approved plan and design
+and report necessary deviations with reasons.
 
 ```mermaid
 flowchart LR
   Intent["Goal and team context"] --> Research["Autonomous research"]
-  Research --> Draft["Specification, Units, validation and implementation plan"]
+  Research --> Planner["One planner run<br/>spec, Units, validation, implementation plan"]
+  Planner --> Draft["Consistent proposal bundle"]
   Draft --> Review["Independent AI review"]
   Review --> Sheet["Human plan and consolidated decision sheet"]
-  Sheet -- "save edits or answers" --> Revision["New requirements revision"]
-  Revision --> Draft
+  Sheet -- "save edits, answers or withdraw an answer" --> Revision["New plan revision"]
+  Revision --> Planner
   Sheet -- "explicit exact-revision approval" --> Construction["Construction with existing gates"]
   Sheet -- "reject or defer" --> Closed["Closed proposal"]
 ```
@@ -132,13 +140,16 @@ Questions in planning AgentRun results do not open per-agent Clarifications. The
 decisions; omitted questions remain required blockers. Answers bind question/options/required semantics and survive
 restarts and ordinary revisions when those semantics are unchanged. At a safe human stop, new required decisions and
 corrections are directly answerable without reopening discovery; each consolidated submission regenerates the proposal.
+Humans can withdraw a stale answer; its bounded history remains visible with the question and date, while agents
+receive it explicitly as no longer binding.
 Agents research facts and reuse settled answers instead of starting sequential interviews. Approval guidance shows
 the actual next action or evidence issue. Malformed or stale plan evidence stops visibly for revision. Required choices cannot be
 delegated through a generic approval comment or override.
 
 Plan approval binds current human context/intent, specification, Units, validation, implementation plan, independent
-review and definition/policy versions. Real producers must have consumed the exact upstream revisions and recorded
-planning-intent context. An asynchronous revision cannot auto-approve, and direct restarts cannot bypass this binding.
+review and definition/policy versions. In `factory-plan`, all four proposal artifacts must come from the same real,
+current planner run; the independent reviewer must consume those exact revisions and both runs record the current
+planning intent. An asynchronous revision cannot auto-approve, and direct restarts cannot bypass this binding.
 Active agents/checks or publication effects prevent amendments; human reject/defer intent is applied to status only
 by the WorkItem controller. Legacy workflows and ADR-0032 context behavior remain unchanged.
 

@@ -1,0 +1,168 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: factory-plan
+  annotations:
+    description: One planner run produces the specification, Units, validation plan and a focused decision sheet before one independent review and exact-revision human approval (ADR-0050, ADR-0051); the design is approved by a human before approved Units are implemented one at a time (ADR-0047).
+spec:
+  planning:
+    plannerStage: plan
+    reviewStage: spec-review
+    planFormat: decision-sheet   # ADR-0051: risks + decisions only; no restated spec, Units, validation or design
+  verification:
+    planningStage: plan
+    reviewStage: spec-review
+    preflightStage: preflight
+    verifyStage: verify
+    implementationStage: implement
+    preparationStage: code-review
+    maxCodeAttempts: 2
+    maxExecutionAttempts: 2
+    retryDelayMs: 30000
+  unitExecution:
+    barrierStage: code-review
+    maxCodeAttempts: 2
+    maxExecutionAttempts: 2
+  phases:
+    - name: inception
+      stages:
+        - name: classify
+          steps:
+            - name: auto-classify
+              agentRef: { name: triager }
+              skillRefs: [{ name: work-item-classification }]
+              model: { tier: fast }
+              tools: []
+              inputs: [{ artifactRef: { name: signal } }]
+        - name: triage
+          steps:
+            - name: research-impact
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: codebase-research }, { name: knowledge-base }]
+              inputs: [{ artifactRef: { name: signal } }]
+              outputs: [{ artifactRef: { name: research-notes } }]
+            - name: triage-signal
+              agentRef: { name: triager }
+              skillRefs: [{ name: issue-triage }]
+              inputs: [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
+              outputs: [{ artifactRef: { name: triage-decision } }]
+          gate:
+            type: decision
+            routes:
+              accept: { next: plan }
+              needs-info: { next: plan }
+              duplicate: { end: Closed }
+              reject: { end: Closed }
+        - name: plan
+          steps:
+            - name: produce-plan
+              agentRef: { name: planner }
+              inputs:
+                - { artifactRef: { name: triage-decision } }
+                - { artifactRef: { name: research-notes } }
+                - { artifactRef: { name: review-report } }
+              outputs:
+                - { artifactRef: { name: spec } }
+                - { artifactRef: { name: units-of-work } }
+                - { artifactRef: { name: validation-plan } }
+                - { artifactRef: { name: implementation-plan } }
+        - name: spec-review
+          steps:
+            - name: ai-plan-review
+              agentRef: { name: reviewer }
+              skillRefs: [{ name: planning-review }]
+              outcomes: [approve, changes-requested]
+              inputs:
+                - { artifactRef: { name: spec } }
+                - { artifactRef: { name: units-of-work } }
+                - { artifactRef: { name: validation-plan } }
+                - { artifactRef: { name: implementation-plan } }
+                - { artifactRef: { name: research-notes } }
+              outputs: [{ artifactRef: { name: review-report } }]
+          loop: { when: { outcome: changes-requested }, goto: plan, maxAttempts: 1 }
+          gate:
+            type: verification-plan-review
+            approvers: [{ role: product-owner }, { role: tech-lead }]
+            criteria: [Review the complete plan, scope, decisions, acceptance mappings and operator-required checks. Answers and edits are not approval.]
+            onReject: { next: plan }
+    - name: construction
+      stages:
+        - name: preflight
+          gate: { type: verified-checks }
+        - name: design
+          steps:
+            - name: domain-model
+              agentRef: { name: architect }
+              skillRefs: [{ name: domain-driven-design }, { name: logical-design }]
+              inputs:
+                - { artifactRef: { name: spec } }
+                - { artifactRef: { name: units-of-work } }
+                - { artifactRef: { name: validation-plan } }
+                - { artifactRef: { name: implementation-plan } }
+                - { artifactRef: { name: research-notes } }
+              outputs: [{ artifactRef: { name: domain-model } }]
+          gate:
+            type: human-approval
+            approvers: [{ role: tech-lead }]
+            criteria: [The design fits the approved specification, Units and decisions, Alternatives and code citations are credible, No change to approved scope]
+            onReject: { next: design }   # the reject reason reaches the architect as a "Human gate decision"
+        - name: implement
+          steps:
+            - name: write-code
+              agentRef: { name: developer }
+              skillRefs: [{ name: test-driven-development }]
+              outcomes: [complete, partial, blocked]
+              inputs:
+                - { artifactRef: { name: domain-model } }
+                - { artifactRef: { name: spec } }
+                - { artifactRef: { name: units-of-work } }
+                - { artifactRef: { name: validation-plan } }
+                - { artifactRef: { name: implementation-plan } }
+                - { artifactRef: { name: code-review-report } }
+              outputs: [{ artifactRef: { name: source-code } }, { artifactRef: { name: unit-result } }]
+          gate: { type: unit-progress }
+        - name: code-review
+          steps:
+            - name: ai-code-review
+              agentRef: { name: reviewer }
+              skillRefs: [{ name: code-review }]
+              inputs: [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }, { artifactRef: { name: validation-plan } }, { artifactRef: { name: implementation-plan } }]
+              outputs: [{ artifactRef: { name: code-review-report } }]
+          loop: { when: { outcome: changes-requested }, goto: implement, maxAttempts: 2 }
+          gate:
+            type: verification-candidate-review
+            approvers: [{ role: tech-lead }]
+            onReject: { next: implement }
+        - name: verify
+          steps:
+            - name: verify-against-spec
+              agentRef: { name: verifier }
+              skillRefs: [{ name: verification }]
+              outcomes: [pass, partial, fail]
+              inputs: [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }, { artifactRef: { name: validation-plan } }, { artifactRef: { name: implementation-plan } }]
+              outputs: [{ artifactRef: { name: verification-report } }]
+          gate:
+            type: verified-checks
+            approvers: [{ role: tech-lead }]
+    - name: operations
+      stages:
+        - name: ship
+          publish: { pullRequest: { draft: true } }
+          steps:
+            - name: release
+              agentRef: { name: release-manager }
+              skillRefs: [{ name: release-management }]
+              inputs: [{ artifactRef: { name: verification-report } }, { artifactRef: { name: source-code } }]
+              outputs: [{ artifactRef: { name: release } }]
+          gate:
+            type: human-approval
+            approvers: [{ role: ops-lead }]
+            onReject: { next: implement }
+        - name: monitor
+          steps:
+            - name: observe
+              agentRef: { name: sre }
+              skillRefs: [{ name: observability }]
+              inputs: [{ artifactRef: { name: release } }]
+              outputs: [{ artifactRef: { name: signal } }]
+          gate: { type: automated, checks: [slo-healthy, error-budget] }

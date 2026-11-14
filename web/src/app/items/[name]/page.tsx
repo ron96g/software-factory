@@ -22,8 +22,9 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil } from "@tabler/icons-react";
+import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil, IconTrash } from "@tabler/icons-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
 import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
@@ -50,6 +51,7 @@ const PHASE_COLOR: Record<string, string> = { inception: "indigo", construction:
 
 export default function ItemPage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = use(params);
+  const router = useRouter();
   const { data: d, error } = useLive<WorkItemDetail>(`/api/workitems/${name}`, (n) => n.workItem === name || n.name === name);
   const planning = useLive<PlanningWorkspaceData>(`/api/workitems/${encodeURIComponent(name)}/planning`, (n) =>
     n.workItem === name || n.name === name || ["Workflow", "Repository"].includes(n.kind ?? ""));
@@ -57,7 +59,24 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const [askOpen, setAskOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const { data: chats, error: chatsError } = useLive<Conversation[]>(chatOpen ? `/api/chats?workItem=${encodeURIComponent(name)}` : null, (n) => n.kind === "Conversation");
+
+  async function deleteItem() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const response = await fetch(`/api/workitems/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? `Delete failed (HTTP ${response.status})`);
+      router.replace("/");
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+      setDeleting(false);
+    }
+  }
 
   if (error) return <Alert color="red" title="Error">{error}</Alert>;
   if (!d) return <Text c="dimmed">Loading…</Text>;
@@ -69,6 +88,12 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const openClar = d.clarifications.find((c) => c.metadata.name === st?.blockedBy?.name && st?.phase === "Blocked");
   const openAppr = d.approvals.find((a) => a.metadata.name === st?.blockedBy?.name && st?.phase === "AwaitingApproval");
   const run = d.runs.find((r) => r.metadata.name === openRun) ?? null;
+  const pullRequests = d.outbox.flatMap((m) => {
+    const result = m.status?.result;
+    if (m.spec.action !== "open-pull-request" || typeof result?.url !== "string") return [];
+    const workspace = d.workspaces.find((w) => w.metadata.name === m.spec.payload.workspace);
+    return [{ url: result.url, number: String(result.number), repository: workspace?.spec.repositoryRef.name ?? "repository" }];
+  });
 
   return (
     <Stack gap="lg" maw={1400} mx="auto">
@@ -85,6 +110,13 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             <PhaseBadge phase={st?.phase} size="md" />
             <TypeBadge type={st?.classification?.type} />
             {st?.classification?.priority && <Badge variant="outline">{st.classification.priority}</Badge>}
+            {pullRequests.map((pr) => (
+              <Tooltip key={pr.url} label={`Open ${pr.repository} PR #${pr.number} on GitHub`}>
+                <Anchor href={pr.url} target="_blank" rel="noopener noreferrer" fw={600}>
+                  <Group gap={4} wrap="nowrap"><IconGitPullRequest size={18} />#{pr.number}</Group>
+                </Anchor>
+              </Tooltip>
+            ))}
           </Group>
           <Text size="sm" c="dimmed" ff="monospace">
             {wi.metadata.name} · source {wi.spec.sourceRef.name}
@@ -109,6 +141,10 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             <Menu.Dropdown>
               <Menu.Item leftSection={<IconRobot size={14} />} onClick={() => setChatOpen(true)}>Chat with agent</Menu.Item>
               <Menu.Item onClick={() => setFollowUpOpen(true)}>Create follow-up</Menu.Item>
+              <Menu.Divider />
+              <Menu.Item color="red" leftSection={<IconTrash size={14} />} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
+                Delete work item
+              </Menu.Item>
             </Menu.Dropdown>
           </Menu>
         </Group>
@@ -116,6 +152,18 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
 
       <StageProgress d={d} />
       {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
+      <Modal opened={deleteOpen} onClose={() => { if (!deleting) setDeleteOpen(false); }} title="Delete work item?" centered>
+        <Stack>
+          <Text size="sm">
+            This permanently deletes <strong>{wi.spec.title}</strong> and its owned resources. This action cannot be undone.
+          </Text>
+          {deleteError && <Alert color="red" title="Could not delete work item">{deleteError}</Alert>}
+          <Group justify="flex-end">
+            <Button variant="default" disabled={deleting} onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            <Button color="red" loading={deleting} onClick={() => void deleteItem()}>Delete work item</Button>
+          </Group>
+        </Stack>
+      </Modal>
       <WorkItemFollowUps item={wi} />
       {wi.spec.retrospective && <RetrospectivePanel item={wi} />}
       <Modal opened={chatOpen} onClose={() => setChatOpen(false)} title="Chat with an agent about this work item" size="lg">
@@ -144,7 +192,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       )}
       {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
-      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
+      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
       {!wi.spec.retrospective && <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />}
       {constructing && !wi.spec.retrospective && <UnitProgressPanel key={`units-${wi.metadata.uid ?? wi.metadata.name}`} item={wi} />}
       <PlanningWorkspace key={wi.metadata.uid ?? wi.metadata.name}
@@ -639,7 +687,21 @@ function EvidenceList({ evidence, onOpenRun }: { evidence: GateEvidence; onOpenR
   );
 }
 
-function ApprovalPanel({ a, evidence, onOpenRun }: { a: Approval; evidence: GateEvidence; onOpenRun: (n: string) => void }) {
+/** The latest current output of each artifact type produced in the gated stage (e.g. the design under review). */
+function stageOutputs(d: WorkItemDetail, stage: string) {
+  const runs = new Set(d.runs.filter((r) => r.spec.stage === stage && !r.spec.replayOf && !r.metadata.labels?.[LABEL_SUPERSEDED]
+    && r.status?.phase === "Succeeded").map((r) => r.metadata.name));
+  const latest = new Map<string, WorkItemDetail["artifacts"][number]>();
+  for (const artifact of d.artifacts) {
+    if (artifact.metadata.labels?.[LABEL_SUPERSEDED] || !runs.has(artifact.spec.producedBy?.agentRunRef.name ?? "")) continue;
+    latest.set(artifact.spec.artifactTypeRef.name, artifact);
+  }
+  return [...latest.values()];
+}
+
+function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; onOpenRun: (n: string) => void }) {
+  const evidence = d.evidence;
+  const outputs = useMemo(() => stageOutputs(d, a.spec.stage), [d, a.spec.stage]);
   const [comment, setComment] = useState("");
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -669,6 +731,18 @@ function ApprovalPanel({ a, evidence, onOpenRun }: { a: Approval; evidence: Gate
           </Group>
           <EvidenceList evidence={evidence} onOpenRun={onOpenRun} />
         </Card>
+        {outputs.length > 0 && (
+          <Accordion variant="contained" defaultValue={outputs[0].metadata.name}>
+            {outputs.map((artifact) => (
+              <Accordion.Item key={artifact.metadata.name} value={artifact.metadata.name}>
+                <Accordion.Control>Under review: {artifact.spec.artifactTypeRef.name} by {artifact.spec.producedBy?.agentRef.name}</Accordion.Control>
+                <Accordion.Panel>
+                  <MarkdownView>{artifact.spec.content}</MarkdownView>
+                </Accordion.Panel>
+              </Accordion.Item>
+            ))}
+          </Accordion>
+        )}
         {a.spec.approvers.length > 0 && (
           <Text size="sm">
             Approvers: {a.spec.approvers.map((x) => x.role).join(", ")} <Text span size="xs" c="dimmed">(role checks arrive in v0.4)</Text>

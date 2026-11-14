@@ -67,7 +67,7 @@ test("S3: developer agent fixes code and runs tests in the sandbox via the tool 
   });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "sum() is wrong", description: "sum(1, 2) returns -1 instead of 3. Fix it and keep tests green." });
+    const wi = await f.app.createWorkItem(p, { title: "sum() is wrong", description: "sum(1, 2) returns -1 instead of 3. Fix it and keep tests green.", workflowRef: "factory-loop" });
     const name = wi.metadata.name;
     let detail = null;
     for (let i = 0; i < 600; i++) {
@@ -154,7 +154,7 @@ test("ADR-0033: a repository's sandbox profile wins over the agent's default (Go
   });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Go change", description: "Change the Go controller so it handles failover zones.", repositoryRefs: ["controlplane"] });
+    const wi = await f.app.createWorkItem(p, { title: "Go change", description: "Change the Go controller so it handles failover zones.", workflowRef: "factory-loop", repositoryRefs: ["controlplane"] });
     for (let i = 0; i < 600 && !profiles.length; i++) {
       const d = await f.app.getWorkItem(p, wi.metadata.name);
       const open = d?.approvals.find((a) => !a.spec.decision && d.workItem.status?.blockedBy?.name === a.metadata.name);

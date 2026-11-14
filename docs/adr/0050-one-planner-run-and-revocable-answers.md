@@ -1,6 +1,6 @@
 # ADR-0050: One planner run, one review, and revocable human answers
 
-- **Status:** Proposed
+- **Status:** Accepted (implementation-plan format and design gate amended by ADR-0051)
 - **Date:** 2026-11-14
 - **Deciders:** project owner
 - **Would supersede:** the planning chain of ADR-0045/0046 for new planned items (`factory-planned` stays for
@@ -25,6 +25,8 @@ and another full regeneration.
   `units-of-work`, `validation-plan` (including the ADR-0047 Unit manifest) and `implementation-plan` in a single
   run. It reuses the existing skills (requirements elicitation, unit decomposition, validation planning,
   implementation planning). Classify and triage with code research stay as they are.
+- The workflow declares `planning.plannerStage`, and its verification `planningStage` is the same stage. The existing
+  separate `revisionStage`/`synthesisStage` policy remains valid for `factory-planned`.
 - Artifacts from one run are consistent by construction, so the provenance rules change accordingly:
   - The planning evidence binding requires all four artifacts to come from the **same** real, current, non-replay,
     non-superseded planner run that consumed the current planning intent, instead of a chain of runs that each
@@ -49,17 +51,21 @@ and another full regeneration.
   current plan, with their question and date.
 - A human can change an answer's text or **withdraw** it. A new `withdraw: string[]` field on
   `PlanningRevisionInput` (decision IDs) removes the answers from `WorkItem.spec.planning.answers`. A bounded record of
-  withdrawn answers (`question`, `answer`, `withdrawnBy`, `at`) is kept in a new `spec.planning.withdrawn` field.
+  the last 100 withdrawn answers (`decisionId`, `question`, `answer`, `withdrawnBy`, `at`) is kept in a new
+  `spec.planning.withdrawn` field. Answer records carry `answeredAt` so the workspace can show their age.
   Like any revision, it restarts planning; nothing is approved.
 - Agent context lists withdrawn answers explicitly as no longer binding, so the planner can drop the scope they
   introduced instead of silently re-deriving it from older artifacts.
 
 ### Rollout
-- `factory-plan` becomes the default for new planned items. `factory-planned` remains loadable so in-flight items
-  keep their workflow; there is no automatic migration. A human may move a stopped or planning item with an explicit
-  restart into the new workflow, which requires a fresh plan approval. Existing construction items are unaffected.
+- `factory-plan` is the default for new manual items and available for explicit selection elsewhere. `factory-planned`
+  remains loadable so in-flight items keep their workflow; there is no automatic migration. A human may move an eligible
+  stopped item or an item paused in its planning stages with an explicit restart into the new workflow, which requires
+  a fresh plan approval. The restart supersedes planning and later evidence from the prior workflow; existing
+  construction items are otherwise unaffected.
 - Implementation follows interface-first: extend the existing `PlanningCommands`/`PlanningRevisionInput` and the
-  planning evidence rules; no new resource kind, controller or port beyond the input field.
+  planning evidence rules. The existing restart controller also handles prior-workflow stage invalidation; no new
+  resource kind, controller or port is added.
 
 ## Consequences
 - Expected revision time drops from about four minutes to one planner run plus one review. The planner can read the
@@ -69,7 +75,8 @@ and another full regeneration.
   still declare the old chain; both shapes are valid planning workflows.
 - Agent definitions gain a `planner` agent; AGENTS.md (X30), glossary and architecture document the new workflow and
   answer withdrawal.
-- Exit tests: all four artifacts from one planner run pass the evidence binding; artifacts mixed from different runs,
+- Exit tests: eligible legacy planning items migrate only by explicit restart, with old planning and later evidence
+  superseded; all four artifacts from one planner run pass the evidence binding; artifacts mixed from different runs,
   simulated, replayed or superseded runs do not; a single output check failure reruns only the planner; one review
   round then human; withdrawing an answer removes it from intent, records the withdrawal, restarts planning and shows
   it to agents as not binding; `factory-planned` items continue unchanged; approval binding and the plan gate are

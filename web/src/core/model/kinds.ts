@@ -96,7 +96,10 @@ export interface StageSpec {
 }
 
 export interface WorkflowSpec {
-  planning?: { revisionStage: string; synthesisStage: string; reviewStage: string };
+  planning?: { reviewStage: string; planFormat?: import("./planning.ts").PlanFormat } & (
+    | { plannerStage: string; revisionStage?: never; synthesisStage?: never }
+    | { plannerStage?: never; revisionStage: string; synthesisStage: string }
+  );
   verification?: {
     planningStage: string;
     reviewStage: string;
@@ -231,14 +234,21 @@ export interface WorkItemSpec {
     truncated: boolean;
   };
   /** Human request to re-run the workflow from `stage` (default: first stage). A new `id` triggers it once. */
-  restart?: { id: string; stage?: string; requestedBy?: string };
+  restart?: {
+    id: string;
+    stage?: string;
+    requestedBy?: string;
+    /** Also supersede stages in the previous workflow when a human explicitly changes workflows. */
+    supersedeFrom?: { workflow: string; stage: string };
+  };
   /** Explicit human hold; never implicitly lifted by restarting or approving a gate. */
   publicationDisabled?: boolean;
   planning?: {
     revision: string;
     discovery: string;
     batchSubmitted?: boolean;
-    answers: Record<string, { signature: string; question: string; answer: string }>;
+    answers: Record<string, { signature: string; question: string; answer: string; answeredAt?: string; answeredBy?: string }>;
+    withdrawn?: { decisionId: string; question: string; answer: string; withdrawnBy: string; at: string }[];
     draft?: import("./planning.ts").PlanningSections;
     feedback?: string;
     disposition?: "rejected" | "deferred";

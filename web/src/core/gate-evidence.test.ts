@@ -92,7 +92,7 @@ test("X5: a failed verification can't be approved by accident (server-enforced o
   await f.start();
   const p = ANONYMOUS;
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Guarded release", description: "A long enough description for triage to accept it directly." });
+    const wi = await f.app.createWorkItem(p, { title: "Guarded release", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
     let d = null;
     for (let i = 0; i < 1000; i++) {
       d = (await f.app.getWorkItem(p, wi.metadata.name))!;
