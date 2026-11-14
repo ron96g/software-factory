@@ -304,6 +304,25 @@ export interface BranchPublisher {
   publish(ws: Workspace, repo: Repository, message: string): Promise<{ branch: string; commit: string; pushed: boolean }>;
 }
 
+// ── Base-branch conflicts (ADR-0053) ────────────────────────────────────
+
+export interface BaseConflictReport {
+  /** Commit of the remote base branch the candidate was compared with. */
+  baseCommit: string;
+  /** Files that do not merge cleanly, or still contain conflict markers. Empty: publishable. */
+  conflicts: string[];
+}
+
+/** Read-only: does the workspace's current candidate merge cleanly into the remote base branch? */
+export interface BaseConflictDetector {
+  detect(ws: Workspace, repo: Repository, baseBranch: string): Promise<BaseConflictReport>;
+}
+
+/** Merges a base commit into the workspace, leaving conflict markers for an agent or human to resolve. Idempotent. */
+export interface WorkspaceIntegrator {
+  integrate(ws: Workspace, repo: Repository, baseCommit: string): Promise<{ baseCommit: string; headCommit: string; conflicts: string[] }>;
+}
+
 export interface PullRequestInput {
   head: string;
   base: string;

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelProvider, ToolServer, Source, Repository } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -25,6 +25,7 @@ import { decisionGate, humanApprovalGate } from "./workflow/gates.ts";
 import { automatedGate } from "./workflow/checks.ts";
 import { SandboxCommandRunner } from "./agents/command-runner.ts";
 import { GitBranchPublisher } from "./adapters/workspaces/git-publish.ts";
+import { GitBaseSync } from "./adapters/workspaces/git-base-sync.ts";
 import { GithubCodeHost } from "./adapters/codehosts/github.ts";
 import { pullRequestHandler } from "./runtime/publish.ts";
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
@@ -44,7 +45,7 @@ import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
 import { knowledgeProvider } from "./knowledge/context.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
-import { codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
+import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
 import { DefaultModelResolver } from "./agents/model-resolver.ts";
@@ -114,6 +115,8 @@ export interface FactoryOptions {
   /** Publishing overrides (ADR-0023), e.g. fakes in tests. */
   publisher?: BranchPublisher;
   codeHosts?: CodeHost[];
+  /** ADR-0053 override: base-branch conflict detection + workspace merge. Default: git, for every runtime. Required with `publisher`. */
+  baseSync?: BaseConflictDetector & WorkspaceIntegrator;
   checkPollMs?: number;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
@@ -246,7 +249,7 @@ export async function createFactory(o: FactoryOptions) {
       planningContext({ reader: store, compiler, redactor }),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
       unitContext({ ledger: units, compiler, redactor }),
-      outputFeedbackContext({ reader: store, redactor })],
+      outputFeedbackContext({ reader: store, redactor }), baseConflictProvider()],
     models,
     recorders,
     environments,
@@ -300,10 +303,15 @@ export async function createFactory(o: FactoryOptions) {
   const outboxHandlers = new Registry<OutboxHandler>();
   const comment = commentHandler(connectors);
   outboxHandlers.register(comment.action, comment);
+  // ADR-0053: detection follows publication, not the runtime. The git publisher pushes from the workspace checkout,
+  // so the git detector works wherever a PR can be opened. A custom publisher must bring its own detector.
+  if (o.publisher && !o.baseSync) throw new Error("a custom publisher needs a baseSync (ADR-0053): no pull request is opened without base-conflict detection");
+  const baseSync = o.baseSync ?? new GitBaseSync(secrets);
   const pr = pullRequestHandler({
     reader: store,
     publisher: o.publisher ?? new GitBranchPublisher(secrets),
     codeHosts: o.codeHosts ?? [new GithubCodeHost(secrets, o.fetch)],
+    conflicts: baseSync,
   });
   outboxHandlers.register(pr.action, pr);
   for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);
@@ -330,10 +338,11 @@ export async function createFactory(o: FactoryOptions) {
     contracts: verification, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
   manager.register(checkRunController);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
-    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification,
+    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification, planReconfirmation: verification, publicationRecovery: verification,
     questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks }));
   manager.register(
-    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor }),
+    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor,
+      integrator: baseSync }),
   );
   manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor, policies: sourcePolicies }));
   manager.register(
@@ -385,6 +394,7 @@ export async function createFactory(o: FactoryOptions) {
     redactor,
     records: itemRecords,
     clock,
+    baseConflicts: baseSync,
   });
 
   // ── MCP server (ADR-0034): what local agent harnesses may do; gates stay in the UI ──

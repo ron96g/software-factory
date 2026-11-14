@@ -26,10 +26,10 @@ import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRe
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
-import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
+import type { AgentRun, Approval, Clarification, Conversation, OutboxMessage } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
-import type { GateEvidence, WorkItemDetail } from "@/core/ports/app.ts";
-import { act, useLive } from "@/ui/api.ts";
+import type { GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/ports/app.ts";
+import { act, api, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
 import { ChatPanel, RunDrawer } from "@/ui/run-inspector.tsx";
@@ -88,12 +88,13 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const openClar = d.clarifications.find((c) => c.metadata.name === st?.blockedBy?.name && st?.phase === "Blocked");
   const openAppr = d.approvals.find((a) => a.metadata.name === st?.blockedBy?.name && st?.phase === "AwaitingApproval");
   const run = d.runs.find((r) => r.metadata.name === openRun) ?? null;
-  const pullRequests = d.outbox.flatMap((m) => {
+  // Re-publication (ADR-0054) delivers the same PR again in later rounds: show each PR once.
+  const pullRequests = [...new Map(d.outbox.flatMap((m) => {
     const result = m.status?.result;
     if (m.spec.action !== "open-pull-request" || typeof result?.url !== "string") return [];
     const workspace = d.workspaces.find((w) => w.metadata.name === m.spec.payload.workspace);
-    return [{ url: result.url, number: String(result.number), repository: workspace?.spec.repositoryRef.name ?? "repository" }];
-  });
+    return [[result.url, { url: result.url, number: String(result.number), repository: workspace?.spec.repositoryRef.name ?? "repository" }] as const];
+  })).values()];
 
   return (
     <Stack gap="lg" maw={1400} mx="auto">
@@ -192,7 +193,8 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       )}
       {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
-      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
+      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || !!openAppr.spec.verification.rebinds || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
+      {pullRequests.length > 0 && <PullRequestPanel key={`prs-${wi.metadata.uid ?? wi.metadata.name}`} d={d} />}
       {!wi.spec.retrospective && <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />}
       {constructing && !wi.spec.retrospective && <UnitProgressPanel key={`units-${wi.metadata.uid ?? wi.metadata.name}`} item={wi} />}
       <PlanningWorkspace key={wi.metadata.uid ?? wi.metadata.name}
@@ -274,8 +276,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
                         {w.status.path}
                       </Text>
                     )}
-                    {d.outbox
-                      .filter((m) => m.spec.action === "open-pull-request" && m.spec.payload.workspace === w.metadata.name)
+                    {pullRequestMessages(d.outbox, w.metadata.name)
                       .map((m) => (
                         <Group key={m.metadata.name} gap={6}>
                           <IconGitPullRequest size={14} />
@@ -422,6 +423,62 @@ function ContextCard({ d }: { d: WorkItemDetail }) {
         <Text size="xs" c="dimmed" mt="xs">
           Agents use it from their next run. To redo steps that already ran, use Restart.
         </Text>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * ADR-0054: published pull requests go stale when the base branch moves on. Checking compares them with the current
+ * base; updating re-publishes from the publish stage, where conflicts are merged and resolved before the push.
+ */
+function PullRequestPanel({ d }: { d: WorkItemDetail }) {
+  const name = d.workItem.metadata.name;
+  const [status, setStatus] = useState<PublishedPullRequest[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const check = async () => {
+    setChecking(true);
+    setError(null);
+    try { setStatus(await api<PublishedPullRequest[]>(`/api/workitems/${name}/pull-requests`)); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setChecking(false); }
+  };
+  const update = async () => {
+    setUpdating(true);
+    if (await act(`/api/workitems/${name}/pull-requests`, {}, "Updating the pull request from the publish stage")) setStatus(null);
+    setUpdating(false);
+  };
+  const conflicting = status?.filter((pr) => pr.conflicts.length) ?? [];
+  return (
+    <Card withBorder>
+      <Group justify="space-between" align="flex-start">
+        <Stack gap={4}>
+          <Group gap="xs"><IconGitPullRequest size={18} /><Text fw={600}>Pull request</Text></Group>
+          <Text size="sm" c="dimmed">
+            Other work may change the base branch after publication. Updating re-publishes from the publish stage: the latest base is merged,
+            conflicts go to the developer agent, and the changed candidate passes review and verification again before it is pushed to the same pull request.
+          </Text>
+        </Stack>
+        <Group gap="xs" wrap="nowrap">
+          <Button variant="default" loading={checking} onClick={() => void check()}>Check for conflicts</Button>
+          <Button leftSection={<IconRefresh size={16} />} loading={updating} onClick={() => void update()}>Update pull request</Button>
+        </Group>
+      </Group>
+      {error && <Alert mt="sm" color="red" title="Could not check the pull request">{error}</Alert>}
+      {status && (
+        <Stack gap={4} mt="sm">
+          {status.map((pr) => (
+            <Group key={pr.url} gap="xs">
+              <Anchor href={pr.url} target="_blank" rel="noopener noreferrer">{pr.repository} #{pr.number}</Anchor>
+              {pr.error ? <Badge color="gray" variant="light">{pr.error}</Badge>
+                : pr.conflicts.length ? <Tooltip label={pr.conflicts.join(", ")}><Badge color="red" variant="light">Conflicts with {pr.base}: {pr.conflicts.length} file(s)</Badge></Tooltip>
+                : <Badge color="teal" variant="light">Merges cleanly into {pr.base}</Badge>}
+            </Group>
+          ))}
+          {conflicting.length > 0 && <Text size="sm">Use <strong>Update pull request</strong> to resolve the conflicts.</Text>}
+        </Stack>
       )}
     </Card>
   );
@@ -863,6 +920,16 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
       ))}
     </Accordion>
   );
+}
+
+/** One entry per published PR (its latest delivery), plus the newest attempt while it is still pending or failed. */
+function pullRequestMessages(outbox: OutboxMessage[], workspace: string): OutboxMessage[] {
+  const messages = outbox.filter((m) => m.spec.action === "open-pull-request" && m.spec.payload.workspace === workspace)
+    .sort((a, b) => (a.metadata.creationTimestamp ?? "").localeCompare(b.metadata.creationTimestamp ?? ""));
+  const url = (m: OutboxMessage) => (typeof m.status?.result?.url === "string" ? m.status.result.url : undefined);
+  const published = [...new Map(messages.filter(url).map((m) => [url(m)!, m])).values()];
+  const newest = messages.at(-1);
+  return newest && !url(newest) ? [...published, newest] : published;
 }
 
 function HumanHistory({ clarifications, approvals }: { clarifications: Clarification[]; approvals: Approval[] }) {

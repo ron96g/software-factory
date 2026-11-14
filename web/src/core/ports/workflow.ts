@@ -45,7 +45,9 @@ export type GateDecision =
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
   | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"]; retrospective?: { fingerprint: string };
       /** Extra facts the human must see on this approval (e.g. known evidence gaps). */
-      criteria?: string[] }
+      criteria?: string[];
+      /** Who may decide, when not the current stage's approvers (e.g. plan re-confirmation uses the review stage's). */
+      approvers?: import("../model/kinds.ts").ApprovalSpec["approvers"] }
   | { action: "block"; questions: string[]; /** Supporting Markdown (e.g. an agent's last summary), kept out of the question text. */ details?: string }
   | { action: "attention"; reason: string }
   | { action: "fail"; reason: string }

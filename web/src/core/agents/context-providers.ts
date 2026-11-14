@@ -94,3 +94,25 @@ export function repositoryDocsProvider(workspaces: WorkspaceProvider, maxChars =
     },
   };
 }
+
+/** ADR-0053: after the factory merged the current base into a workspace, agents see which files got conflict markers. */
+export function baseConflictProvider(): ContextProvider {
+  const merged = (ctx: ExecutionContext) => ctx.workspaces.filter((w) => w.status?.integration?.conflicts.length && !w.status.integration.error);
+  return {
+    name: "base-conflicts",
+    appliesTo: (ctx) => merged(ctx).length > 0,
+    async provide(ctx) {
+      const content = merged(ctx).map((w) => {
+        const i = w.status!.integration!;
+        return `- \`${w.spec.repositoryRef.name}\`: merged \`${i.ref}@${i.commit.slice(0, 10)}\` into \`${w.spec.branch}\`; conflict markers were left in ${i.conflicts.map((f) => `\`${f}\``).join(", ")}`;
+      }).join("\n");
+      return [{
+        title: "Merge conflicts with the base branch",
+        source: "base-conflicts",
+        content: `${content}\n\nOther work landed on the base branch while this item was in progress, so the pull request could not be published. ` +
+          "Resolve every `<<<<<<<`/`=======`/`>>>>>>>` block so both this item's intent and the base branch's change are kept, " +
+          "then run the affected build and tests. Do not revert the base branch's changes. A file without markers left is resolved.",
+      }];
+    },
+  };
+}

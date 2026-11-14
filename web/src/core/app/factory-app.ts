@@ -66,6 +66,9 @@ import type {
   FollowUpRelations,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
+  BaseConflictDetector,
+  PublishedPullRequest,
+  PullRequestMaintenance,
 } from "../ports/index.ts";
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
@@ -94,6 +97,8 @@ export interface FactoryAppDeps {
   redactor: Redactor;
   records: WorkItemRecordReader;
   clock: Clock;
+  /** ADR-0054: compares published pull requests with the current base. */
+  baseConflicts?: BaseConflictDetector;
 }
 
 const MAX_CONTEXT = 20_000;
@@ -124,7 +129,8 @@ export class FactoryApp
     AgentChatCommands,
     ChatWorkItemCreator,
     WorkItemFollowUpQueries,
-    WorkItemFollowUpCommands
+    WorkItemFollowUpCommands,
+    PullRequestMaintenance
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -402,6 +408,49 @@ export class FactoryApp
         if (!isStoreError(e, "Conflict") || attempt >= 3) throw e;
       }
     }
+  }
+
+  async publishedPullRequests(_p: Principal, name: string): Promise<PublishedPullRequest[]> {
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!wi) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const messages = (await this.d.reader.list<OutboxMessage>("OutboxMessage", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } }))
+      .filter((m) => m.spec.action === "open-pull-request" && m.status?.phase === "Delivered" && typeof m.status.result?.url === "string")
+      .sort((a, b) => (a.metadata.creationTimestamp ?? "").localeCompare(b.metadata.creationTimestamp ?? ""));
+    const latest = new Map(messages.map((m) => [String(m.spec.payload.workspace), m]));
+    const result: PublishedPullRequest[] = [];
+    for (const [workspace, m] of latest) {
+      const ws = await this.d.reader.get<Workspace>("Workspace", this.ns, workspace);
+      const repo = ws && await resolveRef<Repository>(this.d.reader, "Repository", ws.spec.repositoryRef, this.ns);
+      const pr: PublishedPullRequest = { workspace, repository: ws?.spec.repositoryRef.name ?? "", url: String(m.status!.result!.url),
+        number: Number(m.status!.result!.number), base: repo?.spec.git?.defaultBranch ?? "main", conflicts: [] };
+      try {
+        if (!ws?.status?.path || !repo) throw new Error("workspace is no longer available");
+        if (!this.d.baseConflicts) throw new Error("no base conflict detector is configured");
+        pr.conflicts = (await this.d.baseConflicts.detect(ws, repo, pr.base)).conflicts;
+      } catch (e) {
+        pr.error = this.d.redactor.redact(e instanceof Error ? e.message : String(e));
+      }
+      result.push(pr);
+    }
+    return result;
+  }
+
+  async updatePullRequest(p: Principal, name: string): Promise<WorkItem> {
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!wi) throw new StoreError(`work item ${name} not found`, "NotFound");
+    if (!wi.spec.workflowRef) throw new Error(`work item ${name} has no workflow`);
+    if (wi.spec.publicationDisabled) throw new Error("publication is disabled for this work item");
+    const wf = await this.d.compiler.compile(wi.spec.workflowRef, this.ns);
+    const publish = wf.stages.find((s) => s.publish?.pullRequest);
+    if (!publish) throw new Error(`workflow ${wi.spec.workflowRef.name} does not publish pull requests`);
+    const index = (stage?: string) => wf.stages.findIndex((s) => s.name === stage);
+    if (wi.status?.phase !== "Done" && index(wi.status?.stage) < index(publish.name)) {
+      throw new Error(`the item has not reached ${publish.name} yet; it publishes its pull request there`);
+    }
+    const published = (await this.d.reader.list<OutboxMessage>("OutboxMessage", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } }))
+      .some((m) => m.spec.action === "open-pull-request" && typeof m.status?.result?.url === "string");
+    if (!published) throw new Error("no pull request was published for this item yet");
+    return this.restartWorkItem(p, name, publish.name);
   }
 
   async listKnowledge(_p: Principal): Promise<KnowledgeEntry[]> {

@@ -245,6 +245,82 @@ test("review binds the exact specification, plan and policy; omission and simula
   } finally { g.db.close(); }
 });
 
+test("a workflow-only change asks for in-place plan re-confirmation that keeps existing evidence (ADR-0054)", async () => {
+  const f = await fixture();
+  try {
+    const original = await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, phase: "Running", stage: "implement", step: 0, round: 3 } });
+    const workflow = (await f.store.get<Workflow>("Workflow", "factory-system", "verified"))!;
+    await f.store.update({ ...workflow, spec: { ...workflow.spec, phases: workflow.spec.phases.map((phase) => ({ ...phase,
+      stages: phase.stages.map((stage) => stage.name === "ship" ? { ...stage, gate: { ...stage.gate!, criteria: ["New release checklist"] } } : stage) })) } });
+    await assert.rejects(f.service.plan(await f.current(), true), /fresh human approval/);
+    const controller = createWorkItemController({ reader: f.store, writer: f.store, status: f.store, events: f.events, clock: f.clock,
+      compiler: f.compiler, gates: new Registry<GateEvaluator>(), outbox: { enqueue: async () => { throw new Error("no publication"); } },
+      workspaces: { supports: () => false }, stagePolicy: f.service, planReconfirmation: f.service });
+    await controller.reconcile(keyOf(wi));
+    const waiting = await f.current();
+    assert.equal(waiting.status?.phase, "AwaitingApproval", "no unanswerable clarification");
+    assert.equal((await f.store.list("Clarification")).length, 0);
+    const approval = (await f.store.get<Approval>("Approval", "default", waiting.status!.blockedBy!.name))!;
+    assert.equal(approval.spec.stage, "implement");
+    assert.equal(approval.spec.verification?.rebinds, original.spec.verification?.fingerprint);
+    assert.match(approval.spec.criteria!.join(" "), /re-confirmation/);
+    await f.service.validate(approval, "approve");
+    await f.store.update<Approval>({ ...approval, spec: { ...approval.spec, decision: "approve", decidedBy: "human" } });
+    assert.equal((await f.service.plan(await f.current(), true)).fingerprint, original.spec.verification?.fingerprint, "evidence bound to the approved plan stays valid");
+    await controller.reconcile(keyOf(wi));
+    assert.deepEqual([(await f.current()).status?.phase, (await f.current()).status?.stage, (await f.current()).status?.round], ["Running", "implement", 4]);
+    await controller.reconcile(keyOf(wi));
+    assert.equal((await f.store.list<AgentRun>("AgentRun")).filter((r) => r.spec.stage === "implement").length, 1, "construction resumes without spec-review");
+
+    await f.store.update({ ...f.spec, spec: { ...f.spec.spec, content: "Changed acceptance criteria" } });
+    assert.equal(await f.service.request(await f.current(), (await f.context("implement")).stage), undefined, "a changed plan needs real plan review");
+  } finally { f.db.close(); }
+});
+
+test("legacy plan approvals are re-confirmed only when nothing was edited after the decision (ADR-0054)", async () => {
+  const f = await fixture();
+  try {
+    const original = await f.approve("spec-review");
+    const { content: _content, ...legacy } = original.spec.verification!;
+    await f.store.update<Approval>({ ...original, spec: { ...original.spec, verification: legacy } });
+    const workflow = (await f.store.get<Workflow>("Workflow", "factory-system", "verified"))!;
+    await f.store.update({ ...workflow, spec: { ...workflow.spec, phases: workflow.spec.phases.map((phase) => ({ ...phase,
+      stages: phase.stages.map((stage) => stage.name === "ship" ? { ...stage, gate: { ...stage.gate!, criteria: ["New release checklist"] } } : stage) })) } });
+    const stage = (await f.context("implement")).stage;
+    const decision = await f.service.request(await f.current(), stage);
+    assert.equal(decision?.action, "await-approval");
+    const review = (await f.compiler.compile({ name: "verified" }, "default")).stage("spec-review")!;
+    if (decision?.action === "await-approval") assert.deepEqual(decision.approvers, review.gate?.approvers ?? [], "the plan reviewers decide, not the current stage's");
+    await f.store.update({ ...f.spec, spec: { ...f.spec.spec, content: "Edited in place after approval" } });
+    assert.equal(await f.service.request(await f.current(), stage), undefined, "an in-place edit after the decision fails closed");
+  } finally { f.db.close(); }
+});
+
+test("an unresolved base merge at the publish stage goes back to its conflict route before the publication guard (ADR-0054)", async () => {
+  const f = await fixture();
+  try {
+    const workflow = (await f.store.get<Workflow>("Workflow", "factory-system", "verified"))!;
+    await f.store.update({ ...workflow, spec: { ...workflow.spec, phases: workflow.spec.phases.map((phase) => ({ ...phase,
+      stages: phase.stages.map((stage) => stage.name === "ship" ? { ...stage, publish: { pullRequest: { draft: true, onConflict: { next: "implement", maxAttempts: 2 } } } } : stage) })) } });
+    await f.approve("spec-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, phase: "Running", stage: "ship", step: 0, round: 7 } });
+    const ws = (await f.store.get<Workspace>("Workspace", "default", "ws"))!;
+    await f.store.updateStatus({ ...ws, status: { ...ws.status!, integration: { commit: "b".repeat(40), ref: "main", round: 5, conflicts: ["a.ts"], at: "2026-11-13T12:00:01Z" } } });
+    const controller = createWorkItemController({ reader: f.store, writer: f.store, status: f.store, events: f.events, clock: f.clock,
+      compiler: f.compiler, gates: new Registry<GateEvaluator>(), outbox: { enqueue: async () => { throw new Error("must not publish a merge in progress"); } },
+      workspaces: { supports: () => false }, stagePolicy: f.service, publicationGuard: f.service, publicationRecovery: f.service, planReconfirmation: f.service });
+    assert.match(String(await f.service.check(await f.current())), /./, "the merged candidate is not publishable as is");
+    await controller.reconcile(keyOf(wi));
+    const routed = await f.current();
+    assert.deepEqual([routed.status?.phase, routed.status?.stage, routed.status?.retries?.["base-conflict"]], ["Running", "implement", 1]);
+    assert.equal((await f.store.list("Clarification")).length, 0, "no dead-end publication clarification");
+  } finally { f.db.close(); }
+});
+
 test("misordered policies cannot turn the construction entry guard into a review bypass", async () => {
   const f = await fixture();
   try {

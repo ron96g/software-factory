@@ -88,7 +88,13 @@ export interface StageSpec {
   /** Q1: if the stage's last outcome matches, go back to `goto` (bounded by `maxAttempts`) before the gate. */
   loop?: { when: { outcome: string }; goto: string; maxAttempts: number };
   /** ADR-0023: on entering the stage, publish the item's workspaces (outbox). */
-  publish?: { pullRequest?: { draft?: boolean } };
+  publish?: {
+    pullRequest?: {
+      draft?: boolean;
+      /** ADR-0053: a conflict with the current base goes back to `next` (bounded); without it, a human resolves. */
+      onConflict?: { next: string; maxAttempts?: number };
+    };
+  };
   steps?: StepSpec[];
   gate?: GateSpec;
   workflowRef?: Ref;
@@ -620,6 +626,10 @@ export interface ApprovalSpec {
     fingerprint: string;
     planFingerprint: string;
     requirements?: string[];
+    /** ADR-0054: plan re-confirmation; the earlier human-approved plan binding this approval carries forward. */
+    rebinds?: string;
+    /** ADR-0054: digest of the reviewed specification and validation plan, without workflow/repository definitions. */
+    content?: string;
   };
 }
 export interface ApprovalStatus {
@@ -661,6 +671,9 @@ export interface WorkspaceSpec {
   baseRef?: string;
   branch: string;
   setup?: string[];
+  /** ADR-0053: merge this base commit into the workspace (requested by the WorkItem controller on a conflict). */
+  /** `round`: the WorkItem round that asked; a new round retries a failed merge of the same commit. */
+  integrate?: { commit: string; ref: string; round: number };
 }
 
 export interface WorkspaceStatus {
@@ -673,5 +686,7 @@ export interface WorkspaceStatus {
   /** Output of the setup commands (truncated). */
   setupLog?: string;
   setupCompleted?: boolean;
+  /** ADR-0053: result of the last `spec.integrate`; `baseCommit` is re-pinned to the merged base. */
+  integration?: { commit: string; ref: string; round: number; conflicts: string[]; error?: string; at: string };
 }
 export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;

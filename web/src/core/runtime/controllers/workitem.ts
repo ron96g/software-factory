@@ -1,4 +1,4 @@
-import type { AgentRun, Approval, Artifact, CheckRun, Clarification, ClarificationSpec, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
+import type { AgentRun, Approval, Artifact, CheckRun, Clarification, ClarificationSpec, OutboxMessage, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
@@ -21,6 +21,9 @@ import {
   type ApprovalGateEvaluator,
   type StageEntryPolicy,
   type StageResumptionPolicy,
+  type PlanReconfirmation,
+  type PublicationRecovery,
+  type ReconcileResult,
   type VerificationPublicationGuard,
   type AgentQuestionPolicy,
   type WorkItemIntentPolicy,
@@ -50,6 +53,10 @@ export interface WorkItemControllerDeps {
   stagePolicy?: StageEntryPolicy;
   resumptionPolicy?: StageResumptionPolicy;
   publicationGuard?: VerificationPublicationGuard;
+  /** ADR-0054: stale-only-by-definitions plan approvals are re-confirmed in place instead of blocking. */
+  planReconfirmation?: PlanReconfirmation;
+  /** ADR-0054: routes an unpublishable-but-recoverable candidate (changed after review, check running) instead of blocking. */
+  publicationRecovery?: PublicationRecovery;
   questionPolicy?: AgentQuestionPolicy;
   intentPolicy?: WorkItemIntentPolicy;
   /** ADR-0047: binds an implementation attempt to the next approved Unit. */
@@ -62,6 +69,11 @@ export interface WorkItemControllerDeps {
 
 /** Bounded same-step retries for malformed output before the existing gate handling takes over. */
 const MAX_OUTPUT_RETRIES = 2;
+/** ADR-0053: default automatic resolution attempts for conflicts with the base branch. */
+const DEFAULT_CONFLICT_ATTEMPTS = 2;
+const BASE_CONFLICT = "base-conflict";
+
+interface BaseConflict { ws: Workspace; base: string; baseCommit: string; files: string[] }
 
 export const runName = (wi: WorkItem, stage: string, step: number, round: number) =>
   `${wi.metadata.name}-${stage}-${step}-r${round}`;
@@ -158,22 +170,100 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     }
   }
 
+  const pullRequestKey = (wi: WorkItem, stage: CompiledStage, ws: Workspace) =>
+    `${wi.metadata.name}-${stage.name}-r${wi.status?.round ?? 0}-pr-${ws.spec.repositoryRef.name}`.slice(0, 200);
+  const ownedWorkspaces = (wi: WorkItem) => d.reader.list<Workspace>("Workspace", {
+    namespace: nsOf(wi),
+    ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) },
+  });
+
   /** ADR-0023: entering a `publish` stage enqueues one pull request per Ready workspace (idempotent per round). */
   async function publishPullRequests(wi: WorkItem, stage: CompiledStage) {
     if (!stage.publish?.pullRequest) return;
-    const list = await d.reader.list<Workspace>("Workspace", {
-      namespace: nsOf(wi),
-      ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) },
-    });
+    const list = await ownedWorkspaces(wi);
     for (const ws of list.filter((w) => w.status?.phase === "Ready")) {
       await d.outbox.enqueue({
-        key: `${wi.metadata.name}-${stage.name}-r${wi.status?.round ?? 0}-pr-${ws.spec.repositoryRef.name}`.slice(0, 200),
+        key: pullRequestKey(wi, stage, ws),
         namespace: nsOf(wi),
         action: "open-pull-request",
         payload: { workspace: ws.metadata.name, workItem: wi.metadata.name, title: wi.spec.title, draft: stage.publish.pullRequest.draft ?? true },
         owner: ownerRef(wi),
       });
     }
+  }
+
+  /**
+   * ADR-0053: this round's pull requests are "pending" until delivered (the stage's agents and gate must not act on
+   * an unpublished or conflicting candidate). Failed deliveries keep the pre-ADR behaviour: visible, not blocking.
+   */
+  async function publicationState(wi: WorkItem, stage: CompiledStage): Promise<"pending" | BaseConflict[]> {
+    const conflicts: BaseConflict[] = [];
+    for (const ws of await ownedWorkspaces(wi)) {
+      const msg = await d.reader.get<OutboxMessage>("OutboxMessage", nsOf(wi), pullRequestKey(wi, stage, ws));
+      if (!msg) continue;
+      if (msg.status?.phase === "Pending" || msg.status?.phase === "Delivering") return "pending";
+      const r = msg.status?.phase === "Delivered" ? msg.status.result : undefined;
+      if (r?.conflict === true) {
+        conflicts.push({ ws, base: String(r.base ?? ""), baseCommit: String(r.baseCommit ?? ""), files: Array.isArray(r.files) ? r.files.map(String) : [] });
+      }
+    }
+    return conflicts;
+  }
+
+  /**
+   * ADR-0053: merge the current base into each conflicting workspace (the Workspace controller owns the merge), then
+   * hand the markers to the `onConflict` stage (bounded) or to a human. Never publishes a conflicting candidate.
+   */
+  async function resolveBaseConflicts(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage, conflicts: BaseConflict[]) {
+    let requested = false;
+    const round = wi.status?.round ?? 0;
+    const current = (c: BaseConflict) => c.ws.status?.integration?.commit === c.baseCommit && c.ws.status.integration.round === round;
+    for (const c of conflicts) {
+      if (c.ws.spec.integrate?.commit === c.baseCommit && c.ws.spec.integrate.round === round) continue;
+      await d.writer.update<Workspace>({ ...c.ws, spec: { ...c.ws.spec, integrate: { commit: c.baseCommit, ref: c.base, round } } });
+      requested = true;
+    }
+    const summary = conflicts.map((c) => `${c.ws.spec.repositoryRef.name} vs ${c.base}@${c.baseCommit.slice(0, 10)}: ${c.files.join(", ") || "(unknown files)"}`).join("; ");
+    if (requested) {
+      await d.events.warning(wi, "BaseConflict", `pull request not published, merging the current base: ${summary}`);
+      return;
+    }
+    if (!conflicts.every(current)) return; // re-triggered by the Workspace watch
+    return handOffConflicts(wi, wf, stage, conflicts);
+  }
+
+  async function handOffConflicts(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage, conflicts: BaseConflict[]) {
+    const failed = conflicts.filter((c) => c.ws.status?.integration?.error);
+    const route = stage.publish?.pullRequest?.onConflict;
+    const used = wi.status?.retries?.[BASE_CONFLICT] ?? 0;
+    if (!failed.length && route?.next && used < (route.maxAttempts ?? DEFAULT_CONFLICT_ATTEMPTS)) {
+      return apply(wi, wf, stage, { action: "goto", stage: route.next, retryOf: BASE_CONFLICT });
+    }
+    const where = conflicts.map((c) => `- \`${c.ws.spec.repositoryRef.name}\` (branch \`${c.ws.spec.branch}\`, workspace \`${c.ws.status?.path ?? "?"}\`): ${
+      c.ws.status?.integration?.error ? `merging ${c.base} failed: ${c.ws.status.integration.error}` : `markers left in ${c.files.join(", ")}`}`).join("\n");
+    return block(wi, stage, [
+      `The pull request conflicts with the current \`${conflicts[0].base}\` branch${failed.length ? " and the factory could not merge it" : ` and ${used} automatic resolution attempt(s) did not resolve it`}. ` +
+      (failed.length ? "Fix the cause in the workspace (or restart the item), then answer to retry the merge." :
+        "Resolve the conflict markers in the workspace (or restart the item), then answer to publish again."),
+    ], { gate: BASE_CONFLICT }, where);
+  }
+
+  /**
+   * ADR-0054: base merges whose markers no earlier stage has worked on since (e.g. the item was restarted at the
+   * publish stage after the merge). An answered base-conflict clarification counts as handled by a human.
+   */
+  async function unresolvedIntegrations(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage): Promise<BaseConflict[]> {
+    const merged = (await ownedWorkspaces(wi)).filter((ws) => ws.status?.integration && (ws.status.integration.conflicts.length || ws.status.integration.error));
+    if (!merged.length) return [];
+    const owned = { namespace: nsOf(wi), ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) } };
+    const before = new Set(wf.stages.slice(0, wf.stages.findIndex((s) => s.name === stage.name)).map((s) => s.name));
+    const runs = (await d.reader.list<AgentRun>("AgentRun", owned)).filter((r) => before.has(r.spec.stage) && !r.spec.replayOf);
+    const answered = (await d.reader.list<Clarification>("Clarification", owned)).filter((c) => c.spec.askedBy?.gate === BASE_CONFLICT && c.spec.answers?.length);
+    const after = (at: string | undefined, since: string) => !!at && Date.parse(at) >= Date.parse(since);
+    return merged.filter((ws) => {
+      const since = ws.status!.integration!.at;
+      return !runs.some((r) => after(r.metadata.creationTimestamp, since)) && !answered.some((c) => after(c.status?.answeredAt ?? c.metadata.creationTimestamp, since));
+    }).map((ws) => ({ ws, base: ws.status!.integration!.ref, baseCommit: ws.status!.integration!.commit, files: ws.status!.integration!.conflicts }));
   }
 
   /** "ready" | "waiting" | failure message */
@@ -202,6 +292,12 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     await write(wi, { phase: "Blocked", blockedBy: { kind: "Clarification", name } }, "Blocked", `${stage.name}: waiting for clarification`);
   }
 
+  async function gateBlock(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage, questions: string[], gate: string, details?: string): Promise<ReconcileResult | void> {
+    const reconfirm = await d.planReconfirmation?.request(wi, stage);
+    if (reconfirm) return apply(wi, wf, stage, reconfirm);
+    return block(wi, stage, questions, { gate }, details);
+  }
+
   async function apply(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage, decision: GateDecision) {
     const round = (wi.status?.round ?? 0) + 1;
     switch (decision.action) {
@@ -223,7 +319,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       case "end":
         return write(wi, { phase: decision.phase, message: decision.reason, blockedBy: undefined }, decision.phase, decision.reason);
       case "block":
-        return block(wi, stage, decision.questions, { gate: stage.gate?.type ?? stage.name }, decision.details);
+        return gateBlock(wi, wf, stage, decision.questions, stage.gate?.type ?? stage.name, decision.details);
       case "attention":
         return write(wi, { phase: "Blocked", blockedBy: undefined, message: decision.reason }, "PlanningNeedsAttention", decision.reason);
       case "fail":
@@ -238,10 +334,10 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           spec: {
             workItemRef: { name: wi.metadata.name },
             stage: stage.name,
-            approvers: stage.gate?.approvers ?? [],
+            approvers: decision.approvers ?? stage.gate?.approvers ?? [],
             criteria: decision.verification ? [
               ...(stage.gate?.criteria ?? []),
-              `Verification ${decision.verification.kind} review. Binding: ${decision.verification.fingerprint}`,
+              `Verification ${decision.verification.kind} ${decision.verification.rebinds ? "re-confirmation" : "review"}. Binding: ${decision.verification.fingerprint}`,
               ...(decision.verification.kind === "waiver" ? [
                 `Waiver requested for: ${decision.verification.requirements?.join(", ")}. These requirements remain Waived, never Passed.`,
                 "Approval requires an explicit reason of at least 10 characters; rejection keeps verification blocked.",
@@ -311,7 +407,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
   return {
     name: "workitem",
     primaryKind: "WorkItem",
-    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun"],
+    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun", "OutboxMessage"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () =>
       (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w)).map(keyOf),
@@ -357,6 +453,8 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         if (st.phase === "Blocked") {
           const c = await d.reader.get<Clarification>("Clarification", namespace, st.blockedBy?.name ?? "");
           if (c && !c.spec.answers?.length) {
+            const reconfirm = c.spec.askedBy?.gate ? await d.planReconfirmation?.request(wi, stage) : undefined;
+            if (reconfirm) return apply(wi, wf, stage, reconfirm);
             await publishQuestions(wi, c);
             return;
           }
@@ -369,6 +467,10 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         if (st.phase === "AwaitingApproval") {
           const a = await d.reader.get<Approval>("Approval", namespace, st.blockedBy?.name ?? "");
           if (!a?.spec.decision) return;
+          if (a.spec.verification?.rebinds && d.planReconfirmation) {
+            await d.events.normal(wi, a.spec.decision === "approve" ? "Approved" : "Rejected", `${stage.name} plan re-confirmation by ${a.spec.decidedBy ?? "unknown"}${a.spec.comment ? `: ${a.spec.comment}` : ""}`);
+            return apply(wi, wf, stage, await d.planReconfirmation.decide(wi, stage, a));
+          }
           const evaluator = stage.gate && d.gates.get(stage.gate.type);
           const approvalEvaluator = evaluator as Partial<ApprovalGateEvaluator> | undefined;
           if (approvalEvaluator?.evaluateApproval) {
@@ -388,10 +490,27 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             if (st.phase !== "Waiting" || st.message !== "Publication disabled by human policy") return write(wi, { phase: "Waiting", message: "Publication disabled by human policy" }, "PublicationHeld", "No commit, push or pull request will be published.");
             return;
           }
+          // This round's delivery result first: merging the base changes the candidate, which the guard would
+          // otherwise report as unpublishable before the conflict reaches its resolution route.
+          const publication = await publicationState(wi, stage);
+          if (publication === "pending") return; // re-triggered by the OutboxMessage watch
+          if (publication.length) return resolveBaseConflicts(wi, wf, stage, publication);
+          const unresolved = await unresolvedIntegrations(wi, wf, stage);
+          if (unresolved.length) return handOffConflicts(wi, wf, stage, unresolved);
           const reason = await d.publicationGuard?.check(wi);
-          if (reason) return block(wi, stage, [reason], { gate: "publication" });
+          if (reason) {
+            const recovery = await d.publicationRecovery?.recover(wi);
+            if (recovery) return apply(wi, wf, stage, recovery);
+            return gateBlock(wi, wf, stage, [reason], "publication");
+          }
+          if (stepIdx === 0) {
+            await publishPullRequests(wi, stage); // level-triggered; enqueue is idempotent
+            const delivered = await publicationState(wi, stage);
+            if (delivered === "pending") return;
+            if (delivered.length) return resolveBaseConflicts(wi, wf, stage, delivered);
+          }
         }
-        if (stepIdx === 0) await publishPullRequests(wi, stage); // level-triggered; enqueue is idempotent
+        else if (stepIdx === 0) await publishPullRequests(wi, stage);
         if (stepIdx < stage.steps.length) {
           const step = stage.steps[stepIdx];
           const rn = runName(wi, stage.name, stepIdx, st.round!);

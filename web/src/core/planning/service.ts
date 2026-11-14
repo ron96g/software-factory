@@ -297,7 +297,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     }
     result.unansweredQuestions = result.decisions.filter((decision) => decision.required && !decision.answer).map((decision) => decision.question);
     const approval = state.approvals.find((a) => a.metadata.name === item.status?.blockedBy?.name &&
-      item.status.phase === "AwaitingApproval" && a.spec.verification?.kind === "plan" && !a.spec.decision);
+      item.status.phase === "AwaitingApproval" && a.spec.verification?.kind === "plan" && !a.spec.verification.rebinds && !a.spec.decision);
     result.approval = approval?.metadata.name;
     return result;
   }

@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
 import type { BranchPublisher, SecretResolver } from "../../ports/index.ts";
+import { FACTORY_GIT_IDENTITY, gitRemote } from "./git-auth.ts";
 
 const execFileP = promisify(execFile);
 
@@ -18,28 +21,14 @@ export class GitBranchPublisher implements BranchPublisher {
   async publish(ws: Workspace, repo: Repository, message: string) {
     const dir = ws.status?.path;
     if (!dir) throw new Error(`workspace ${ws.metadata.name} has no path`);
-    const url = repo.spec.git?.url;
-    if (!url) throw new Error(`repository ${repo.metadata.name} has no spec.git.url to push to`);
-    if (!/^https?:\/\//.test(url)) throw new Error(`repository ${repo.metadata.name}: only https git URLs are supported for pushing (got ${url})`);
-    const token = this.secrets.resolve(repo.spec.git?.secretRef);
-    const env = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      GIT_TERMINAL_PROMPT: "0",
-      ...(token
-        ? {
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: `http.${new URL(url).origin}/.extraheader`,
-            GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
-          }
-        : {}),
-    } as unknown as NodeJS.ProcessEnv;
+    const { url, env } = gitRemote(repo, this.secrets);
     const git = async (...args: string[]) => (await execFileP("git", args, { cwd: dir, env, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
-    const id = ["-c", "user.name=Software Factory", "-c", "user.email=software-factory@users.noreply.github.com"];
 
     await git("add", "-A");
     const staged = await git("diff", "--cached", "--name-only");
-    if (staged) await git(...id, "commit", "-q", "-m", message);
+    // ADR-0053: a base merge left by the integrator is completed by this commit, even without further changes.
+    const merging = existsSync(join(await git("rev-parse", "--absolute-git-dir"), "MERGE_HEAD"));
+    if (staged || merging) await git(...FACTORY_GIT_IDENTITY, "commit", "-q", "--no-edit", "-m", message);
     const branch = ws.spec.branch;
     await git("push", "--quiet", url, `HEAD:refs/heads/${branch}`);
     return { branch, commit: await git("rev-parse", "HEAD"), pushed: true };

@@ -373,3 +373,9 @@ flowchart LR
 
 - Agent runs wait until all of the item's workspaces are `Ready`. Provenance records `repository → commit`.
 - Workspaces fork from the **committed** HEAD (or `Repository.spec.workspace.baseRef`). Uncommitted local changes are not visible.
+- Before a pull request is pushed, the candidate is trial-merged with the freshly fetched remote base (ADR-0053). On a
+  conflict nothing is published: the Workspace merges the new base (`spec.integrate`, markers left, `baseCommit`
+  re-pinned) and the publish stage routes to `onConflict.next` (bounded), else a human resolves via a Clarification.
+- An already published PR is brought up to date with "Update pull request" (ADR-0054): a restart from the publish stage
+  that goes through the same conflict resolution and pushes to the same branch. A plan approval made stale only by
+  workflow/repository definition edits is re-confirmed in place through an Approval instead of restarting plan review.

@@ -44,8 +44,27 @@ export interface VerificationPublicationGuard {
   check(item: WorkItem): Promise<string | undefined>;
 }
 
+/**
+ * ADR-0054: the route to take when a candidate is not publishable only because it changed after review/verification
+ * (e.g. a base merge) or a check is still running; undefined when only a human can help.
+ */
+export interface PublicationRecovery {
+  recover(item: WorkItem): Promise<GateDecision | undefined>;
+}
+
 export interface StageEntryPolicy {
   beforeStage(item: WorkItem, stage: CompiledStage): Promise<GateDecision>;
+}
+
+/**
+ * ADR-0054: a human-approved plan whose binding went stale only because workflow/repository definitions changed is
+ * re-confirmed in place (at the current stage) instead of restarting plan review.
+ */
+export interface PlanReconfirmation {
+  /** An await-approval decision when re-confirmation applies; undefined otherwise. */
+  request(item: WorkItem, stage: CompiledStage): Promise<GateDecision | undefined>;
+  /** Decision for a decided re-confirmation approval: resume the stage, or revise the plan when rejected. */
+  decide(item: WorkItem, stage: CompiledStage, approval: Approval): Promise<GateDecision>;
 }
 
 export interface StageResumptionPolicy {

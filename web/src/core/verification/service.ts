@@ -7,7 +7,7 @@ import { SandboxUnavailableError, StoreError, isStoreError, type AgentCheckReque
   type Clock, type CompiledStage, type CompiledWorkflow, type EventRecorder, type ExecutionContext, type ExecutionEnvironmentSelector, type GateContext,
   type GateDecision, type GateEvaluator, type Principal, type Redactor, type ResourceReader, type ResourceWriter,
   type ValidationContract, type ValidationPlan, type VerificationActions, type VerificationApprovalGuard,
-  type StageEntryPolicy, type StageResumptionPolicy, type ArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
+  type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
 import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
 import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
 import { parseUnitManifest } from "../model/units.ts";
@@ -31,6 +31,14 @@ const owned = (wi: WorkItem) => ({ namespace: nsOf(wi), ownedBy: { kind: "WorkIt
 const eligible = (r: { metadata: { labels?: Record<string, string> } }) =>
   !r.metadata.labels?.[LABEL_SUPERSEDED] && !r.metadata.labels?.["factory.ai-dlc.io/replay"];
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string" && !!v.trim());
+/** ADR-0054: the original plan binding an approved re-confirmation of `fingerprint` carries forward. */
+const reconfirmed = (approvals: Approval[], item: WorkItem, fingerprint: string, reviewStage: string) => {
+  const latest = approvals.filter((a) => a.spec.verification?.kind === "plan" && a.spec.verification.rebinds &&
+    a.spec.verification.fingerprint === fingerprint && a.metadata.ownerReferences?.some((o) => o.uid === item.metadata.uid)).at(-1);
+  const original = latest?.spec.verification?.rebinds;
+  return latest?.spec.decision === "approve" && !!latest.spec.decidedBy && original &&
+    approvedBinding(approvals, item, "plan", original, reviewStage) ? original : undefined;
+};
 const approvedBinding = (approvals: Approval[], item: WorkItem, kind: NonNullable<Approval["spec"]["verification"]>["kind"], fingerprint: string, stage?: string) => {
   const latest = approvals.filter((a) => (!stage || a.spec.stage === stage) && a.spec.verification?.kind === kind &&
     a.spec.verification.fingerprint === fingerprint && a.metadata.ownerReferences?.some((o) => o.uid === item.metadata.uid)).at(-1);
@@ -81,7 +89,7 @@ function unitExecutionPolicy(workflow: CompiledWorkflow, policy: NonNullable<Com
   return units;
 }
 
-export class VerificationService implements CandidateSnapshots, VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, StageEntryPolicy, StageResumptionPolicy {
+export class VerificationService implements CandidateSnapshots, VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, StageEntryPolicy, StageResumptionPolicy, PlanReconfirmation, PublicationRecovery {
   private readonly d: {
     namespace: string; reader: ResourceReader; writer: ResourceWriter; compiler: WorkflowCompiler;
     snapshots: WorkspaceSnapshotter; environments: ExecutionEnvironmentSelector; scheduler: CheckRunScheduler;
@@ -142,9 +150,63 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     if (approved) {
       await this.d.planning?.assertReady(item);
       const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
-      if (!approvedBinding(approvals, item, "plan", fingerprint, policy.reviewStage)) return invalid("current plan, workflow and repository policy need fresh human approval");
+      if (approvedBinding(approvals, item, "plan", fingerprint, policy.reviewStage)) return contract;
+      const original = reconfirmed(approvals, item, fingerprint, policy.reviewStage);
+      if (original) return { ...contract, fingerprint: original };
+      return invalid(`No human approval matches the current plan: the specification, validation plan or planning decisions are unapproved or changed since approval. Restart from ${policy.reviewStage} for fresh human approval.`);
     }
     return contract;
+  }
+
+  /** ADR-0054: re-confirm an unchanged approved plan in place when only workflow/repository definitions changed. */
+  async request(item: WorkItem, stage: CompiledStage): Promise<GateDecision | undefined> {
+    if (!item.spec.workflowRef) return undefined;
+    const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+    if (!wf.verification) return undefined;
+    try {
+      const policy = verificationPolicy(wf);
+      const index = (name: string) => wf.stages.findIndex((s) => s.name === name);
+      if (index(stage.name) <= index(policy.reviewStage)) return undefined;
+      const contract = await this.plan(item, false);
+      const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
+      if (approvedBinding(approvals, item, "plan", contract.fingerprint, policy.reviewStage) ||
+          reconfirmed(approvals, item, contract.fingerprint, policy.reviewStage)) return undefined;
+      const previous = approvals.filter((a) => a.spec.stage === policy.reviewStage && a.spec.verification?.kind === "plan" &&
+        !a.spec.verification.rebinds && a.spec.decision && a.metadata.ownerReferences?.some((o) => o.uid === item.metadata.uid)).at(-1);
+      if (previous?.spec.decision !== "approve" || !previous.spec.decidedBy) return undefined;
+      const { content, specification } = await this.content(item, contract);
+      if (previous.spec.verification!.content !== undefined ? previous.spec.verification!.content !== content : !specification ||
+          // Approvals before ADR-0054 have no content digest. resourceVersion is a global monotonic counter, so artifacts
+          // last written before the decision was recorded are what the human approved; anything else fails closed.
+          ![contract.artifact, specification].every((a) => Number(a.metadata.resourceVersion) < Number(previous.metadata.resourceVersion))) {
+        return undefined;
+      }
+      return { action: "await-approval", approvers: wf.stage(policy.reviewStage)?.gate?.approvers ?? [],
+        verification: { kind: "plan", fingerprint: contract.fingerprint, planFingerprint: contract.fingerprint, rebinds: previous.spec.verification!.fingerprint, content },
+        criteria: [
+          `Plan re-confirmation: the specification and validation plan approved at ${policy.reviewStage} by ${previous.spec.decidedBy} are unchanged, but workflow or repository definitions changed since then.`,
+          `Approve to continue at ${stage.name} under the current definitions. Existing code review and check evidence stays valid; current checks and repository policy still apply.`,
+          `Reject to revise the plan from ${wf.planning?.revisionStage ?? policy.planningStage}.`,
+          ...gapCriterion(planGaps(contract)),
+        ] };
+    } catch (e) { if (!isStoreError(e, "Invalid")) throw e; return undefined; }
+  }
+
+  private async content(item: WorkItem, contract: ValidationContract) {
+    const specification = (await this.d.reader.list<Artifact>("Artifact", owned(item)))
+      .filter((a) => eligible(a) && a.spec.artifactTypeRef.name === "spec").at(-1);
+    return { specification, content: digest([item.metadata.uid, specification?.metadata.uid, specification?.metadata.resourceVersion,
+      contract.artifact.metadata.uid, contract.artifact.metadata.resourceVersion, contract.plan]) };
+  }
+
+  async decide(item: WorkItem, stage: CompiledStage, approval: Approval): Promise<GateDecision> {
+    const wf = await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item));
+    try {
+      const policy = verificationPolicy(wf);
+      if (approval.spec.decision === "reject") return { action: "goto", stage: wf.planning?.revisionStage ?? policy.planningStage };
+      await this.validate(approval, "approve", approval.spec.comment);
+      return { action: "goto", stage: stage.name };
+    } catch (e) { if (!isStoreError(e, "Invalid")) throw e; return { action: "block", questions: [e.message] }; }
   }
 
   /** Content and policy validation of one validation-plan artifact (no approval or planning-revision binding). */
@@ -352,7 +414,8 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
           }
           const contract = await this.plan(workItem, kind === "candidate");
           const fingerprint = kind === "plan" ? contract.fingerprint : (await this.candidate(workItem, contract)).fingerprint;
-          return { action: "await-approval", verification: { kind, fingerprint, planFingerprint: contract.fingerprint },
+          return { action: "await-approval", verification: { kind, fingerprint, planFingerprint: contract.fingerprint,
+            ...(kind === "plan" ? { content: (await this.content(workItem, contract)).content } : {}) },
             ...(kind === "plan" && planGaps(contract).length ? { criteria: gapCriterion(planGaps(contract)) } : {}) };
         } catch (e) {
           if (!isStoreError(e, "Invalid")) throw e;
@@ -374,6 +437,12 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       : binding.kind === "candidate" ? (await this.candidate(item, contract)).fingerprint
       : (await this.evidence(item, contract)).fingerprint;
     if (binding.fingerprint !== fingerprint || binding.planFingerprint !== contract.fingerprint) return invalid("review is stale; plan, policy, environment or candidate changed");
+    if (binding.rebinds) {
+      const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
+      const policy = verificationPolicy(await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item)));
+      if (binding.kind !== "plan" || !approvedBinding(approvals, item, "plan", binding.rebinds, policy.reviewStage)) return invalid("the plan approval this re-confirmation carries forward is no longer approved");
+      return;
+    }
     if (binding.kind === "plan" && await this.d.planReview?.requestsChanges(item) && (comment?.trim().length ?? 0) < 10) {
       return invalid("The AI plan review still requests changes. Approve with a reason (at least 10 characters) explaining why you accept the plan anyway, or request a revision.");
     }
@@ -515,6 +584,17 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         agentRunRef: { name: ctx.run.metadata.name }, agentRequestId: input.requestId, agentRunUid: ctx.run.metadata.uid } });
   }
 
+  async recover(item: WorkItem): Promise<GateDecision | undefined> {
+    if (!item.spec.workflowRef) return undefined;
+    const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+    if (!wf.verification) return undefined;
+    try {
+      const contract = await this.plan(item, true);
+      const permission = await this.beforeStage(item, wf.stage(contract.policy.verifyStage)!);
+      return permission.action === "goto" || permission.action === "wait" ? permission : undefined;
+    } catch (e) { if (!isStoreError(e, "Invalid")) throw e; return undefined; }
+  }
+
   async check(item: WorkItem) {
     if (!item.spec.workflowRef || !(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).verification) return undefined;
     try {
@@ -522,6 +602,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const wf = await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item));
       const permission = await this.beforeStage(item, wf.stage(contract.policy.verifyStage)!);
       if (permission.action === "block") return permission.questions.join("; ");
+      if (permission.action === "goto") return `the candidate changed after review and verification; it must go through ${permission.stage} again`;
       if (permission.action !== "advance") return "verification prerequisites are not satisfied";
       const state = await this.evidence(item, contract);
       if (state.pending) return "verification checks are still running";

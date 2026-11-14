@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
 import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
-import { ANONYMOUS, type PreparedWorkspace } from "./ports/index.ts";
+import { ANONYMOUS, type BaseConflictDetector, type PreparedWorkspace, type WorkspaceIntegrator } from "./ports/index.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function setup(buildResults: number[]) {
+function setup(buildResults: number[], baseSync: BaseConflictDetector & WorkspaceIntegrator = movingBase(0)) {
   const commands: string[] = [];
   let builds = 0;
   const sandbox = new InMemorySandboxEnvironment({
@@ -44,6 +44,7 @@ function setup(buildResults: number[]) {
         sandboxes: [sandbox],
         workspaceBackend: backend,
         checkPollMs: 20,
+        baseSync,
         publisher: { publish: async (ws) => (published.push(ws.metadata.name), { branch: ws.spec.branch, commit: "head456", pushed: true }) },
         codeHosts: [
           {
@@ -111,6 +112,105 @@ test("S5c: checks that keep failing exhaust maxAttempts and fail the item with t
     assert.match(d.workItem.status!.message!, /checks failed after 3 attempt\(s\)/);
     assert.match(d.workItem.status!.message!, /exit 2/);
     assert.equal(s.prs.length, 0, "no PR for a failed item");
+  } finally {
+    await f.stop();
+  }
+});
+
+/** ADR-0053 fake: the base moved and conflicts until `conflictingDetections` are used up. */
+function movingBase(conflictingDetections: number) {
+  const integrated: string[] = [];
+  let detections = 0;
+  return {
+    integrated,
+    detect: async () => (detections++ < conflictingDetections
+      ? { baseCommit: `main${detections}`.padEnd(40, "0"), conflicts: ["web/src/app/page.tsx"] }
+      : { baseCommit: "main-final".padEnd(40, "0"), conflicts: [] }),
+    integrate: async (_ws: unknown, _repo: unknown, commit: string) => (integrated.push(commit), { baseCommit: commit, headCommit: "merged", conflicts: ["web/src/app/page.tsx"] }),
+  };
+}
+
+test("ADR-0053: a publisher without base-conflict detection is rejected, whatever the runtime", async () => {
+  await assert.rejects(
+    createFactory({
+      definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "in-memory" }, log: () => {},
+      publisher: { publish: async (ws) => ({ branch: ws.spec.branch, commit: "head456", pushed: true }) },
+    }),
+    /base-conflict detection/,
+  );
+});
+
+test("ADR-0053: a PR that conflicts with the moved base is not opened; the base is merged and the developer resolves first", async () => {
+  const base = movingBase(1);
+  const s = setup([0], base);
+  const f = await s.make();
+  await f.start();
+  try {
+    const wi = await f.app.createWorkItem(p, { title: "Parallel work", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const d = await drive(f, wi.metadata.name, (x) => x.outbox.some((m) => m.status?.result?.url));
+    const prs = d.outbox.filter((m) => m.spec.action === "open-pull-request");
+    assert.equal(prs[0].status?.result?.conflict, true, "the first attempt reported the conflict instead of publishing");
+    assert.equal(s.prs.length, 1, "only the resolved candidate was opened as a PR");
+    assert.deepEqual(base.integrated, ["main1".padEnd(40, "0")]);
+    assert.equal(d.workspaces[0].spec.integrate?.ref, "main");
+    assert.equal(d.workspaces[0].status?.baseCommit, "main1".padEnd(40, "0"), "the workspace is re-pinned to the merged base");
+    assert.equal(d.workItem.status?.retries?.["base-conflict"], 1);
+    assert.ok(d.events.some((e) => e.spec.reason === "BaseConflict" && /page\.tsx/.test(e.spec.message)));
+    const conflictRound = prs[0].metadata.name.match(/-ship-r(\d+)-pr-/)![1];
+    assert.ok(!d.runs.some((r) => r.metadata.name.endsWith(`-ship-0-r${conflictRound}`)), "the release agent never ran on the conflicting candidate");
+    const codeRuns = d.runs.filter((r) => r.spec.step === "write-code");
+    assert.ok(codeRuns.length >= 2, "implement ran again to resolve the conflict");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("ADR-0053: conflicts that keep coming back exhaust the budget and ask a human, never publishing", async () => {
+  const s = setup([0], movingBase(99));
+  const f = await s.make();
+  await f.start();
+  try {
+    const wi = await f.app.createWorkItem(p, { title: "Busy main", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "Blocked" && x.workItem.status.stage === "ship");
+    assert.equal(d.workItem.status?.retries?.["base-conflict"], 2);
+    const c = d.clarifications.find((x) => x.metadata.name === d.workItem.status?.blockedBy?.name)!;
+    assert.deepEqual(c.spec.askedBy, { gate: "base-conflict" });
+    assert.match(c.spec.details ?? "", /page\.tsx/);
+    assert.equal(s.prs.length, 0);
+    assert.equal(s.published.length, 0, "nothing was pushed");
+  } finally {
+    await f.stop();
+  }
+});
+
+test("ADR-0054: updating a published PR whose base moved on merges the base, resolves and re-publishes to the same branch", async () => {
+  const base = movingBase(0);
+  let conflicting = 0;
+  const detect = base.detect;
+  base.detect = async () => (conflicting-- > 0 ? { baseCommit: "main2".padEnd(40, "0"), conflicts: ["web/src/app/page.tsx"] } : detect());
+  const s = setup([0], base);
+  const f = await s.make();
+  await f.start();
+  try {
+    const wi = await f.app.createWorkItem(p, { title: "Published then stale", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    await assert.rejects(f.app.updatePullRequest(p, wi.metadata.name), /has not reached ship/);
+    let d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "AwaitingApproval" && x.workItem.status.stage === "ship");
+    await f.app.decideApproval(p, d.workItem.status!.blockedBy!.name, "approve");
+    d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "Done");
+
+    conflicting = 2; // other work landed on main after publication
+    const [status] = await f.app.publishedPullRequests(p, wi.metadata.name);
+    assert.deepEqual([status.number, status.base, status.conflicts], [1, "main", ["web/src/app/page.tsx"]]);
+
+    await f.app.updatePullRequest(p, wi.metadata.name);
+    d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.stage === "ship" &&
+      x.outbox.filter((m) => m.spec.action === "open-pull-request" && m.status?.result?.url).length === 2);
+    assert.deepEqual(base.integrated, ["main2".padEnd(40, "0")], "the moved base was merged into the workspace");
+    assert.ok(d.events.some((e) => e.spec.reason === "BaseConflict"));
+    assert.equal(s.prs.length, 2);
+    assert.equal(s.prs[1].head, s.prs[0].head, "the existing pull request branch is updated");
+    assert.ok(d.runs.filter((r) => r.spec.step === "write-code" && !r.metadata.labels?.["factory.ai-dlc.io/superseded"]).length >= 2,
+      "the developer resolved the conflict without restarting planning");
   } finally {
     await f.stop();
   }

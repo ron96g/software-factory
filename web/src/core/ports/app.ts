@@ -94,6 +94,26 @@ export interface WorkItemCommands {
   updateWorkItemContext(p: Principal, name: string, context: string): Promise<WorkItem>;
 }
 
+/** A pull request the factory published for an item, compared with the current remote base (ADR-0054). */
+export interface PublishedPullRequest {
+  workspace: string;
+  repository: string;
+  url: string;
+  number: number;
+  base: string;
+  /** Files that no longer merge cleanly into the base; empty when up to date or mergeable. */
+  conflicts: string[];
+  /** The comparison failed (e.g. workspace gone, remote unreachable). */
+  error?: string;
+}
+
+/** ADR-0054: keep already published pull requests mergeable when the base branch moves on. */
+export interface PullRequestMaintenance {
+  publishedPullRequests(p: Principal, name: string): Promise<PublishedPullRequest[]>;
+  /** Re-publishes from the workflow's publish stage; base conflicts route through ADR-0053 resolution. */
+  updatePullRequest(p: Principal, name: string): Promise<WorkItem>;
+}
+
 export type EvidenceSeverity = "ok" | "warning" | "blocking";
 
 export interface EvidenceItem {

@@ -1,6 +1,6 @@
 import type { Artifact, Repository, WorkItem, Workspace } from "../model/kinds.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
-import type { BranchPublisher, CodeHost, OutboxHandler, ResourceReader } from "../ports/index.ts";
+import type { BaseConflictDetector, BranchPublisher, CodeHost, OutboxHandler, ResourceReader } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 
 const section = (title: string, body?: string, max = 2500) => (body ? `### ${title}\n\n${body.length > max ? `${body.slice(0, max)}\n…` : body}\n` : "");
@@ -8,8 +8,10 @@ const section = (title: string, body?: string, max = 2500) => (body ? `### ${tit
 /**
  * Outbox action "open-pull-request" (ADR-0023): commit + push the workspace branch, then open/reuse a draft PR.
  * Idempotent: re-delivery finds the pushed branch and the existing PR.
+ * ADR-0053: a candidate that does not merge cleanly into the current base is neither pushed nor opened; the
+ * delivered result `{ conflict: true, … }` lets the WorkItem controller recover.
  */
-export function pullRequestHandler(d: { reader: ResourceReader; publisher: BranchPublisher; codeHosts: CodeHost[] }): OutboxHandler {
+export function pullRequestHandler(d: { reader: ResourceReader; publisher: BranchPublisher; codeHosts: CodeHost[]; conflicts: BaseConflictDetector }): OutboxHandler {
   return {
     action: "open-pull-request",
     async deliver({ payload }) {
@@ -25,6 +27,10 @@ export function pullRequestHandler(d: { reader: ResourceReader; publisher: Branc
       const latest = (type: string) =>
         arts.filter((a) => a.spec.artifactTypeRef.name === type && !a.metadata.labels?.["factory.ai-dlc.io/replay"]).at(-1)?.spec.content;
 
+      const base = repo.spec.git?.defaultBranch ?? "main";
+      const report = await d.conflicts.detect(ws, repo, base);
+      if (report.conflicts.length) return { conflict: true, base, baseCommit: report.baseCommit, files: report.conflicts };
+
       const title = String(payload.title ?? wi?.spec.title ?? ws.spec.workItemRef.name);
       const pushed = await d.publisher.publish(ws, repo, `${title}\n\nWork item: ${ws.spec.workItemRef.name}`);
       const body = [
@@ -39,7 +45,7 @@ export function pullRequestHandler(d: { reader: ResourceReader; publisher: Branc
       ].join("\n");
       const pr = await host.openPullRequest(repo, {
         head: pushed.branch,
-        base: repo.spec.git?.defaultBranch ?? "main",
+        base,
         title,
         body,
         draft: payload.draft !== false,

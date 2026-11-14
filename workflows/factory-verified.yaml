@@ -121,7 +121,7 @@ spec:
     - name: operations
       stages:
         - name: ship
-          publish: { pullRequest: { draft: true } }
+          publish: { pullRequest: { draft: true, onConflict: { next: implement, maxAttempts: 2 } } }   # ADR-0053
           steps:
             - name: release
               agentRef: { name: release-manager }

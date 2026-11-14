@@ -100,6 +100,9 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **secretRef** | A reference to a secret by name. The value is resolved at runtime and never stored (ADR-0015). |
 | **Execution environment / Sandbox** | An isolated place where agents may run commands and write code. Provided by a runtime adapter (podman, docker, kubernetes, remote, or `none`) (ADR-0019). |
 | **Workspace** | The per-item, per-repository copy of the code (host: Git worktree on `factory/<item>`) with a pinned base commit and setup. It is the single code state all agents of an item see (ADR-0021). |
+| **Base conflict** | The item's candidate no longer merges cleanly into the current remote base branch because parallel work landed there. Detected before a PR is published; the base is merged into the workspace and the conflict is resolved and reviewed again (ADR-0053). |
+| **Plan re-confirmation** | A human Approval that carries an approved plan forward after only workflow or repository definitions changed (specification and validation plan unchanged). Existing evidence stays valid; rejecting returns to planning (ADR-0054). |
+| **Update pull request** | Re-publishing an item from its publish stage so a published PR whose base moved on is merged, resolved, reviewed and pushed to the same branch again (ADR-0054). |
 | **Tool loop** | The agent loop in which the LLM calls tools (read/write files, run commands) inside a sandbox until it calls `finish`. Every turn, call and result is recorded. |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
 | **Gate evidence** | What a human sees at a gate: structured verdicts (e.g. verifier pass/partial/fail), check results, open questions. Graded ok/warning/blocking (ADR-0027). |
