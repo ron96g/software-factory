@@ -6,7 +6,9 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\"",
+    "test:integration": "node scripts/check-integration.mjs",
+    "test:acceptance": "node scripts/check-acceptance.mjs"
   },
   "type": "module",
   "dependencies": {

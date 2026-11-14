@@ -1,0 +1,327 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Agent
+    plural: agents
+    singular: agent
+    listKind: AgentList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                body:
+                  type: string
+                  description: Markdown body (prompt text)
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: skills.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Skill
+    plural: skills
+    singular: skill
+    listKind: SkillList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                body:
+                  type: string
+                  description: Markdown body (prompt text)
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workflows.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Workflow
+    plural: workflows
+    singular: workflow
+    listKind: WorkflowList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: artifacttypes.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ArtifactType
+    plural: artifacttypes
+    singular: artifacttype
+    listKind: ArtifactTypeList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sources.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Source
+    plural: sources
+    singular: source
+    listKind: SourceList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: repositories.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Repository
+    plural: repositories
+    singular: repository
+    listKind: RepositoryList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: knowledgesources.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: KnowledgeSource
+    plural: knowledgesources
+    singular: knowledgesource
+    listKind: KnowledgeSourceList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: toolservers.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ToolServer
+    plural: toolservers
+    singular: toolserver
+    listKind: ToolServerList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelproviders.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ModelProvider
+    plural: modelproviders
+    singular: modelprovider
+    listKind: ModelProviderList
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: software-factory
+rules:
+  - apiGroups:
+      - factory.ai-dlc.io
+    resources:
+      - agents
+      - skills
+      - workflows
+      - artifacttypes
+      - sources
+      - repositories
+      - knowledgesources
+      - toolservers
+      - modelproviders
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - factory.ai-dlc.io
+    resources:
+      - agents/status
+      - skills/status
+      - workflows/status
+      - artifacttypes/status
+      - sources/status
+      - repositories/status
+      - knowledgesources/status
+      - toolservers/status
+      - modelproviders/status
+    verbs:
+      - update
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
