@@ -18,6 +18,8 @@ export interface ValidationPlan {
   criteria: { id: string; description: string; checks: string[] }[];
   checks: string[];
   preflight: string[];
+  /** ADR-0047: approved Unit manifest, required when the workflow enables unit execution. */
+  units?: import("../model/units.ts").PlannedUnit[];
 }
 
 export interface ValidationContract {
@@ -27,6 +29,7 @@ export interface ValidationContract {
   workflowVersions: Record<string, string>;
   repositories: Repository[];
   policy: NonNullable<Workflow["spec"]["verification"]>;
+  unitPolicy?: NonNullable<Workflow["spec"]["unitExecution"]>;
 }
 
 export interface VerificationContracts {
@@ -55,6 +58,8 @@ export interface AgentCheckRequests {
 }
 
 export interface VerificationActions {
-  inspect(p: Principal, item: string): Promise<{ enabled: boolean; workflow?: string; publicationDisabled: boolean; plan?: ValidationPlan; error?: string }>;
+  inspect(p: Principal, item: string): Promise<{ enabled: boolean; workflow?: string; publicationDisabled: boolean; plan?: ValidationPlan; error?: string;
+    /** Checks in the plan whose repository has no configured command: they stay NotVerified (policy gaps). */
+    gaps?: import("../model/verification-policy.ts").PolicyGap[] }>;
   migrate(p: Principal, item: string, input: { workflow: string; requestId: string }): Promise<WorkItem>;
 }

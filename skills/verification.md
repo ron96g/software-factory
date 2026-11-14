@@ -18,3 +18,5 @@ spec:
    - `partial`: build and tests are green, but some criteria are only verified by inspection or are untested.
    - `fail`: a build or test fails, or an acceptance criterion is violated or clearly unmet.
    Put the verdict first in the report (e.g. `**Verdict: FAIL**`), followed by the reasons. Humans see it at the release gate.
+6. Verify; never repair. Do not edit the candidate workspace: any change invalidates the human-approved candidate and
+   sends it back through the completeness barrier and review. Report defects for the developer instead.

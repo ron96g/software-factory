@@ -1,4 +1,4 @@
-import type { AgentRun, Approval, Artifact, CheckRun, Clarification, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
+import type { AgentRun, Approval, Artifact, CheckRun, Clarification, ClarificationSpec, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
@@ -22,6 +22,13 @@ import {
   type StageEntryPolicy,
   type StageResumptionPolicy,
   type VerificationPublicationGuard,
+  type AgentQuestionPolicy,
+  type WorkItemIntentPolicy,
+  type StepAssignmentPolicy,
+  type RunFailurePolicy,
+  type ArtifactCheck,
+  type Lookup,
+  OUTPUT_REJECTED,
 } from "../../ports/index.ts";
 import { routeToDecision } from "../../model/routes.ts";
 import { resolveRef } from "../../refs/refs.ts";
@@ -43,7 +50,18 @@ export interface WorkItemControllerDeps {
   stagePolicy?: StageEntryPolicy;
   resumptionPolicy?: StageResumptionPolicy;
   publicationGuard?: VerificationPublicationGuard;
+  questionPolicy?: AgentQuestionPolicy;
+  intentPolicy?: WorkItemIntentPolicy;
+  /** ADR-0047: binds an implementation attempt to the next approved Unit. */
+  assignments?: StepAssignmentPolicy;
+  /** ADR-0047: bounded recovery of failed (e.g. interrupted) runs instead of failing the item. */
+  runFailures?: RunFailurePolicy;
+  /** ADR-0049: artifact type → structure check, run when the producing step succeeds. */
+  artifactChecks?: Lookup<ArtifactCheck>;
 }
+
+/** Bounded same-step retries for malformed output before the existing gate handling takes over. */
+const MAX_OUTPUT_RETRIES = 2;
 
 export const runName = (wi: WorkItem, stage: string, step: number, round: number) =>
   `${wi.metadata.name}-${stage}-${step}-r${round}`;
@@ -64,7 +82,8 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       status.conditions,
       "Blocked",
       status.phase === "Blocked" || status.phase === "AwaitingApproval" ? "True" : "False",
-      status.phase === "Blocked" ? "AwaitingClarification" : status.phase === "AwaitingApproval" ? "AwaitingApproval" : "NotBlocked",
+      status.phase === "Blocked" ? status.blockedBy ? "AwaitingClarification" : "HumanAttentionRequired"
+        : status.phase === "AwaitingApproval" ? "AwaitingApproval" : "NotBlocked",
       undefined,
       d.clock.now(),
     );
@@ -168,14 +187,15 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     return list.every((w) => w.status?.phase === "Ready") ? "ready" : "waiting";
   }
 
-  async function block(wi: WorkItem, stage: CompiledStage, questions: string[]) {
+  async function block(wi: WorkItem, stage: CompiledStage, questions: string[], askedBy: ClarificationSpec["askedBy"], details?: string) {
     const st = wi.status!;
     const name = `${wi.metadata.name}-${stage.name}-r${st.round}`;
     const c: Clarification = {
       apiVersion: API_VERSION,
       kind: "Clarification",
       metadata: { name, namespace: nsOf(wi), ownerReferences: [ownerRef(wi)] },
-      spec: { workItemRef: { name: wi.metadata.name }, stage: stage.name, questions: questions.length ? questions : [DEFAULT_QUESTION] },
+      spec: { workItemRef: { name: wi.metadata.name }, stage: stage.name, questions: questions.length ? questions : [DEFAULT_QUESTION], askedBy,
+        ...(details?.trim() ? { details } : {}) },
       status: { phase: "Open" },
     };
     await createChild(c);
@@ -203,7 +223,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       case "end":
         return write(wi, { phase: decision.phase, message: decision.reason, blockedBy: undefined }, decision.phase, decision.reason);
       case "block":
-        return block(wi, stage, decision.questions);
+        return block(wi, stage, decision.questions, { gate: stage.gate?.type ?? stage.name }, decision.details);
+      case "attention":
+        return write(wi, { phase: "Blocked", blockedBy: undefined, message: decision.reason }, "PlanningNeedsAttention", decision.reason);
       case "fail":
         await d.events.warning(wi, "GateFailed", decision.reason);
         return write(wi, { phase: "Failed", message: decision.reason });
@@ -224,7 +246,8 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                 `Waiver requested for: ${decision.verification.requirements?.join(", ")}. These requirements remain Waived, never Passed.`,
                 "Approval requires an explicit reason of at least 10 characters; rejection keeps verification blocked.",
               ] : []),
-            ] : stage.gate?.criteria,
+              ...(decision.criteria ?? []),
+            ] : decision.criteria ? [...(stage.gate?.criteria ?? []), ...decision.criteria] : stage.gate?.criteria,
             ticketPublication: decision.ticketPublication,
             verification: decision.verification,
             retrospective: decision.retrospective,
@@ -232,7 +255,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           status: { phase: "Pending" },
         };
         await createChild(a);
-        return write(wi, { phase: "AwaitingApproval", blockedBy: { kind: "Approval", name } }, "AwaitingApproval", `${stage.name}: waiting for approval`);
+        return write(wi, { phase: "AwaitingApproval", blockedBy: { kind: "Approval", name }, message: undefined }, "AwaitingApproval", `${stage.name}: waiting for approval`);
       }
     }
   }
@@ -298,6 +321,12 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         }
         if (!wi.spec.workflowRef) return write(wi, { phase: "Failed", message: "no workflowRef" }, "Failed", "no workflowRef");
         const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
+        const intent = await d.intentPolicy?.intent(wi);
+        if (intent) {
+          if (wi.status?.phase === intent.phase && !restartPending(wi)) return;
+          return write(wi, { phase: intent.phase, blockedBy: undefined, message: intent.reason,
+            restartHandled: wi.spec.restart?.id }, "Closed", intent.reason);
+        }
         if (restartPending(wi)) return restartItem(wi, wf, wi.spec.restart!);
 
         if (!wi.status?.phase || wi.status.phase === "New") {
@@ -309,6 +338,16 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         const stage = wf.stage(st.stage ?? "");
         if (!stage) return write(wi, { phase: "Failed", message: `unknown stage ${st.stage}` });
 
+        if (st.phase === "Blocked" && !st.blockedBy) {
+          // Attention at a gate (e.g. malformed plan evidence) is level-triggered: re-check it on resync so a fixed
+          // cause resumes. Gates only ever create human approvals or new stops; this never approves anything.
+          const gate = (st.step ?? 0) >= stage.steps.length && stage.gate ? d.gates.get(stage.gate.type) : undefined;
+          if (!gate) return;
+          const decision = await gate.evaluate({ workItem: wi, stage, gate: stage.gate! });
+          if (decision.action === "attention" && decision.reason === st.message) return;
+          if (decision.action === "wait") return { requeueAfterMs: decision.retryAfterMs };
+          return apply(wi, wf, stage, decision);
+        }
         if (st.phase === "Blocked") {
           const c = await d.reader.get<Clarification>("Clarification", namespace, st.blockedBy?.name ?? "");
           if (c && !c.spec.answers?.length) {
@@ -344,7 +383,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return;
           }
           const reason = await d.publicationGuard?.check(wi);
-          if (reason) return block(wi, stage, [reason]);
+          if (reason) return block(wi, stage, [reason], { gate: "publication" });
         }
         if (stepIdx === 0) await publishPullRequests(wi, stage); // level-triggered; enqueue is idempotent
         if (stepIdx < stage.steps.length) {
@@ -358,6 +397,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             if (ws === "waiting") return; // re-triggered by the Workspace watch
             if (ws !== "ready") return write(wi, { phase: "Failed", message: ws }, "Failed", ws);
             const last = stepIdx === stage.steps.length - 1;
+            const assignment = await d.assignments?.assign(wi, stage, stepIdx);
             await createChild({
               apiVersion: API_VERSION,
               kind: "AgentRun",
@@ -392,6 +432,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                     : stage.loop
                       ? ["approve", stage.loop.when.outcome]
                       : undefined,
+                ...(assignment ? { assignment } : {}),
               },
             });
             return;
@@ -400,6 +441,11 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             | { phase?: string; result?: { outcome?: string; questions?: string[]; classification?: WorkItemStatus["classification"] }; message?: string; modelWaits?: number }
             | undefined;
           if (rs?.phase === "Failed") {
+            const recovery = await d.runFailures?.recover(wi, stage, run as AgentRun);
+            if (recovery) {
+              await d.events.warning(wi, "AgentRunInterrupted", `${rn}: ${rs.message ?? ""}`);
+              return apply(wi, wf, stage, recovery);
+            }
             await d.events.warning(wi, "AgentRunFailed", `${rn}: ${rs.message ?? ""}`);
             return write(wi, { phase: "Failed", message: `agent run ${rn} failed: ${rs.message ?? ""}` });
           }
@@ -414,15 +460,29 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             if (!reason && !retrying && st.phase === "Waiting") return write(wi, { phase: "Running", message: undefined });
             return;
           }
+          const problems: string[] = [];
+          for (const ref of (run as AgentRun).status?.outputs ?? []) {
+            const artifact = await d.reader.get<Artifact>("Artifact", namespace, ref.name);
+            const check = artifact && d.artifactChecks?.get(artifact.spec.artifactTypeRef.name);
+            const problem = check && await check.check(wi, artifact);
+            if (problem) problems.push(`${artifact.spec.artifactTypeRef.name}: ${problem}`);
+          }
+          const outputKey = `output:${stage.name}/${step.name}`;
+          if (problems.length && (st.retries?.[outputKey] ?? 0) < MAX_OUTPUT_RETRIES) {
+            // Only this step reruns (new round); its next attempt sees the exact problem in its context.
+            await d.events.warning(wi, OUTPUT_REJECTED, `${stage.name}/${step.name} r${st.round}: ${problems.join("; ")}`);
+            return write(wi, { round: st.round! + 1, step: stepIdx, retries: { ...st.retries, [outputKey]: (st.retries?.[outputKey] ?? 0) + 1 },
+              ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
+          }
           const r = rs.result ?? {};
           const patch: Partial<WorkItemStatus> = {
             classification: r.classification ? { ...st.classification, ...r.classification } : st.classification,
             lastOutcome: r.outcome ?? st.lastOutcome,
           };
-          if (r.questions?.length) {
+          if (r.questions?.length && !await d.questionPolicy?.deferQuestions(wi, stage)) {
             await write(wi, { ...patch, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
             const fresh = (await d.reader.get<WorkItem>("WorkItem", namespace, name))!;
-            return block(fresh, stage, r.questions);
+            return block(fresh, stage, r.questions, { agentRunRef: { name: rn } });
           }
           return write(wi, { ...patch, step: stepIdx + 1, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
         }

@@ -21,6 +21,8 @@ export interface ExecOptions {
   timeoutMs?: number;
   /** Relative to the workspace root. */
   cwd?: string;
+  /** Per-stream capture limit; output beyond it is reported as truncated. Adapters default to a small cap. */
+  maxOutputBytes?: number;
 }
 
 export interface ExecResult {

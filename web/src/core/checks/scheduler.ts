@@ -6,6 +6,7 @@ import { nsOf, ownerRef } from "../model/meta.ts";
 import { SandboxUnavailableError, StoreError, isStoreError, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validUnitFields } from "./origin.ts";
 
 type Request = Parameters<CheckRunScheduler["submit"]>[0];
 
@@ -24,13 +25,12 @@ const stoppedRestart = (item: WorkItem) => item.spec.restart && item.spec.restar
 function normalizeWorkflow(value: CheckWorkflowOrigin): CheckWorkflowOrigin {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new StoreError("workflow origin is invalid", "Invalid");
   const keys = Object.keys(value).sort();
-  const allowed = new Set(["agentRequestId", "agentRunRef", "agentRunUid", "attempt", "planFingerprint", "purpose", "round", "stage"]);
-  if (keys.some((key) => !allowed.has(key))) {
+  if (keys.some((key) => !ORIGIN_KEYS.has(key))) {
     throw new StoreError("workflow origin contains unexpected fields", "Invalid");
   }
   if (typeof value.stage !== "string" || !value.stage.trim() || value.stage.length > 200 ||
       !Number.isSafeInteger(value.round) || value.round < 0 ||
-      !["preflight", "preparation", "verification"].includes(value.purpose) ||
+      !ORIGIN_PURPOSES.includes(value.purpose) ||
       typeof value.planFingerprint !== "string" || !value.planFingerprint.trim() || value.planFingerprint.length > 256 ||
       !Number.isSafeInteger(value.attempt) || value.attempt < 1) {
     throw new StoreError("workflow origin is incomplete or malformed", "Invalid");
@@ -54,16 +54,10 @@ function normalizeWorkflow(value: CheckWorkflowOrigin): CheckWorkflowOrigin {
         (typeof value.agentRunRef.namespace !== "string" || !value.agentRunRef.namespace.trim()))) {
     throw new StoreError("workflow agentRunRef is malformed", "Invalid");
   }
+  if (!validUnitFields(value)) throw new StoreError("unit readiness origin needs a Unit and its implementation run, and no agent caller", "Invalid");
   return structuredClone(value);
 }
 
-function stageIsAuthorized(workflow: Workflow | null, origin: CheckWorkflowOrigin): boolean {
-  const policy = workflow?.spec.verification;
-  if (!policy) return false;
-  return origin.purpose === "preflight"
-    ? policy.preflightStage === origin.stage
-    : origin.purpose === "preparation" ? policy.preparationStage === origin.stage : policy.verifyStage === origin.stage;
-}
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
   const ns = nsOf(item);
@@ -119,7 +113,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       const workflow = item.spec.workflowRef
         ? await resolveRef<Workflow>(this.d.reader, "Workflow", item.spec.workflowRef, namespace)
         : null;
-      if (!stageIsAuthorized(workflow, origin)) throw new StoreError("workflow check origin is not authorized by the current verification policy", "Invalid");
+      if (!originAuthorized(workflow, origin)) throw new StoreError("workflow check origin is not authorized by the current verification policy", "Invalid");
 
       const existing = await this.d.reader.get<CheckRun>("CheckRun", namespace, name);
       if (existing) {
@@ -143,10 +137,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
         throw new StoreError("repository changed or does not match the workspace", "Conflict");
       }
       if (!repository.metadata.resourceVersion) throw new StoreError("repository has no resourceVersion", "Invalid");
-      const policyChecks = origin.purpose === "preflight"
-        ? repository.spec.verification?.preflightChecks
-        : origin.purpose === "preparation" ? repository.spec.verification?.preparationChecks
-        : Object.keys(repository.spec.checks ?? {});
+      const policyChecks = originChecks(repository, origin);
       if (!policyChecks?.includes(request.check)) {
         throw new StoreError(`check "${request.check}" is not authorized for ${origin.purpose}`, "Invalid");
       }

@@ -9,6 +9,9 @@ spec:
 
 # Code Review
 
+0. **Scope:** review the whole candidate against the complete approved plan and every Unit, not only the latest
+   change or fix. Missing approved behavior is a blocking finding, even when checks pass and even if the latest
+   slice is well done. Readiness checks are construction evidence, not proof of correctness.
 1. **Correctness:** does the change implement the spec, and handle edge cases and errors?
 2. **Design:** does it fit the domain model? Look for unnecessary complexity.
 3. **Security:** check inputs, secrets, authz, and dependencies.

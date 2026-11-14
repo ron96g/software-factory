@@ -6,7 +6,9 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\"",
+    "test:integration": "node --test src/core/factory.test.ts src/core/planning-factory.test.ts src/core/checks-pr.test.ts src/core/v02.test.ts",
+    "test:acceptance": "ls src/acceptance/*.acceptance.test.ts >/dev/null && node --test \"src/acceptance/*.acceptance.test.ts\""
   },
   "type": "module",
   "dependencies": {

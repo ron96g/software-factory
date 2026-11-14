@@ -111,9 +111,31 @@ def main():
                 if a not in agents:
                     errors.append(f"{path}: agentModels: unknown agent '{a}'")
 
+    # Verification policy gaps: checks policy relies on without a configured command can never pass
+    # (same rule as web/src/core/model/verification-policy.ts). Waivable required gaps are warnings.
+    warnings = []
+    for path, doc in docs:
+        if doc.get("kind") != "Repository":
+            continue
+        spec = doc.get("spec", {})
+        policy = spec.get("verification") or {}
+        commands = spec.get("checks") or {}
+        name = doc["metadata"]["name"]
+        for role in ("requiredChecks", "preflightChecks", "preparationChecks", "readinessChecks"):
+            for check in policy.get(role) or []:
+                if check in commands:
+                    continue
+                message = f"{path}: {name}/{check} ({role}) has no configured command and can never pass"
+                if role == "requiredChecks" and check in (policy.get("waivableChecks") or []):
+                    warnings.append(message + "; every item needs a waiver until it is configured")
+                else:
+                    errors.append(message)
+
+    for w in warnings:
+        print("WARNING", w)
     for e in errors:
         print("ERROR", e)
-    print(f"{len(index)} resources, {len(errors)} errors")
+    print(f"{len(index)} resources, {len(errors)} errors, {len(warnings)} warnings")
     sys.exit(1 if errors else 0)
 
 

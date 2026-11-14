@@ -96,6 +96,7 @@ export interface StageSpec {
 }
 
 export interface WorkflowSpec {
+  planning?: { revisionStage: string; synthesisStage: string; reviewStage: string };
   verification?: {
     planningStage: string;
     reviewStage: string;
@@ -108,6 +109,11 @@ export interface WorkflowSpec {
     maxExecutionAttempts: number;
     retryDelayMs: number;
   };
+  /**
+   * ADR-0047: implement approved Units one at a time and require current readiness evidence for every Unit before
+   * `barrierStage` (the first stage after implementation) starts any review. Requires `verification`.
+   */
+  unitExecution?: { barrierStage: string; maxCodeAttempts: number; maxExecutionAttempts: number };
   timebox?: string;
   trigger?: { sourceRefs?: Ref[] };
   phases: { name: string; stages: StageSpec[] }[];
@@ -144,7 +150,9 @@ export interface RepositorySpec {
   checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string; moduleScoped?: boolean }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
   moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
-  verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[] };
+  verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[];
+    /** ADR-0047: configured checks an approved Unit manifest may require as construction-readiness evidence. */
+    readinessChecks?: string[] };
   /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
   workspace?: { baseRef?: string; setup?: string[] };
 }
@@ -226,6 +234,16 @@ export interface WorkItemSpec {
   restart?: { id: string; stage?: string; requestedBy?: string };
   /** Explicit human hold; never implicitly lifted by restarting or approving a gate. */
   publicationDisabled?: boolean;
+  planning?: {
+    revision: string;
+    discovery: string;
+    batchSubmitted?: boolean;
+    answers: Record<string, { signature: string; question: string; answer: string }>;
+    draft?: import("./planning.ts").PlanningSections;
+    feedback?: string;
+    disposition?: "rejected" | "deferred";
+    request: { id: string; fingerprint: string; by: string };
+  };
   retrospective?: RetrospectiveSnapshot;
   retrospectiveOutcome?: {
     disposition: "open" | "deferred" | "closed";
@@ -284,7 +302,16 @@ export interface AgentRunSpec {
   question?: string;
   /** Compiler provenance at scheduling time, never reconstructed from today's definitions. */
   workflow?: { versions: Record<string, string>; target: { namespace: string; name: string; version: string }; stage: string };
+  /** ADR-0047: the approved Unit (or cross-Unit repair) this implementation attempt is responsible for. */
+  assignment?: UnitAssignment;
 }
+
+/** ADR-0047: `CheckWorkflowOrigin.unit` of aggregate pre-review barrier jobs. */
+export const BARRIER_UNIT = "*";
+
+export type UnitAssignment =
+  | { kind: "unit"; planFingerprint: string; unit: string }
+  | { kind: "repair"; planFingerprint: string };
 
 export interface AgentRunStatus {
   phase: RunPhase;
@@ -303,6 +330,8 @@ export interface AgentRunStatus {
   modelWaits?: number;
   feedbackCandidates?: RetrospectiveFeedbackSpec[];
   feedbackWarnings?: string[];
+  /** ADR-0047: an assigned attempt found Running after a factory restart; it is never re-executed blindly. */
+  interrupted?: boolean;
 }
 export type AgentRun = Resource<AgentRunSpec, AgentRunStatus>;
 
@@ -364,9 +393,13 @@ export type CheckOutcome = "Passed" | "AssertionFailed" | "SetupFailed" | "Unkno
 export interface CheckWorkflowOrigin {
   stage: string;
   round: number;
-  purpose: "preflight" | "preparation" | "verification";
+  purpose: "preflight" | "preparation" | "verification" | "unit-readiness";
   planFingerprint: string;
   attempt: number;
+  /** ADR-0047 (`unit-readiness` only): Unit ID, or `*` for the aggregate pre-review barrier. */
+  unit?: string;
+  /** ADR-0047: the implementation AgentRun whose result this readiness job checks (absent for the barrier). */
+  unitRun?: string;
   /** Only this recorded caller may still be active while its requested check starts. */
   agentRunRef?: Ref;
   agentRequestId?: string;
@@ -521,6 +554,10 @@ export interface ClarificationSpec {
   workItemRef: Ref;
   stage: string;
   questions: string[];
+  /** Who stopped the item: the agent run that asked, or the gate that needs a human decision. */
+  askedBy?: { agentRunRef?: Ref; gate?: string };
+  /** Supporting Markdown shown beside the questions (not part of them). */
+  details?: string;
   assignee?: string;
   /** Written by a human (UI or synced from the source). */
   answers?: string[];

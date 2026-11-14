@@ -227,7 +227,8 @@ test("real sandbox preserves failed pipelines and timeout metadata; snapshot inc
     await rm(join(directory, "sub"));
     const env = new HostEnvironment();
     const health = await env.health();
-    const runner = new SandboxCheckRunner(f.store, { select: async () => ({ environment: env, health, candidates: [health] }), refresh: async () => {} });
+    // An explicit small operator limit keeps truncation observable (ADR-0047 raises the default for complete logs).
+    const runner = new SandboxCheckRunner(f.store, { select: async () => ({ environment: env, health, candidates: [health] }), refresh: async () => {} }, 65536);
     const submitted = await f.submit();
     const run: CheckRun = { ...submitted, spec: { ...submitted.spec,
       command: "false | tail -1; printf 'incorrect success'", timeoutMs: 2000,

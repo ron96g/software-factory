@@ -13,6 +13,7 @@ import {
   List,
   Menu,
   Modal,
+  Spoiler,
   Stack,
   Tabs,
   Text,
@@ -23,7 +24,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil } from "@tabler/icons-react";
 import Link from "next/link";
-import { use, useMemo, useState } from "react";
+import { use, useMemo, useState, type ReactNode } from "react";
 import type { AgentRun, Approval, Clarification, Conversation } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
 import type { GateEvidence, WorkItemDetail } from "@/core/ports/app.ts";
@@ -39,6 +40,9 @@ import { RetrospectivePanel } from "@/ui/retrospectives.tsx";
 import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
 import { CheckRunsPanel } from "@/ui/check-runs.tsx";
 import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
+import { UnitProgressPanel } from "@/ui/unit-progress.tsx";
+import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
+import PlanningWorkspace from "@/ui/planning-workspace.tsx";
 
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
@@ -47,6 +51,8 @@ const PHASE_COLOR: Record<string, string> = { inception: "indigo", construction:
 export default function ItemPage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = use(params);
   const { data: d, error } = useLive<WorkItemDetail>(`/api/workitems/${name}`, (n) => n.workItem === name || n.name === name);
+  const planning = useLive<PlanningWorkspaceData>(`/api/workitems/${encodeURIComponent(name)}/planning`, (n) =>
+    n.workItem === name || n.name === name || ["Workflow", "Repository"].includes(n.kind ?? ""));
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -57,6 +63,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   if (!d) return <Text c="dimmed">Loading…</Text>;
   const wi = d.workItem;
   const st = wi.status;
+  const planningEnabled = planning.data?.enabled === true;
+  // Once inception is over, the plan is reference material and construction progress becomes the main view.
+  const constructing = !!st?.lifecyclePhase && st.lifecyclePhase !== "inception";
   const openClar = d.clarifications.find((c) => c.metadata.name === st?.blockedBy?.name && st?.phase === "Blocked");
   const openAppr = d.approvals.find((a) => a.metadata.name === st?.blockedBy?.name && st?.phase === "AwaitingApproval");
   const run = d.runs.find((r) => r.metadata.name === openRun) ?? null;
@@ -95,8 +104,13 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)}>
             Ask about this item
           </Button>
-          <Button variant="light" leftSection={<IconRobot size={16} />} onClick={() => setChatOpen(true)}>Chat with agent</Button>
-          <Button variant="light" onClick={() => setFollowUpOpen(true)}>Create follow-up</Button>
+          <Menu position="bottom-end">
+            <Menu.Target><Button variant="default">More</Button></Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item leftSection={<IconRobot size={14} />} onClick={() => setChatOpen(true)}>Chat with agent</Menu.Item>
+              <Menu.Item onClick={() => setFollowUpOpen(true)}>Create follow-up</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
         </Group>
       </Group>
 
@@ -128,18 +142,23 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           {st.message}
         </Alert>
       )}
-      {/* Keyed by clarification: a new round's questions must start with fresh answer state. */}
+      {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
-      {openAppr && !openAppr.spec.ticketPublication && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
-      {!wi.spec.retrospective && <>
-        <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />
+      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
+      {!wi.spec.retrospective && <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />}
+      {constructing && !wi.spec.retrospective && <UnitProgressPanel key={`units-${wi.metadata.uid ?? wi.metadata.name}`} item={wi} />}
+      <PlanningWorkspace key={wi.metadata.uid ?? wi.metadata.name}
+        workspace={planning.data} error={planning.error} reload={planning.reload}
+        detail={d} onOpenRun={setOpenRun} summary={constructing} />
+
+      <OperationalDetails collapsed={planningEnabled}>
+      {!wi.spec.retrospective && <Stack mb="md">
         <VerificationContractPanel key={wi.metadata.uid ?? wi.metadata.name} item={wi} />
         <CheckRunsPanel key={`checks-${wi.metadata.name}`} item={wi} />
-      </>}
-
+      </Stack>}
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
-          <ContextCard d={d} />
+          {!planningEnabled && <ContextCard d={d} />}
           <Card className="sf-surface">
             <Tabs defaultValue="artifacts">
               <Tabs.List>
@@ -248,6 +267,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           <EventTimeline events={d.events} />
         </Grid.Col>
       </Grid>
+      </OperationalDetails>
 
       <Drawer opened={askOpen} onClose={() => setAskOpen(false)} position="right" size="xl" title={<Text fw={600}>Ask about this work item</Text>}>
         <ChatPanel
@@ -269,6 +289,16 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       />
     </Stack>
   );
+}
+
+function OperationalDetails({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return children;
+  return <Accordion variant="contained">
+    <Accordion.Item value="details">
+      <Accordion.Control>Details: verification, checks, artifacts, agent runs, history</Accordion.Control>
+      <Accordion.Panel>{children}</Accordion.Panel>
+    </Accordion.Item>
+  </Accordion>;
 }
 
 /** ADR-0032: human-provided context every agent sees. Editing doesn't re-run finished steps (Restart does). */
@@ -419,8 +449,12 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
   const [skipped, setSkipped] = useState<boolean[]>(c.spec.questions.map(() => false));
   const [busy, setBusy] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
-  // The run that asked: latest run in this stage whose result carries these questions.
-  const asker = [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && r.status?.result?.questions?.length);
+  // Older clarifications have no askedBy: only a run whose questions are exactly these asked them; anything else is a factory stop.
+  const asker = c.spec.askedBy?.agentRunRef
+    ? d.runs.find((r) => r.metadata.name === c.spec.askedBy!.agentRunRef!.name)
+    : c.spec.askedBy?.gate ? undefined
+    : [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && r.status?.result?.questions?.join("\n") === c.spec.questions.join("\n"));
+  const gate = !asker ? c.spec.askedBy?.gate : undefined;
   const done = c.spec.questions.filter((_, i) => skipped[i] || answers[i]?.trim()).length;
   const anyAnswer = answers.some((a, i) => !skipped[i] && a?.trim());
   // Sendable once every question is handled (answered or explicitly "Don't know"), or at least one is answered.
@@ -437,23 +471,30 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
             </ThemeIcon>
             <div>
               <Text fw={600}>
-                {asker?.spec.agentRef.name ?? "The agent"} needs your input
+                {asker ? `${asker.spec.agentRef.name} asks` : "The factory needs your decision"}
                 <Text span c="dimmed" fw={400}>
                   {" "}
                   · {c.spec.questions.length} question{c.spec.questions.length === 1 ? "" : "s"} in {c.spec.stage}
+                  {gate ? ` (${gate} gate)` : ""}
                 </Text>
               </Text>
-              {asker?.status?.result?.summary && (
-                <Text size="sm" c="dimmed" lineClamp={2}>
-                  {asker.status.result.summary}
-                </Text>
-              )}
             </div>
           </Group>
           <Badge variant="light" color={done === c.spec.questions.length ? "teal" : "orange"} style={{ flexShrink: 0 }}>
             {done}/{c.spec.questions.length} answered
           </Badge>
         </Group>
+
+        {(asker?.status?.result?.summary || c.spec.details) && (
+          <Card withBorder p="sm" radius="sm" className="sf-surface">
+            <Text size="xs" c="dimmed" mb={4}>
+              {asker ? `Context: what ${asker.spec.agentRef.name} did before asking` : "Context"}
+            </Text>
+            <Spoiler maxHeight={96} showLabel="Show all" hideLabel="Show less">
+              <MarkdownView>{c.spec.details ?? asker!.status!.result!.summary!}</MarkdownView>
+            </Spoiler>
+          </Card>
+        )}
 
         <Stack gap="xs">
           {c.spec.questions.map((q, i) => (
@@ -463,7 +504,9 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
                   {i + 1}
                 </Badge>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <MarkdownView>{q}</MarkdownView>
+                  <Spoiler maxHeight={200} showLabel="Show all" hideLabel="Show less">
+                    <MarkdownView>{q}</MarkdownView>
+                  </Spoiler>
                 </div>
               </Group>
               {skipped[i] ? (
@@ -499,16 +542,12 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
           ))}
         </Stack>
 
-        <Group justify="space-between">
-          <Button
-            variant="subtle"
-            size="xs"
-            leftSection={<IconMessageQuestion size={14} />}
-            disabled={!asker}
-            onClick={() => setAskOpen(true)}
-          >
-            Ask {asker?.spec.agentRef.name ?? "the agent"} about these questions
-          </Button>
+        <Group justify={asker ? "space-between" : "flex-end"}>
+          {asker && (
+            <Button variant="subtle" size="xs" leftSection={<IconMessageQuestion size={14} />} onClick={() => setAskOpen(true)}>
+              Ask {asker.spec.agentRef.name} about these questions
+            </Button>
+          )}
           <Button
             color="orange"
             loading={busy}

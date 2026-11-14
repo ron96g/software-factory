@@ -199,3 +199,18 @@ not retroactively upgraded to verified results.
 - Keep evidence only in events/in-memory maps: loses structured identity and recovery state across restart.
 - Use only a final result artifact: does not model an in-flight job's lifecycle, interruption or durable retry policy.
 - Implement retrospectives first as the solution: improvement proposals cannot replace verification enforcement.
+
+## Addendum: policy gaps (2026-11-14)
+A required check without a configured command is a policy gap: it can never pass, so every item needs a waiver
+(or stops, when not waivable). Agents found this per item and asked for commands in prose, although repository
+policy lives in factory definitions that agents must not edit.
+- One pure rule (`verificationPolicyGaps`) detects required, preflight, preparation and readiness checks without a
+  command. `validate.py` warns for waivable required gaps and fails for all others; system health shows a header
+  badge; plan approvals list the gaps in the plan as "known evidence gaps" (or "unpassable checks") so the human
+  decides once, before construction, instead of discovering it at verification.
+- Agents see known gaps in context and must not request them in prose or invent substitutes. Gaps the factory
+  cannot detect go through retrospective feedback (ADR-0041) with the operator issue code `missing-check-command`;
+  developer, architect and verifier opt in to feedback.
+- Configure a check only with a real command that fails when it has nothing to prove. `software-factory` now runs
+  `npm audit` (security-scan), composition-root suites (`test:integration`) and `web/src/acceptance` tests
+  (`test:acceptance`, failing when empty; one test per delivered criterion). Nothing weakens required-evidence rules.

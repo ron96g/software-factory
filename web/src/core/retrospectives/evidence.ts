@@ -15,7 +15,7 @@ export function feedbackCaptureRevision(run: AgentRun): string | undefined {
 }
 export const DEFAULT_RETROSPECTIVE_POLICY: RetrospectivePolicy = {
   version: "1",
-  issueCodes: ["missing-repository-context", "missing-ticket-history", "unavailable-tool", "ineffective-step"],
+  issueCodes: ["missing-repository-context", "missing-ticket-history", "unavailable-tool", "ineffective-step", "missing-check-command"],
   minimumOrigins: 3, minimumRoles: 2, windowDays: 14,
 };
 

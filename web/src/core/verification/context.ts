@@ -2,6 +2,7 @@ import type { CheckRun, FactoryEvent, Workflow } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { gapId, verificationPolicyGaps } from "../model/verification-policy.ts";
 import { StoreError, type ContextProvider, type Redactor, type ResourceReader, type TranscriptReader, type WorkflowCompiler } from "../ports/index.ts";
 
 export function verificationContext(d: { reader: ResourceReader; logs: TranscriptReader; compiler: WorkflowCompiler; redactor: Redactor }): ContextProvider {
@@ -22,10 +23,18 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
           workspaces: ctx.workspaces.map((workspace) => ({ workspace: workspace.metadata.name, repositoryAlias: workspace.spec.repositoryRef.name,
             checkSyntax: `${workspace.spec.repositoryRef.name}/<configured-check>` })),
           planFormat: { criteria: [{ id: "AC-1", description: "Exact acceptance criterion from the specification", checks: ["repository/check"] }],
-            checks: ["repository/check"], preflight: ["repository/preflight"] },
+            checks: ["repository/check"], preflight: ["repository/preflight"],
+            ...(compiled.unitExecution ? { units: [{ id: "U1", title: "Stable Unit from units-of-work", dependsOn: [], criteria: ["AC-1"],
+              obligations: [{ id: "U1-O1", description: "Concrete deliverable", checks: ["repository/<readiness check>"] }] }] } : {}) },
+          ...(compiled.unitExecution ? { unitInstructions: "Unit execution is enabled (ADR-0047): units[] is required. Every criterion needs a delivering Unit; obligations name readiness checks from repository readinessChecks that are also in checks[]; dependencies are acyclic and use units-of-work IDs. Units are implemented one at a time and review starts only once all are ready." } : {}),
           instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. moduleScoped checks deterministically select changed modules plus transitive dependents from the pinned workspace baseline, including committed and dirty changes; shared/unknown changes require full validation. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence. run_check accepts workspace or repositoryAlias above, and a bare check name or matching repository/check. Reuse requestId to inspect the same job; pending is not Passed.",
         }, null, 2),
       }];
+      const gaps = ctx.repositories.flatMap(verificationPolicyGaps);
+      if (gaps.length) sections.push({ title: "Known verification policy gaps (operator already notified)", source: "verification-contract",
+        content: `These checks have no configured command: ${gaps.map((g) => `${gapId(g)} (${g.role}${g.waivable ? ", waivable" : ""})`).join(", ")}. ` +
+          "The factory reports them to the operator and at plan review. Repository policy lives in factory definitions, not in this workspace: " +
+          "do not edit it, do not ask for these commands in prose, and do not invent substitute commands. Keep them in the plan honestly as missing evidence." });
       const allRuns = (await d.reader.list<CheckRun>("CheckRun", {
         namespace: nsOf(ctx.workItem), ownedBy: { kind: "WorkItem", name: ctx.workItem.metadata.name, namespace: nsOf(ctx.workItem) },
       })).filter((r) => r.spec.workItemUid === ctx.workItem.metadata.uid && r.spec.workflow &&

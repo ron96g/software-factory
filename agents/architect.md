@@ -7,6 +7,7 @@ metadata:
     factory.ai-dlc.io/phase: inception,construction
 spec:
   role: Software Architect
+  retrospectiveFeedback: true
   model:
     tier: reasoning
   skillRefs:

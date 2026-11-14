@@ -188,18 +188,23 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X23c | Verification contracts | Reviewed validation plans, same-environment preflight, shared agent/gate check runner, snapshot freshness and required-evidence enforcement (ADR-0042; after X23b) | Required evidence or explicit policy-permitted waivers are bound to plan/candidate; stale or simulated evidence cannot pass; existing gates and publication permissions remain intact | ✅ |
 | X24 | Candidate preparation and recovery | Pre-review named preparation checks, active-job waits, bounded return-to-review on drift and explicit check selectors (ADR-0043) | Builds cannot race review; regenerated code gets fresh review; clarification answers cannot impersonate approval; preparation never replaces verification | ✅ |
 | X25 | Affected-module verification | Repository dependency graph selects changed modules and transitive dependents for named build/test checks across preparation, agents, gates and manual execution (ADR-0044) | Immutable scope provenance; committed and dirty changes covered; shared/unknown changes use explicit full scope; plans and human approvals remain revision-bound | ✅ |
+| X26 | Plan-first workspace | Opt-in research-backed editable plan, consolidated directly answerable human decisions and exact-revision review (ADR-0045, ADR-0046) | Human edits/answers regenerate a reviewed proposal without manual unlocking; no automatic clarification interview; stale or unresolved plans cannot authorize construction; existing gates remain intact | ✅ |
+| X27 | Complete Units before review | Sequential execution of approved Units with durable progress, evidence and a pre-review completeness barrier (ADR-0047) | All required Units have current readiness evidence before any code review; blocked work stops visibly; existing review, verification and publication safeguards remain intact | ✅ |
+| X28 | Human decides over AI plan review | Unresolved AI plan review findings are advisory; approving over them needs an explicit reason (ADR-0048) | A disagreeing AI reviewer cannot leave an item stuck; all other planning and verification guards stay enforced | ✅ |
+| X29 | Simpler loop, focused item page | Malformed agent output is rejected at its producing step and only that step reruns with the reason; item page shows pending decisions first, then the current phase, details collapsed (ADR-0049) | Format mistakes never stop an item after the full planning chain; no disabled controls or other-phase panels on the item page | ✅ |
+| X30 | One planner run, revocable answers | Opt-in `factory-plan`: one planner run produces spec, Units, validation and implementation plan; one independent review; humans can withdraw stale answers (ADR-0050) | A revision costs one planner run plus one review; withdrawn answers stop steering agents; existing `factory-planned` items are unaffected | Proposed |
 
 #### Later increments
 | Version | Increment | Highlights |
 |---|---|---|
 | v0.2 | Write-back | ✅ see table above |
-| v0.3 | Construction for real | see table above (ADR-0019); Bolt fan-out per Unit moves to v1.0 |
+| v0.3 | Construction for real | see table above (ADR-0019); generic Bolt fan-out per Unit moves to v1.0; sequential planned Unit execution is X27 |
 | v0.4 | Auth & squads (**postponed**, ADR-0025) | OIDC, `User`/`Role`/`Squad`, RBAC, namespaces per squad, `squads/<squad>/…` definitions (ADR-0009, ADR-0011) |
 | v0.5 | Tool servers | ✅ `ToolServer` (MCP) kind + `ToolProvider` port, factory as MCP server (X16, ADR-0034); open: per-squad tools (ADR-0011), delegation as tool calls |
 | v0.6 | Operations | Ship + monitor for real, feedback WorkItems with code research, rollback |
-| v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself, Bolt fan-out per Unit |
+| v1.0 | Hardening | Postgres, worker leases, embeddings search (optional), observability of the factory itself, generic Bolt fan-out per Unit |
 
-Known MVP simplifications: single process (no leases); definitions load once at startup (restart to reload); `forEach` runs the sub-workflow once; automated checks pass
+Known MVP simplifications: single process (no leases); definitions load once at startup (restart to reload); `forEach` runs the sub-workflow once (the opt-in planned path implements Units sequentially, X27); automated checks pass
 with a warning event; no auth, but the code stays auth-ready (rule 9).
 
 ---
@@ -231,6 +236,9 @@ Model choice: the reviewer uses a mid-tier model (`claude-sonnet-5.5`). Cheap mo
 - [ ] Ports defined or updated first. ISP respected.
 - [ ] Wiring only in the composition root.
 - [ ] `npx tsc --noEmit` passes in `web/`.
+- [ ] Tests pass: `npm test` (all), `npm run test:integration` (composition-root suites) and `npm run test:acceptance`
+      in `web/`. Acceptance tests live in `web/src/acceptance/*.acceptance.test.ts`, one per delivered acceptance
+      criterion, named with its ID (`AC-3: …`) and exercising the public app/API surface.
 - [ ] `python tools/validate.py` passes.
 - [ ] Docs, glossary, and ADRs updated if concepts or decisions changed.
 - [ ] Milestone status updated.

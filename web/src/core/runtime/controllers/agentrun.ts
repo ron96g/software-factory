@@ -233,6 +233,13 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         // After a (re)start, retry once right away: restarts are when tokens or providers usually change.
         const firstLook = !seenSinceStart.has(key);
         seenSinceStart.add(key);
+        if (firstLook && run.status?.phase === "Running" && run.spec.assignment) {
+          // ADR-0047: an assigned attempt may have half-edited the workspace; the owner decides on a new bounded attempt.
+          const message = "interrupted by a factory restart; not re-executed automatically";
+          const failed = await d.status.updateStatus({ ...run, status: { ...run.status, phase: "Failed", interrupted: true, finishedAt: d.clock.now().toISOString(), message } });
+          await d.events.warning(failed, "Interrupted", message);
+          return;
+        }
         const wait = run.status?.phase === "Pending" && run.status.retryAt && !firstLook ? Date.parse(run.status.retryAt) - d.clock.now().getTime() : 0;
         if (wait > 0) return { requeueAfterMs: Math.min(wait, MODEL_RETRY_MAX_MS) };
         if (d.gate && run.status?.phase !== "Running") {

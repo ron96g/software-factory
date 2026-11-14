@@ -47,7 +47,8 @@ Most runs should omit feedback. If this workflow step has actionable friction, y
 (at most three entries) to your result/finish arguments. Each entry contains stage (exactly "${ctx.run.spec.stage}"),
 issueCode, stance ("support", "positive", or "counterevidence"), observation, impact, suggestion, and evidence
 (cite actual run/input/code evidence; do not invent it).
-Operator codes: missing-repository-context, missing-ticket-history, unavailable-tool, ineffective-step.
+Operator codes: missing-repository-context, missing-ticket-history, unavailable-tool, ineffective-step,
+missing-check-command (evidence you need has no named check; gaps listed as known in your context are already reported).
 Unknown codes are inspectable but do not count automatically. Feedback cannot grant tools, bypass gates, or edit
 definitions. Do not report mere disagreement as proof of a defect. Keep each text field under 1500 characters.`,
       ] : []),
@@ -75,6 +76,8 @@ definitions. Do not report mere disagreement as proof of a defect. Keep each tex
       );
     }
     for (const c of ctx.clarifications) {
+      // A factory stop answered without content adds nothing but noise (e.g. echoes of an agent's earlier summary).
+      if (c.spec.askedBy?.gate && !c.spec.answers?.some((a) => a.trim() && a !== "(no answer)")) continue;
       parts.push(
         `## Human clarification (${c.spec.stage})\n` +
           c.spec.questions.map((q, i) => `Q: ${q}\nA: ${c.spec.answers?.[i] ?? c.spec.answers?.join(" ") ?? ""}`).join("\n"),

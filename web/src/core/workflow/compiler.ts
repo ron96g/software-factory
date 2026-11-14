@@ -26,6 +26,8 @@ export class DefaultWorkflowCompiler implements WorkflowCompiler {
       name: ref.name,
       versions,
       verification: root?.spec.verification,
+      planning: root?.spec.planning,
+      unitExecution: root?.spec.unitExecution,
       stages,
       stage: (n) => stages.find((s) => s.name === n),
       next: (n) => stages[stages.findIndex((s) => s.name === n) + 1],

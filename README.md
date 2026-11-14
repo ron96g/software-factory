@@ -79,6 +79,28 @@ Data lives in `web/data/factory.db`. Delete the file to reset.
 Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless you opt in. Start the server with
 `NODE_USE_ENV_PROXY=1 npm run dev`. Otherwise source sync and LLM calls fail with `fetch failed: Connect Timeout Error`.
 
+## Plan-first work items (ADR-0045, ADR-0046)
+
+In **New item**, explicitly choose **factory-planned**, select repositories with verification policy, and supply the
+goal and any **Additional context**. Existing items and workflow defaults are unchanged. Agents research and draft
+the specification, Units, validation and implementation plan before asking for a consolidated human review.
+
+The item's **Planning workspace** is the primary view: outcome, scope, approach, ordered delivery, acceptance and
+risks, followed by one decision sheet. Answer required decisions together; optional choices show recommended
+defaults. Submitting answers, editing plan sections/context, or requesting changes saves human intent and
+asynchronously regenerates the proposal from requirements. Compare revisions, then explicitly **Approve plan**.
+Saving or answering never approves the result. Changed context/evidence makes old approvals unusable.
+
+Required decisions are directly answerable, including new decisions in a regenerated proposal; no manual unlocking
+or reopening is needed. Previous answers are preserved when their meaning is unchanged and can be corrected.
+Use **Submit answers & update plan** to submit all currently unresolved required decisions together and regenerate
+the proposal once. Agents research discoverable facts and reuse settled answers rather than starting per-agent
+interviews. Approval guidance explains the outstanding decisions or specific missing/stale evidence.
+**Reject** and **Defer** close the proposal without construction. Editing requires a safe human stop with no active agents/checks or publication.
+The plan remains visible during construction; actual stage/check evidence is shown, not invented Unit completion.
+Existing code-review, verification, waivers and publication permissions still apply. Without real eligible planning
+and review runs, simulated output cannot authorize construction.
+
 ## Agent retrospectives (ADR-0041)
 
 Open **Retrospectives** to inspect workflow observations, their pinned versions, supporting items/roles, exclusions

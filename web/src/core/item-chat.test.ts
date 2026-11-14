@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { API_VERSION } from "./model/resource.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -77,19 +78,27 @@ test("X6: clarification answers are positional; skipped questions are explicit",
 test("X6: all questions answered with \"Don't know\" is accepted; the agent is told to proceed with stated assumptions", async () => {
   const { f, name } = await blockedItem({});
   try {
-    const c = (await f.app.getWorkItem(p, name))!.clarifications[0];
+    const detail = (await f.app.getWorkItem(p, name))!;
+    const c = detail.clarifications[0];
     const answered = await f.app.answerClarification(p, c.metadata.name, ["", ""]);
     assert.deepEqual(answered.spec.answers, ["(no answer)", "(no answer)"]);
     const { DefaultPromptBuilder } = await import("./agents/prompt-builder.ts");
     const prompt = new DefaultPromptBuilder().build({
-      run: { spec: { stage: "triage", step: "x", outputs: [] } },
-      agent: { body: "" },
+      run: {
+        apiVersion: API_VERSION, kind: "AgentRun", metadata: { name: "test-run", namespace: "default" },
+        spec: { workItemRef: { name }, agentRef: { name: "triager" }, stage: "triage", step: "x", skillRefs: [], inputs: [], outputs: [] },
+      },
+      agent: { apiVersion: API_VERSION, kind: "Agent", metadata: { name: "triager", namespace: "factory-system" }, spec: { role: "Triager" }, body: "" },
       skills: [],
-      workItem: { metadata: { name }, spec: { title: "t", sourceRef: { name: "manual" } } },
+      workItem: detail.workItem,
       inputs: [],
       clarifications: [answered],
+      approvals: [],
+      repositories: [],
+      workspaces: [],
       sections: [],
-    } as never);
+      transcript: { ref: { namespace: "default", id: "test" }, record: async () => { throw new Error("Prompt building must not record interactions"); } },
+    });
     assert.match(prompt.user, /doesn't know\. Proceed with reasonable assumptions/);
   } finally {
     await f.stop();

@@ -48,6 +48,26 @@ function HealthBadges() {
           </Badge>
         </Tooltip>
       )}
+      {data.policyGaps?.length > 0 && (
+        <Tooltip
+          multiline
+          w={420}
+          label={
+            <Stack gap={4}>
+              <Text size="xs">Repository policy relies on these checks, but they have no configured command. They can never pass; waivable ones need a human waiver on every item.</Text>
+              {data.policyGaps.slice(0, 8).map((g) => (
+                <Text key={`${g.repository}/${g.check}/${g.role}`} size="xs">
+                  <b>{g.repository}/{g.check}</b> · {g.role}{g.waivable ? " · waivable" : " · not waivable"}
+                </Text>
+              ))}
+            </Stack>
+          }
+        >
+          <Badge variant="light" color={data.policyGaps.some((g) => !g.waivable) ? "red" : "yellow"} leftSection={<IconAlertTriangle size={12} />}>
+            {data.policyGaps.length} check gap{data.policyGaps.length === 1 ? "" : "s"}
+          </Badge>
+        </Tooltip>
+      )}
       <Tooltip
         label={
           data.llm.available

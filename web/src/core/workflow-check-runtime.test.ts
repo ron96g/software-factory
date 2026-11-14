@@ -42,6 +42,7 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
         planningStage: "plan", reviewStage: "review", preflightStage: "preflight", verifyStage: "verify",
         implementationStage: "implement", preparationStage: "code-review", maxCodeAttempts: 2, maxExecutionAttempts: 2, retryDelayMs: 100,
       },
+      unitExecution: { barrierStage: "code-review", maxCodeAttempts: 1, maxExecutionAttempts: 2 },
       phases: [],
     },
   });
@@ -56,7 +57,7 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
         unknown: { command: "trusted-unknown-command", timeoutMs: 21, resultFormat: "future-format" },
         focused: { command: "trusted-focused-command", timeoutMs: 42, resultFormat: "exit-code" },
       },
-      verification: { requiredChecks: ["test", "unknown"], preflightChecks: ["setup"], preparationChecks: ["setup"] },
+      verification: { requiredChecks: ["test", "unknown"], preflightChecks: ["setup"], preparationChecks: ["setup"], readinessChecks: ["focused"] },
     },
   });
   const item = await store.create<WorkItem>({
@@ -133,6 +134,24 @@ test("preparation admission and execution retain successful command classificati
     assert.equal(done.status?.executionOutcome, "Passed");
     assert.equal(done.status?.outcome, "NotVerified");
     assert.equal(done.status?.finalSnapshot, "generated");
+  } finally { await c.stop(); f.db.close(); }
+});
+
+test("unit readiness jobs pass admission and execute only for allowlisted checks of a recorded Unit attempt", async () => {
+  const f = await fixture({ stage: "implement", purpose: "unit-readiness" });
+  const c = f.controller();
+  try {
+    await f.store.updateStatus<AgentRun>({ ...f.caller, status: { phase: "Succeeded" } });
+    const origin: CheckWorkflowOrigin = { stage: "implement", round: 3, purpose: "unit-readiness", planFingerprint: "plan-fingerprint", attempt: 1,
+      unit: "U1", unitRun: f.caller.metadata.name };
+    await assert.rejects(f.submit("test", "not-allowlisted", origin), /not authorized for unit-readiness/);
+    await assert.rejects(f.submit("focused", "agent-caller", { ...origin, agentRunRef: { name: f.caller.metadata.name }, agentRunUid: f.caller.metadata.uid! }), /Unit and its implementation run/);
+    await assert.rejects(f.submit("focused", "barrier-at-implement", { ...origin, unit: "*", unitRun: undefined }), /not authorized/);
+    const run = await f.submit("focused", "unit", origin);
+    assert.deepEqual(await checkRunValidator().validate(run, { operation: "CREATE", reader: f.store }), []);
+    await c.reconcile(keyOf(run));
+    await c.stop();
+    assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.outcome, "Passed");
   } finally { await c.stop(); f.db.close(); }
 });
 

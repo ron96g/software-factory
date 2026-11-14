@@ -198,7 +198,7 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
         <TextInput label="Title" placeholder="e.g. Show transcript tokens in the run viewer" value={title} onChange={(e) => setTitle(e.currentTarget.value)} data-autofocus required />
         <Textarea
           label="Description"
-          description="What and why. Thin descriptions make the triager ask clarifying questions."
+          description="Describe the intended outcome and constraints. The selected workflow controls planning and human review."
           autosize
           minRows={4}
           value={description}

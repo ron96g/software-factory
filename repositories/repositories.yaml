@@ -64,11 +64,15 @@ spec:
   checks:                    # ADR-0023: commands for the automated gate, run in the workspace
     build: cd web && npx tsc --noEmit -p .
     unit-tests: cd web && npm test --silent
+    integration-tests: cd web && npm run test:integration --silent      # composition-root suites (real store, controllers, definitions)
+    acceptance-criteria: cd web && npm run test:acceptance --silent    # web/src/acceptance/*.acceptance.test.ts; fails when empty
+    security-scan: cd web && npm audit --omit=dev --audit-level=high
     preflight: node --version && npm --version && test -d web/node_modules
   verification:
     requiredChecks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
     preflightChecks: [preflight]
     waivableChecks: [integration-tests, acceptance-criteria, security-scan]
+    readinessChecks: [build, unit-tests]   # ADR-0047: per-Unit construction readiness, never final verification
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
     setup:
       - cd web && npm ci --no-audit --no-fund --loglevel=error
@@ -116,3 +120,4 @@ spec:
     preflightChecks: [preflight]
     preparationChecks: [build]
     waivableChecks: [integration-tests, acceptance-criteria, security-scan]
+    readinessChecks: [build, focused-tests]

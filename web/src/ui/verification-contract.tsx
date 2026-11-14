@@ -92,6 +92,13 @@ export function VerificationContractPanel({ item }: { item: WorkItem }) {
           : "Refresh verification to inspect the current publication hold."}
         {" "}Migration to factory-verified always enables the publication hold. Plan approval, passing checks and any policy-permitted waiver do not grant publication permission. This card cannot enable publication.
       </Alert>
+      {!!data?.gaps?.length && (
+        <Alert color={data.gaps.some((g) => !g.waivable) ? "red" : "yellow"} title="Checks without a configured command">
+          {data.gaps.map((g) => `${g.repository}/${g.check}`).join(", ")} cannot produce evidence. {data.gaps.some((g) => !g.waivable)
+            ? "Non-waivable ones stop verification until an operator configures them."
+            : "They stay NotVerified and need an explicit waiver at verification unless an operator configures them first."}
+        </Alert>
+      )}
       <Text size="sm">Validation plans require fresh human approval of the exact scope. Missing, stale, simulated or unsupported required checks cannot automatically pass. Use the existing human approval cards to review the plan and any policy-permitted, explicitly scoped waiver; a waiver is not a pass.</Text>
       {error && <Alert color="red" title="Unable to inspect verification">{error}</Alert>}
       {data?.error && <Alert color="red" title="Verification contract needs attention">{data.error}</Alert>}

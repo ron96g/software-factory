@@ -8,7 +8,8 @@ import { ANONYMOUS, SandboxUnavailableError, type CheckRunScheduler, type Execut
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
-import { VerificationService } from "./verification/service.ts";
+import { VerificationService, gapCriterion } from "./verification/service.ts";
+import { verificationPolicyGaps } from "./model/verification-policy.ts";
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { Registry } from "./registry/registry.ts";
@@ -412,5 +413,19 @@ test("audit publication failure cannot flip a completed agent to Failed or execu
     await controller.stop();
     assert.equal(executions, 1);
     assert.deepEqual(errors, ["audit persistence unavailable"]);
+  } finally { f.db.close(); }
+});
+
+test("plan review shows required checks without a command as known evidence gaps; unpassable ones are distinct", async () => {
+  const f = await fixture();
+  try {
+    const ctx = await f.context("spec-review");
+    const decision = await f.service.gates.find((g) => g.type === ctx.gate.type)!.evaluate(ctx);
+    assert.equal(decision.action, "await-approval");
+    assert.match(decision.action === "await-approval" ? decision.criteria?.join("\n") ?? "" : "", /Known evidence gaps: repo\/manual-acceptance/);
+    assert.deepEqual((await f.service.inspect(ANONYMOUS, "item")).gaps?.map((g) => g.check), ["manual-acceptance"]);
+    assert.deepEqual(verificationPolicyGaps({ ...f.repo, spec: { ...f.repo.spec, verification: { ...f.repo.spec.verification!, waivableChecks: [], readinessChecks: ["lint"] } } })
+      .map((g) => [g.check, g.role, g.waivable]), [["manual-acceptance", "required", false], ["lint", "readiness", false]]);
+    assert.match(gapCriterion([{ repository: "repo", check: "manual-acceptance", role: "required", waivable: false }])[0], /Unpassable checks/);
   } finally { f.db.close(); }
 });

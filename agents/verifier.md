@@ -8,6 +8,7 @@ metadata:
 spec:
   sandboxRef: { name: node-build }
   role: QA / Verification Engineer
+  retrospectiveFeedback: true
   skillRefs:
     - name: verification
   tools: [search_code, list_files, read_file, run, run_check]   # no write_file; shell execution stays in the sandbox

@@ -23,6 +23,8 @@ export interface CompiledWorkflow {
   name: string;
   versions?: Record<string, string>;
   verification?: import("../model/kinds.ts").WorkflowSpec["verification"];
+  planning?: import("../model/kinds.ts").WorkflowSpec["planning"];
+  unitExecution?: import("../model/kinds.ts").WorkflowSpec["unitExecution"];
   stages: CompiledStage[];
   stage(name: string): CompiledStage | undefined;
   /** Stage after `name`, or undefined at the end. */
@@ -41,8 +43,11 @@ export type GateDecision =
   | { action: "advance" }
   | { action: "goto"; stage: string; /** Stage whose retry budget this consumes (ADR-0023, Q1). */ retryOf?: string }
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
-  | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"]; retrospective?: { fingerprint: string } }
-  | { action: "block"; questions: string[] }
+  | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"]; retrospective?: { fingerprint: string };
+      /** Extra facts the human must see on this approval (e.g. known evidence gaps). */
+      criteria?: string[] }
+  | { action: "block"; questions: string[]; /** Supporting Markdown (e.g. an agent's last summary), kept out of the question text. */ details?: string }
+  | { action: "attention"; reason: string }
   | { action: "fail"; reason: string }
   /** Checks still running in the background; re-evaluate later (never block a reconcile). */
   | { action: "wait"; retryAfterMs: number };
@@ -61,6 +66,17 @@ export interface GateEvaluator {
 
 export interface GateEvaluatorLookup {
   get(type: string): GateEvaluator | undefined;
+}
+
+/**
+ * ADR-0049: deterministic structure check of an artifact right after its producing step, selected by artifact type.
+ * Returns a problem description for the producing agent, or undefined when the artifact is well-formed.
+ */
+export const OUTPUT_REJECTED = "OutputRejected";
+
+export interface ArtifactCheck {
+  readonly artifactType: string;
+  check(item: WorkItem, artifact: import("../model/kinds.ts").Artifact): Promise<string | undefined>;
 }
 
 /** A single automated check referenced by `gate.checks[]`. */

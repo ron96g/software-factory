@@ -152,6 +152,8 @@ export interface SystemHealth {
   simulation: "allow" | "wait";
   /** Reconciles that keep failing (Q2). */
   failing: FailingReconcile[];
+  /** Checks repository policy relies on without a configured command (they can never pass). */
+  policyGaps: import("../model/verification-policy.ts").PolicyGap[];
 }
 
 export interface SystemQueries {

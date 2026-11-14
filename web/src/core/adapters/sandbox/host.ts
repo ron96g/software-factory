@@ -64,7 +64,7 @@ class HostSandbox implements Sandbox {
 
   exec(command: string, o: ExecOptions = {}): Promise<ExecResult> {
     this.alive();
-    return runScrubbed(command, o.cwd ? this.path(o.cwd) : this.dir, o.timeoutMs, this.env);
+    return runScrubbed(command, o.cwd ? this.path(o.cwd) : this.dir, o.timeoutMs, this.env, o.maxOutputBytes);
   }
   async readFile(p: string): Promise<string> {
     this.alive();

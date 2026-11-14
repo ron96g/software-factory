@@ -100,6 +100,74 @@ stateDiagram-v2
 Actions: **New item** (manual), **Sync now** (per source), **Answer** (unblocks an item), **Approve / Reject** (gates),
 **Create follow-up** (independent item with inherited evidence).
 
+## Planning workspace (ADR-0045, ADR-0046)
+
+The explicitly selected `factory-planned` workflow makes the reviewed plan the primary work-item surface.
+ADR-0047 implements the approved Units one at a time and keeps code review closed until every Unit is ready on the
+current candidate (see "Unit execution" below). Other workflows are unchanged.
+Research, requirements, Units, validation and implementation-plan synthesis run before human input is requested.
+The implementation plan is a JSON Artifact with readable Markdown sections and structured human decisions;
+the existing policy-controlled validation-plan remains the verification contract. Independent AI review checks the
+complete bundle before the existing verified human plan gate.
+
+```mermaid
+flowchart LR
+  Intent["Goal and team context"] --> Research["Autonomous research"]
+  Research --> Draft["Specification, Units, validation and implementation plan"]
+  Draft --> Review["Independent AI review"]
+  Review --> Sheet["Human plan and consolidated decision sheet"]
+  Sheet -- "save edits or answers" --> Revision["New requirements revision"]
+  Revision --> Draft
+  Sheet -- "explicit exact-revision approval" --> Construction["Construction with existing gates"]
+  Sheet -- "reject or defer" --> Closed["Closed proposal"]
+```
+
+Planning ports separate queries, human revision commands, exact-review binding, question deferral and terminal intent.
+They are composed only in the factory root. No Plan kind, mutable agent document, new workflow engine or unrecorded
+model call is introduced. Human edits/answers are `WorkItem.spec.planning` intent with request identity; agent outputs
+remain historical Artifacts. Controller-driven restarts supersede dependent output. The workspace compares section
+revisions and leaves operational evidence accessible.
+
+Questions in planning AgentRun results do not open per-agent Clarifications. They are consolidated with typed plan
+decisions; omitted questions remain required blockers. Answers bind question/options/required semantics and survive
+restarts and ordinary revisions when those semantics are unchanged. At a safe human stop, new required decisions and
+corrections are directly answerable without reopening discovery; each consolidated submission regenerates the proposal.
+Agents research facts and reuse settled answers instead of starting sequential interviews. Approval guidance shows
+the actual next action or evidence issue. Malformed or stale plan evidence stops visibly for revision. Required choices cannot be
+delegated through a generic approval comment or override.
+
+Plan approval binds current human context/intent, specification, Units, validation, implementation plan, independent
+review and definition/policy versions. Real producers must have consumed the exact upstream revisions and recorded
+planning-intent context. An asynchronous revision cannot auto-approve, and direct restarts cannot bypass this binding.
+Active agents/checks or publication effects prevent amendments; human reject/defer intent is applied to status only
+by the WorkItem controller. Legacy workflows and ADR-0032 context behavior remain unchanged.
+
+## Unit execution (ADR-0047)
+
+On `factory-planned`, the validation plan carries the approved Unit manifest. The implementation stage runs one
+developer attempt per round, each assigned to the first Unit whose dependencies are ready; its `unit-progress` gate
+checks the structured result and runs the Unit's readiness checks before moving to the next Unit.
+
+```mermaid
+flowchart LR
+  Assign["Assign next ready Unit"] --> Dev["Developer attempt"]
+  Dev --> Result{"complete unit-result?"}
+  Result -- "partial / missing evidence" --> Assign
+  Result -- yes --> Ready["Readiness CheckRuns"]
+  Ready -- "assertion failure" --> Assign
+  Ready -- passed --> More{"Units left?"}
+  More -- yes --> Assign
+  More -- no --> Barrier{{"Completeness barrier on current candidate"}}
+  Barrier -- "stale evidence" --> Rerun["Rerun readiness checks"] --> Barrier
+  Barrier -- satisfied --> Review["Preparation, AI review, human candidate review"]
+  Result -- "budget exhausted" --> Human(["Clarification"])
+```
+
+Progress is derived from durable AgentRuns, Artifacts and CheckRuns; nothing is inferred from an agent finishing.
+The barrier runs inside the verification stage policy and candidate approval validation, so overrides and direct
+restarts cannot bypass it. Review findings, rejections and verification failures return as a cross-Unit repair
+attempt, after which the barrier reruns all readiness checks. The item page shows Units above any gate controls.
+
 ## Follow-up work items (ADR-0039)
 
 A human selects a new workflow/repositories, supplies a new objective and optional free-text instructions, and

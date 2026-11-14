@@ -3,12 +3,18 @@ import { API_VERSION, SYSTEM_NAMESPACE } from "../../model/resource.ts";
 import { ISOLATION_RANK, SandboxUnavailableError, type CheckExecutionRunner, type ExecutionEnvironmentSelector, type ResourceReader } from "../../ports/index.ts";
 import { resolveRef } from "../../refs/refs.ts";
 
+/** ADR-0047: checks keep complete redacted logs up to an operator limit; truncation stays visibly incomplete. */
+export const DEFAULT_CHECK_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 export class SandboxCheckRunner implements CheckExecutionRunner {
   private readonly reader: ResourceReader;
   private readonly environments: ExecutionEnvironmentSelector;
-  constructor(reader: ResourceReader, environments: ExecutionEnvironmentSelector) {
+  private readonly maxOutputBytes: number;
+  constructor(reader: ResourceReader, environments: ExecutionEnvironmentSelector, maxOutputBytes = DEFAULT_CHECK_OUTPUT_BYTES) {
+    if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1024) throw new Error("check output limit must be at least 1024 bytes");
     this.reader = reader;
     this.environments = environments;
+    this.maxOutputBytes = maxOutputBytes;
   }
 
   async execute(run: CheckRun, workspace: Workspace, repository: Repository) {
@@ -27,7 +33,7 @@ export class SandboxCheckRunner implements CheckExecutionRunner {
       throw new SandboxUnavailableError(health.runtime, "runtime does not provide the profile's minimum isolation");
     }
     const sandbox = await environment.prepare({ profile, repositories: [repository], workspaces: [workspace] });
-    try { return await sandbox.exec(`set -e -o pipefail\n${run.spec.command}`, { timeoutMs: run.spec.timeoutMs }); }
+    try { return await sandbox.exec(`set -e -o pipefail\n${run.spec.command}`, { timeoutMs: run.spec.timeoutMs, maxOutputBytes: this.maxOutputBytes }); }
     finally { await sandbox.dispose(); }
   }
 }

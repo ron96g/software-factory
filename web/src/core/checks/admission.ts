@@ -5,6 +5,7 @@ import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import type { ModuleScopePlanner, ResourceReader, Validator } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validUnitFields } from "./origin.ts";
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
   const owners = candidate.metadata.ownerReferences ?? [];
@@ -15,12 +16,11 @@ function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; 
 function validWorkflowOrigin(origin: CheckWorkflowOrigin | undefined): origin is CheckWorkflowOrigin {
   if (!origin || typeof origin !== "object" || Array.isArray(origin)) return false;
   const keys = Object.keys(origin).sort();
-  const allowed = new Set(["agentRequestId", "agentRunRef", "agentRunUid", "attempt", "planFingerprint", "purpose", "round", "stage"]);
-  return keys.every((key) => allowed.has(key)) &&
+  return keys.every((key) => ORIGIN_KEYS.has(key)) && validUnitFields(origin) &&
     typeof origin.stage === "string" && !!origin.stage.trim() &&
     Number.isSafeInteger(origin.round) && origin.round >= 0 &&
     Number.isSafeInteger(origin.attempt) && origin.attempt >= 1 &&
-    ["preflight", "preparation", "verification"].includes(origin.purpose) &&
+    ORIGIN_PURPOSES.includes(origin.purpose) &&
     (origin.purpose !== "preparation" || origin.agentRunRef === undefined) &&
     typeof origin.planFingerprint === "string" && !!origin.planFingerprint.trim() && origin.planFingerprint.length <= 256 &&
     (origin.agentRequestId === undefined ||
@@ -50,16 +50,10 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
   const workflow = item.spec.workflowRef
     ? await resolveRef<Workflow>(reader, "Workflow", item.spec.workflowRef, nsOf(item))
     : null;
-  const policy = workflow?.spec.verification;
-  if (!workflow || !policy ||
-      (origin.purpose === "preflight" ? policy.preflightStage :
-        origin.purpose === "preparation" ? policy.preparationStage : policy.verifyStage) !== origin.stage) {
+  if (!originAuthorized(workflow, origin)) {
     return ["workflow origin is not authorized by the current verification policy"];
   }
-  const allowedChecks = origin.purpose === "preflight"
-    ? repository.spec.verification?.preflightChecks
-    : origin.purpose === "preparation" ? repository.spec.verification?.preparationChecks
-    : Object.keys(repository.spec.checks ?? {});
+  const allowedChecks = originChecks(repository, origin);
   if (!allowedChecks?.includes(run.spec.check)) return [`check "${run.spec.check}" is not authorized for ${origin.purpose}`];
 
   const namespace = nsOf(item);

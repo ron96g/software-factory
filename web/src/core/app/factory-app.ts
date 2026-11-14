@@ -18,6 +18,7 @@ import type {
 import { resolveRef } from "../refs/refs.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
+import { verificationPolicyGaps } from "../model/verification-policy.ts";
 import type {
   ConversationActions,
   ConversationResponder,
@@ -681,6 +682,7 @@ export class FactoryApp
       llm: m ? { available: true, provider: m.provider, model: m.model } : { available: false },
       simulation: this.d.simulation,
       failing: this.d.controllerHealth.failing(),
+      policyGaps: (await this.d.reader.list<Repository>("Repository")).flatMap(verificationPolicyGaps),
     };
   }
 

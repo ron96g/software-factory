@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelProvider, ToolServer, Source, Repository } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -74,7 +74,7 @@ import { checkRunValidator } from "./checks/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
 import { GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
-import { SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
+import { DEFAULT_CHECK_OUTPUT_BYTES, SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
 import { VerificationService } from "./verification/service.ts";
@@ -93,6 +93,12 @@ import { RetrospectiveActions } from "./retrospectives/actions.ts";
 import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/review.ts";
 import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
 import { DEFAULT_RETROSPECTIVE_POLICY } from "./retrospectives/evidence.ts";
+import { PlanningService, implementationPlanCheck } from "./planning/service.ts";
+import { outputFeedbackContext } from "./agents/output-feedback.ts";
+import { planningContext } from "./planning/context.ts";
+import { planningReview } from "./planning/review.ts";
+import { UnitExecutionService } from "./units/service.ts";
+import { unitContext } from "./units/context.ts";
 
 /** Composition-root convenience alias; consumers depend on the individual ports. */
 type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport & WorkspaceSweeper;
@@ -226,13 +232,21 @@ export async function createFactory(o: FactoryOptions) {
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
   const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes });
+  const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor });
+  // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
   const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
-    snapshots, environments, scheduler: checkScheduler, events, clock, redactor });
+    snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning,
+    completeness: { beforeCandidate: (...a) => units.beforeCandidate(...a), assertComplete: (...a) => units.assertComplete(...a) } });
+  const units = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
+    scheduler: checkScheduler, readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()), events, clock, redactor });
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
       retrospectiveContext(store, redactor),
-      verificationContext({ reader: store, logs: transcripts, compiler, redactor })],
+      planningContext({ reader: store, compiler, redactor }),
+      verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
+      unitContext({ ledger: units, compiler, redactor }),
+      outputFeedbackContext({ reader: store, redactor })],
     models,
     recorders,
     environments,
@@ -269,8 +283,12 @@ export async function createFactory(o: FactoryOptions) {
   for (const g of [decisionGate, humanApprovalGate, automatedGate({ checks, events, reader: store, runner, redactor, scopes, pollMs: o.checkPollMs })]) {
     gates.register(g.type, g);
   }
-  for (const gate of verification.gates) gates.register(gate.type, gate);
+  for (const gate of verification.gates) gates.register(gate.type,
+    gate.type === "verification-plan-review" ? planningReview(gate, compiler) : gate);
   gates.register(retrospectiveReview.type, retrospectiveReview);
+  gates.register(units.gate.type, units.gate);
+  const artifactChecks = new Registry<ArtifactCheck>();
+  for (const check of [verification.artifactCheck, implementationPlanCheck]) artifactChecks.register(check.artifactType, check);
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();
@@ -308,11 +326,12 @@ export async function createFactory(o: FactoryOptions) {
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
     transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
-    runner: new SandboxCheckRunner(store, environments), snapshots, clock, events, redactor, classifiers, scopes,
+    runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, clock, events, redactor, classifiers, scopes,
     contracts: verification, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
   manager.register(checkRunController);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
-    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification }));
+    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification,
+    questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks }));
   manager.register(
     createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor }),
   );
@@ -382,6 +401,8 @@ export async function createFactory(o: FactoryOptions) {
     checkRuns,
     retrospectives,
     verification,
+    planning,
+    units,
     /** Streamable HTTP MCP endpoint handler (Request → Response). */
     mcp,
     /** The exposed tool catalog (also used by tests). */

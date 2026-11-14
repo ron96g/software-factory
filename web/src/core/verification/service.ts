@@ -7,7 +7,22 @@ import { SandboxUnavailableError, StoreError, isStoreError, type AgentCheckReque
   type Clock, type CompiledStage, type CompiledWorkflow, type EventRecorder, type ExecutionContext, type ExecutionEnvironmentSelector, type GateContext,
   type GateDecision, type GateEvaluator, type Principal, type Redactor, type ResourceReader, type ResourceWriter,
   type ValidationContract, type ValidationPlan, type VerificationActions, type VerificationApprovalGuard,
-  type StageEntryPolicy, type StageResumptionPolicy, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
+  type StageEntryPolicy, type StageResumptionPolicy, type ArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
+import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
+import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
+import { parseUnitManifest } from "../model/units.ts";
+import { gapId, verificationPolicyGaps, type PolicyGap } from "../model/verification-policy.ts";
+
+/** Required plan checks without a configured command: they can only ever be Waived, so the plan reviewer must know. */
+const planGaps = (contract: Pick<ValidationContract, "plan" | "repositories">): PolicyGap[] =>
+  contract.repositories.flatMap(verificationPolicyGaps).filter((gap) => gap.role === "required" && contract.plan.checks.includes(gapId(gap)));
+export function gapCriterion(gaps: PolicyGap[]): string[] {
+  const waivable = gaps.filter((g) => g.waivable).map(gapId), blocking = gaps.filter((g) => !g.waivable).map(gapId);
+  return [
+    ...(waivable.length ? [`Known evidence gaps: ${waivable.join(", ")} have no configured command. They stay NotVerified and need an explicit waiver at verification unless an operator configures them first.`] : []),
+    ...(blocking.length ? [`Unpassable checks: ${blocking.join(", ")} have no configured command and are not waivable, so verification will stop. An operator must configure them before this work can complete.`] : []),
+  ];
+}
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const invalid = (message: string): never => { throw new StoreError(message, "Invalid"); };
@@ -50,11 +65,32 @@ function verificationPolicy(workflow: CompiledWorkflow) {
   return policy;
 }
 
-export class VerificationService implements VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, StageEntryPolicy, StageResumptionPolicy {
+/** ADR-0047: the barrier stage directly follows implementation, hosts preparation, and implementation is unit-gated. */
+function unitExecutionPolicy(workflow: CompiledWorkflow, policy: NonNullable<CompiledWorkflow["verification"]>) {
+  const units = workflow.unitExecution;
+  if (!units) return undefined;
+  const implementation = workflow.stages.findIndex((stage) => stage.name === policy.implementationStage);
+  if (workflow.stages[implementation + 1]?.name !== units.barrierStage || (policy.preparationStage && policy.preparationStage !== units.barrierStage)) {
+    return invalid("unit execution requires the barrier stage to directly follow implementation and to be the preparation stage");
+  }
+  if (workflow.stage(policy.implementationStage)?.gate?.type !== "unit-progress") return invalid("unit execution requires a unit-progress gate on the implementation stage");
+  if (!Number.isSafeInteger(units.maxCodeAttempts) || units.maxCodeAttempts < 0 || units.maxCodeAttempts > 10 ||
+      !Number.isSafeInteger(units.maxExecutionAttempts) || units.maxExecutionAttempts < 1 || units.maxExecutionAttempts > 5) {
+    return invalid("invalid unit execution retry budgets");
+  }
+  return units;
+}
+
+export class VerificationService implements CandidateSnapshots, VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, StageEntryPolicy, StageResumptionPolicy {
   private readonly d: {
     namespace: string; reader: ResourceReader; writer: ResourceWriter; compiler: WorkflowCompiler;
     snapshots: WorkspaceSnapshotter; environments: ExecutionEnvironmentSelector; scheduler: CheckRunScheduler;
     events: EventRecorder; clock: Clock; redactor: Redactor;
+    planning?: PlanningReviewBinding;
+    /** ADR-0048: unresolved AI plan review findings need an explicit human reason, never block the human. */
+    planReview?: PlanningReviewOutcome;
+    /** ADR-0047: required when a workflow enables unit execution; missing means construction cannot proceed. */
+    completeness?: CandidateCompleteness;
   };
   readonly gates: (GateEvaluator & ApprovalGateEvaluator)[];
 
@@ -75,7 +111,9 @@ export class VerificationService implements VerificationContracts, VerificationA
   async plan(item: WorkItem, approved: boolean): Promise<ValidationContract> {
     if (!item.spec.workflowRef) return invalid("work item has no workflow");
     const compiled = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+    if (compiled.planning && !this.d.planning) return invalid("planning review binding is unavailable; construction cannot proceed without it");
     const policy = verificationPolicy(compiled);
+    const unitPolicy = unitExecutionPolicy(compiled, policy);
     const runs = await this.d.reader.list<AgentRun>("AgentRun", owned(item));
     const eligibleRuns = new Set(runs.filter((r) => eligible(r) && r.spec.stage === policy.planningStage &&
       r.status?.phase === "Succeeded" && r.status.executor && r.status.executor !== "simulated" &&
@@ -90,6 +128,24 @@ export class VerificationService implements VerificationContracts, VerificationA
     if (!specification || producer?.status?.provenance?.inputs[specification.metadata.name] !== specification.metadata.resourceVersion) {
       return invalid("validation-plan must be produced from the current specification revision");
     }
+    const { plan, repositories } = await this.contents(item, artifact, policy, unitPolicy);
+    const workflowVersions = compiled.versions ?? {};
+    const planningBinding = await this.d.planning?.binding(item);
+    const fingerprint = digest([item.metadata.uid, specification.metadata.uid, specification.metadata.resourceVersion, artifact.metadata.uid, artifact.metadata.resourceVersion, plan,
+      workflowVersions, repositories.map((r) => [r.metadata.name, r.metadata.resourceVersion]),
+      ...(planningBinding ? [planningBinding] : [])]);
+    const contract: ValidationContract = { artifact, plan, fingerprint, workflowVersions, repositories, policy, unitPolicy };
+    if (approved) {
+      await this.d.planning?.assertReady(item);
+      const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
+      if (!approvedBinding(approvals, item, "plan", fingerprint, policy.reviewStage)) return invalid("current plan, workflow and repository policy need fresh human approval");
+    }
+    return contract;
+  }
+
+  /** Content and policy validation of one validation-plan artifact (no approval or planning-revision binding). */
+  private async contents(item: WorkItem, artifact: Artifact, policy: NonNullable<CompiledWorkflow["verification"]>,
+    unitPolicy: CompiledWorkflow["unitExecution"]): Promise<{ plan: ValidationPlan; repositories: Repository[] }> {
     let raw: unknown;
     try { raw = JSON.parse(artifact.spec.content); }
     catch (e) { if (!(e instanceof SyntaxError)) throw e; return invalid("validation-plan must contain a JSON object, not Markdown"); }
@@ -133,20 +189,40 @@ export class VerificationService implements VerificationContracts, VerificationA
       if (!repo || !check || extra || ![...Object.keys(repo.spec.checks ?? {}), ...repo.spec.verification!.requiredChecks].includes(check)) return invalid(`unknown policy check ${id}`);
       if (plan.preflight.includes(id) && !repo.spec.verification!.preflightChecks.includes(check)) return invalid(`unapproved preflight ${id}`);
     }
-    if (criteria.some((c) => c.checks.some((id) => !plan.checks.includes(id))) ||
-        plan.checks.some((id) => !criteria.some((c) => c.checks.includes(id)))) return invalid("every criterion and verification check needs a complete traceability mapping");
-    const workflowVersions = compiled.versions ?? {};
-    const fingerprint = digest([item.metadata.uid, specification.metadata.uid, specification.metadata.resourceVersion, artifact.metadata.uid, artifact.metadata.resourceVersion, plan,
-      workflowVersions, repositories.map((r) => [r.metadata.name, r.metadata.resourceVersion])]);
-    const contract = { artifact, plan, fingerprint, workflowVersions, repositories, policy };
-    if (approved) {
-      const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
-      if (!approvedBinding(approvals, item, "plan", fingerprint, policy.reviewStage)) return invalid("current plan, workflow and repository policy need fresh human approval");
+    const mandatory = new Set(repositories.flatMap((r) => r.spec.verification!.requiredChecks.map((check) => `${r.metadata.name}/${check}`)));
+    const untraced = plan.checks.filter((id) => !mandatory.has(id) && !criteria.some((c) => c.checks.includes(id)));
+    const unknown = [...new Set(criteria.flatMap((c) => c.checks.filter((id) => !plan.checks.includes(id))))];
+    if (unknown.length || untraced.length) {
+      // Operator-mandatory checks are justified by policy; optional checks must say which criterion they prove.
+      return invalid(`every criterion and optional verification check needs a complete traceability mapping${unknown.length ? `; criteria reference checks missing from checks[]: ${unknown.join(", ")}` : ""}${untraced.length ? `; optional checks no criterion maps: ${untraced.join(", ")}` : ""}`);
     }
-    return contract;
+    if (unitPolicy) {
+      const manifest = parseUnitManifest("units" in raw ? raw.units : undefined, plan, repositories);
+      if ("error" in manifest) return invalid(manifest.error);
+      plan.units = manifest.units;
+    }
+    return { plan, repositories };
   }
 
-  private async candidate(item: WorkItem, contract: ValidationContract) {
+  /** ADR-0049: structure check right after the validation-plan step, so malformed plans are fixed by their author. */
+  readonly artifactCheck: ArtifactCheck = {
+    artifactType: "validation-plan",
+    check: async (item, artifact) => {
+      if (!item.spec.workflowRef) return undefined;
+      const compiled = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+      if (!compiled.verification) return undefined;
+      try {
+        const policy = verificationPolicy(compiled);
+        await this.contents(item, artifact, policy, unitExecutionPolicy(compiled, policy));
+        return undefined;
+      } catch (e) {
+        if (!isStoreError(e, "Invalid")) throw e;
+        return e.message;
+      }
+    },
+  };
+
+  async candidate(item: WorkItem, contract: ValidationContract): Promise<CandidateState> {
     const workspaces = (await this.d.reader.list<Workspace>("Workspace", owned(item))).filter((w) =>
       w.status?.phase === "Ready" && w.metadata.ownerReferences?.some((o) => o.uid === item.metadata.uid));
     const { health } = await this.d.environments.select();
@@ -187,6 +263,11 @@ export class VerificationService implements VerificationContracts, VerificationA
             !r.status.logsIncomplete && r.spec.environment.runtime === state.health.runtime && r.spec.environment.version === state.health.version &&
             r.spec.environment.profileVersion === state.profiles[repository])) return invalid(`preflight ${id} is missing or stale; restart preflight before construction`);
       }
+      if (contract.unitPolicy && wf.stages.findIndex((s) => s.name === stage.name) > wf.stages.findIndex((s) => s.name === contract.policy.implementationStage)) {
+        if (!this.d.completeness) return invalid("unit completeness barrier is unavailable; review cannot start");
+        const barrier = await this.d.completeness.beforeCandidate(item, stage, contract);
+        if (barrier.action !== "advance") return barrier;
+      }
       if (stage.name === contract.policy.preparationStage) return this.prepareCandidate(item, stage, contract, state, runs);
       if (stage.name === contract.policy.verifyStage) {
         const approvals = await this.d.reader.list<Approval>("Approval", owned(item));
@@ -212,7 +293,7 @@ export class VerificationService implements VerificationContracts, VerificationA
   }
 
   private async prepareCandidate(item: WorkItem, stage: CompiledStage, contract: ValidationContract,
-    state: Awaited<ReturnType<VerificationService["candidate"]>>, runs: CheckRun[]): Promise<GateDecision> {
+    state: CandidateState, runs: CheckRun[]): Promise<GateDecision> {
     for (const repo of contract.repositories) {
       const ws = state.workspaces.find((workspace) => workspace.spec.repositoryRef.name === repo.metadata.name)!;
       for (const check of repo.spec.verification?.preparationChecks ?? []) {
@@ -267,7 +348,8 @@ export class VerificationService implements VerificationContracts, VerificationA
           }
           const contract = await this.plan(workItem, kind === "candidate");
           const fingerprint = kind === "plan" ? contract.fingerprint : (await this.candidate(workItem, contract)).fingerprint;
-          return { action: "await-approval", verification: { kind, fingerprint, planFingerprint: contract.fingerprint } };
+          return { action: "await-approval", verification: { kind, fingerprint, planFingerprint: contract.fingerprint },
+            ...(kind === "plan" && planGaps(contract).length ? { criteria: gapCriterion(planGaps(contract)) } : {}) };
         } catch (e) {
           if (!isStoreError(e, "Invalid")) throw e;
           return { action: "block", questions: [e.message] };
@@ -283,10 +365,18 @@ export class VerificationService implements VerificationContracts, VerificationA
     const binding = approval.spec.verification;
     if (!binding) return invalid("verification approval has no binding");
     const contract = await this.plan(item, binding.kind !== "plan");
+    await this.d.planning?.assertReady(item);
     const fingerprint = binding.kind === "plan" ? contract.fingerprint
       : binding.kind === "candidate" ? (await this.candidate(item, contract)).fingerprint
       : (await this.evidence(item, contract)).fingerprint;
     if (binding.fingerprint !== fingerprint || binding.planFingerprint !== contract.fingerprint) return invalid("review is stale; plan, policy, environment or candidate changed");
+    if (binding.kind === "plan" && await this.d.planReview?.requestsChanges(item) && (comment?.trim().length ?? 0) < 10) {
+      return invalid("The AI plan review still requests changes. Approve with a reason (at least 10 characters) explaining why you accept the plan anyway, or request a revision.");
+    }
+    if (binding.kind !== "plan" && contract.unitPolicy) {
+      if (!this.d.completeness) return invalid("unit completeness barrier is unavailable");
+      await this.d.completeness.assertComplete(item, contract);
+    }
     if (binding.kind === "waiver") {
       const state = await this.evidence(item, contract);
       if (state.unwaivable.length || state.pending || !binding.requirements?.length ||
@@ -300,7 +390,8 @@ export class VerificationService implements VerificationContracts, VerificationA
       const workflow = await this.d.compiler.compile(ctx.workItem.spec.workflowRef!, nsOf(ctx.workItem));
       const policy = verificationPolicy(workflow);
       if (approval.spec.verification?.kind === "waiver") return { action: "block", questions: ["Verification waiver rejected. Supply missing evidence or revise the reviewed plan/policy."] };
-      return { action: "goto", stage: approval.spec.verification?.kind === "plan" ? policy.planningStage : policy.implementationStage };
+      return { action: "goto", stage: approval.spec.verification?.kind === "plan"
+        ? workflow.planning?.revisionStage ?? policy.planningStage : policy.implementationStage };
     }
     try { await this.validate(approval, "approve", approval.spec.comment); }
     catch (e) { if (!isStoreError(e, "Invalid")) throw e; return { action: "block", questions: [e.message] }; }
@@ -437,12 +528,15 @@ export class VerificationService implements VerificationContracts, VerificationA
     } catch (e) { if (!isStoreError(e, "Invalid")) throw e; return e.message; }
   }
 
-  async inspect(_p: Principal, name: string) {
+  async inspect(_p: Principal, name: string): ReturnType<VerificationActions["inspect"]> {
     const item = await this.item(name);
     const enabled = !!item.spec.workflowRef && !!(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).verification;
     const result = { enabled, workflow: item.spec.workflowRef?.name, publicationDisabled: item.spec.publicationDisabled === true };
     if (!enabled) return result;
-    try { return { ...result, plan: (await this.plan(item, false)).plan }; }
+    try {
+      const contract = await this.plan(item, false);
+      return { ...result, plan: contract.plan, gaps: planGaps(contract) };
+    }
     catch (e) { if (!isStoreError(e, "Invalid")) throw e; return { ...result, error: this.d.redactor.redact(e.message) }; }
   }
 

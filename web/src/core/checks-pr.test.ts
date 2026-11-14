@@ -18,6 +18,8 @@ function setup(buildResults: number[]) {
         commands.push(cmd);
         if (cmd.includes("tsc")) return { exitCode: buildResults[Math.min(builds++, buildResults.length - 1)], stdout: "tsc output", stderr: "" };
         if (cmd.includes("npm test")) return { exitCode: 0, stdout: "29 passing" };
+        if (cmd.includes("npm audit")) return { exitCode: 0, stdout: "found 0 vulnerabilities" };
+        if (cmd.includes("npm run test:")) return { exitCode: 0, stdout: "2 passing" };
         return undefined;
       },
     ],
@@ -79,7 +81,10 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
     assert.equal(d.workItem.status?.retries?.verify, 1, "one failed attempt consumed the retry budget");
     assert.ok(d.events.some((e) => e.spec.reason === "CheckFailed" && /build/.test(e.spec.message)));
     assert.ok(d.events.some((e) => e.spec.reason === "CheckPassed" && /unit-tests/.test(e.spec.message)));
-    assert.ok(d.events.some((e) => e.spec.reason === "CheckNotImplemented" && /security-scan/.test(e.spec.message)));
+    for (const check of ["integration-tests", "acceptance-criteria", "security-scan"]) {
+      assert.ok(d.events.some((e) => e.spec.reason === "CheckPassed" && e.spec.message.startsWith(check)), `${check} really runs`);
+    }
+    assert.ok(!d.events.some((e) => e.spec.reason === "CheckNotImplemented"), "no required check passes without a command");
     assert.ok(s.commands.filter((c) => c.includes("tsc")).length >= 2);
     assert.ok(d.runs.filter((r) => r.spec.step === "write-code").length >= 2, "implement ran again after the failure");
 
