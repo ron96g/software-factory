@@ -224,7 +224,7 @@ with a warning event; no auth, but the code stays auth-ready (rule 9).
 
 | Type | ID | Use |
 |---|---|---|
-| Sub-agent | `architecture-reviewer` (`.opencode/agents/`) | **Required** at the end of every §4 item and for non-trivial changes. Read-only. |
+| Sub-agent | `architecture-reviewer` (`.opencode/agents/`, `.github/agents/`) | **Required** at the end of every §4 item and for non-trivial changes. Read-only; the Copilot version uses caller-provided diffs and check results. |
 | Skill | `interface-first` (`.agents/skills/`) | Any change in `web/src/core` |
 | Skill | `add-extension` | Adding a new pluggable "type" (connector, gate, check, executor, …) |
 | Skill | `add-resource-kind` | Adding a new kind |
