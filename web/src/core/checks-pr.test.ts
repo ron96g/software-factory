@@ -87,7 +87,7 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
     assert.equal(pr.status?.result?.url, "https://github.com/ron96g/software-factory/pull/1");
     assert.deepEqual(s.published, [`${wi.metadata.name}-software-factory`]);
     assert.equal(s.prs[0].head, `factory/${wi.metadata.name}`);
-    assert.equal(s.prs[0].base, "master");
+    assert.equal(s.prs[0].base, "main");
     assert.equal(s.prs[0].draft, true);
     assert.match(s.prs[0].body, /Software Factory/);
     assert.equal(d.workItem.status?.stage, "ship");

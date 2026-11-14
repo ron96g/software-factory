@@ -1,0 +1,8 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: retrospective
+spec:
+  type: internal
+  defaults:
+    workflowRef: { name: factory-retrospective }

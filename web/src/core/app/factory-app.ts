@@ -64,6 +64,7 @@ import type {
   NewFollowUpInput,
   FollowUpRelations,
   VerificationApprovalGuard,
+  ApprovalDecisionGuard,
 } from "../ports/index.ts";
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
@@ -71,6 +72,7 @@ import { deriveGateEvidence } from "./gate-evidence.ts";
 import { fingerprint, followUpPreview, FOLLOW_UP_INPUT, LABEL_ORIGIN_UID } from "./work-item-followups.ts";
 
 export interface FactoryAppDeps {
+  approvalGuards?: ApprovalDecisionGuard[];
   verificationGuard?: VerificationApprovalGuard;
   reader: ResourceReader;
   writer: ResourceWriter;
@@ -176,7 +178,7 @@ export class FactoryApp
     );
     const describe = (r: Resource) => ({ name: r.metadata.name, description: r.metadata.annotations?.description?.trim() });
     return {
-      workflows: workflows.filter((w) => !subWorkflows.has(w.metadata.name)).map(describe),
+      workflows: workflows.filter((w) => !subWorkflows.has(w.metadata.name) && w.metadata.labels?.["factory.ai-dlc.io/internal"] !== "true").map(describe),
       repositories: repositories.filter((r) => !!r.spec.local?.path).map(describe),
       defaults: {
         workflow: manual?.spec.defaults?.workflowRef?.name,
@@ -259,7 +261,8 @@ export class FactoryApp
     if (input.context !== undefined && typeof input.context !== "string") throw new Error("context must be text");
     if (!Array.isArray(input.repositoryRefs) || !input.repositoryRefs.length || input.repositoryRefs.some((r) => typeof r !== "string")) throw new Error("select at least one repository by name");
     const cleaned = { ...input, title: this.d.redactor.redact(input.title), description: input.description === undefined ? undefined : this.d.redactor.redact(input.description), context: this.d.redactor.redact(input.context ?? "") };
-    const hash = fingerprint([this.ns, name, cleaned.requestId, cleaned.expectedRevision, cleaned.title, cleaned.description, cleaned.context, cleaned.workflowRef, cleaned.repositoryRefs]);
+    const hash = fingerprint([this.ns, name, cleaned.requestId, cleaned.expectedRevision, cleaned.title, cleaned.description, cleaned.context, cleaned.workflowRef, cleaned.repositoryRefs,
+      ...(input.authorizePublication === undefined ? [] : [input.authorizePublication])]);
     const target = `followup-${input.requestId}`;
     const existing = await this.d.reader.get<WorkItem>("WorkItem", this.ns, target);
     if (existing) {
@@ -268,6 +271,16 @@ export class FactoryApp
     }
     const preview = await this.previewWorkItemFollowUp(p, name, cleaned.context);
     if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before creating the follow-up.", "Conflict");
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin || origin.metadata.uid !== preview.snapshot.uid || origin.metadata.resourceVersion !== preview.snapshot.resourceVersion) {
+      throw new StoreError("Origin changed during creation; refresh the context preview", "Conflict");
+    }
+    if (origin?.spec.retrospective) {
+      const workflow = await this.d.compiler.compile({ name: input.workflowRef }, this.ns);
+      if (workflow.stages.some((s) => s.publish) && input.authorizePublication !== true) {
+        throw new StoreError("This workflow publishes before its ship approval. Explicit publication authorization is required; retrospective approval does not authorize it.", "Invalid");
+      }
+    }
     const item = await this.newItem(p, cleaned);
     item.metadata.name = target;
     item.metadata.labels = { [LABEL_ORIGIN_UID]: preview.snapshot.uid };
@@ -275,6 +288,9 @@ export class FactoryApp
     item.spec.context = preview.instructions || undefined;
     item.spec.originWorkItemRef = { name };
     item.spec.originSnapshot = preview.snapshot;
+    if (origin?.spec.retrospective && input.authorizePublication === true) {
+      item.metadata.annotations = { ...item.metadata.annotations, "factory.ai-dlc.io/publication-authorized-by": p.id };
+    }
     try {
       return await this.d.writer.create(item);
     } catch (e) {
@@ -522,6 +538,8 @@ export class FactoryApp
     if (!a) throw new Error(`approval ${name} not found`);
     if (a.spec.decision) throw new Error("already decided");
     await this.assertCurrentBlocker(a.spec.workItemRef.name, name);
+    for (const guard of this.d.approvalGuards ?? []) await guard.validate(a, decision);
+    if (a.spec.retrospective && !this.d.approvalGuards?.length) throw new Error("retrospective approval guard is unavailable");
     if (a.spec.verification) {
       if (!this.d.verificationGuard) throw new Error("verification approval guard is unavailable");
       await this.d.verificationGuard.validate(a, decision, comment);

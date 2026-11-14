@@ -1,6 +1,6 @@
 # ADR-0041: Evidence-backed agent retrospectives
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-13
 - **Deciders:** project owner
 - **Extends:** ADR-0002, ADR-0005, ADR-0012, ADR-0030, ADR-0039
@@ -98,8 +98,8 @@ or agents silently rewriting their own instructions, permissions or approval gat
   A human records verification or regression evidence; automated effectiveness scoring is deferred.
 
 ## Consequences
-- AGENTS.md X22 records this as planned, pending ADR acceptance and implementation. The glossary and architecture
-  distinguish planned retrospectives from existing knowledge and monitoring feedback.
+- AGENTS.md X22 tracks implementation. The glossary and architecture distinguish retrospectives from existing
+  knowledge and monitoring feedback.
 - Implement narrow capture, query and aggregation ports first, register the kind and extensions in the composition
   root, and preserve namespace scope, optimistic concurrency and controller status ownership.
   `RetrospectiveFeedback` is the only new resource kind; no new dependency, policy/aggregate kind or agent-accessible
@@ -111,8 +111,37 @@ or agents silently rewriting their own instructions, permissions or approval gat
   replays, superseded/simulated runs and repeated reports cannot inflate support; mixed versions/namespaces never
   group together; threshold crossing creates one investigation; human review survives restart; original items and
   publication permissions stay unchanged; source deletion preserves evidence; rejected cycles do not hot-loop.
-- This change records the proposal only: no kind registration, model/schema changes, workflow definitions, controllers
-  or UI are implemented by creating this ADR.
+- The original ADR change recorded the proposal only; acceptance and implementation follow below.
+
+### X22 implementation boundary (2026-11-14)
+- Accepted for implementation at the project owner's direction. `RetrospectiveFeedback` is registered as an
+  independent runtime kind. Triager, code-researcher and reviewer opt in through `Agent.spec.retrospectiveFeedback`.
+- Agent results allow at most three observations, with four evidence-text fields bounded to 1,500 characters each;
+  malformed observations produce durable Warning events instead of changing the business result. Candidate specs
+  are persisted in the terminal AgentRun status and a separate capture reconciler retries resource creation.
+  Failed runs with pinned workflow provenance also yield explicitly non-supporting controller observations.
+  A synchronous store deletion guard checks every cascade member inside the deletion transaction: a run with pending
+  evidence cannot be deleted until capture writes a content-bound metadata receipt. Capture/storage failure therefore
+  keeps candidates durable and returns an explicit conflict on deletion rather than losing evidence.
+- Scheduling pins the compiled root/subworkflow version map and the declaring workflow/stage. Capture requires
+  equality with the execution-time map for automatic eligibility; legacy or changed chains remain inspectable.
+  Reports initially target the reporting run's own stage. Missing/recreated origins cease counting, while captured
+  evidence survives. Window aging does not retroactively invalidate a historical review.
+- Operator configuration is `FactoryOptions.retrospectivePolicy`: a version, issue-code allowlist, minimum distinct
+  origins/roles and window days. Defaults are three origins, two roles and 14 days. Unknown codes require human
+  classification. There is no agent-accessible policy or feedback mutation tool.
+- Automatic investigation runs once per namespace/target-version/stage/issue group. Subsequent cycles require an
+  explicit human request; automatic post-cooldown cycles are not enabled in this increment. Snapshot membership
+  and durable feedback links deduplicate concurrent/restarted reconciliation and prevent recreation after deletion.
+  Up to 12 reports are captured per investigation, preferring distinct eligible origins/roles; truncation is visible
+  and an automatic snapshot must itself meet the threshold. Positive observations and counterevidence remain visible.
+- The internal, repository-free `factory-retrospective` workflow uses two distinct tool-free agents, produces
+  `improvement-proposal` and `improvement-review`, and ends at a durable human `retrospective-review` gate.
+  Proposal/evidence changes invalidate approval; restart from `analyze` obtains fresh AI and human review.
+  Gate rejection/drift consumes a shared bounded two-retry review budget. Close/defer never applies changes.
+- Human outcome records separate implementation references, loaded definition version and observed benefit/regression
+  evidence. Implementation uses the existing manual follow-up flow; selecting a publishing workflow requires explicit
+  publication authorization, recorded with the requesting principal. Proposal approval cannot provide that authority.
 
 ## Alternatives considered
 - Reuse `KnowledgeEntry`: conflates an unverified complaint with approved reusable knowledge and its retrieval policy.

@@ -28,6 +28,8 @@ export interface ContextSection {
   content: string;
   /** Who contributed it (provider name). */
   source: string;
+  /** Optional evidence revision pinned in run provenance for later review freshness checks. */
+  revision?: string;
 }
 
 export interface ExecutionContext {
@@ -98,6 +100,8 @@ export interface ProposedKnowledge {
 }
 
 export interface AgentResult {
+  /** Untrusted optional observations; FeedbackCapture validates and bounds them before persistence. */
+  feedback?: unknown;
   summary?: string;
   artifacts?: ProducedArtifact[];
   classification?: Classification;

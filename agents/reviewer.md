@@ -7,6 +7,7 @@ metadata:
     factory.ai-dlc.io/phase: inception,construction
 spec:
   role: Reviewer
+  retrospectiveFeedback: true
   skillRefs:
     - name: spec-review
     - name: code-review

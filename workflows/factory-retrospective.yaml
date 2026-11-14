@@ -1,0 +1,40 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: factory-retrospective
+  labels:
+    factory.ai-dlc.io/internal: "true"
+spec:
+  phases:
+    - name: improvement
+      stages:
+        - name: analyze
+          steps:
+            - name: propose
+              agentRef: { name: retrospective-analyst }
+              tools: []
+              inputs:
+                - artifactRef: { name: improvement-review }
+              outputs:
+                - artifactRef: { name: improvement-proposal }
+        - name: proposal-review
+          steps:
+            - name: challenge
+              agentRef: { name: retrospective-reviewer }
+              tools: []
+              inputs:
+                - artifactRef: { name: improvement-proposal }
+              outputs:
+                - artifactRef: { name: improvement-review }
+              outcomes: [approve, changes-requested]
+          loop:
+            when: { outcome: changes-requested }
+            goto: analyze
+            maxAttempts: 2
+          gate:
+            type: retrospective-review
+            approvers: [{ role: tech-lead }]
+            criteria:
+              - Evidence, counterevidence and target definition versions have been reviewed.
+              - The proposal has measurable acceptance tests and preserves human gates.
+              - Approval does not authorize implementation or publication.

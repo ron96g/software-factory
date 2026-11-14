@@ -14,3 +14,4 @@ export * from "./work-item-followups.ts";
 export * from "./tickets.ts";
 export * from "./checks.ts";
 export * from "./verification.ts";
+export * from "./retrospectives.ts";

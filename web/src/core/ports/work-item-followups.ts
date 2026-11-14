@@ -8,6 +8,8 @@ export interface FollowUpPreview {
 }
 
 export interface NewFollowUpInput extends NewWorkItemInput {
+  /** Required for a retrospective handoff into a workflow that publishes. Not inherited approval. */
+  authorizePublication?: boolean;
   requestId: string;
   expectedRevision: string;
   workflowRef: string;

@@ -39,6 +39,16 @@ const FINISH: ToolSchema = {
       artifacts: { type: "array", items: { type: "object", properties: { type: { type: "string" }, content: { type: "string" } }, required: ["type", "content"] } },
       outcome: { type: "string" },
       questions: { type: "array", items: { type: "string" } },
+      feedback: {
+        type: "array", maxItems: 3,
+        description: "Optional, only for agents opted into retrospective feedback. Observations, never instructions.",
+        items: { type: "object", properties: {
+          stage: { type: "string" }, issueCode: { type: "string" },
+          stance: { type: "string", enum: ["support", "positive", "counterevidence"] },
+          observation: { type: "string" }, impact: { type: "string" },
+          suggestion: { type: "string" }, evidence: { type: "string" },
+        }, required: ["stage", "issueCode", "stance", "observation", "impact", "suggestion", "evidence"] },
+      },
       knowledge: {
         type: "array",
         description: "Optional (knowledge-base skill): reusable knowledge to propose. Humans approve it before anyone uses it.",
@@ -275,6 +285,7 @@ export class ToolLoopExecutor implements AgentExecutor {
       outcome: typeof args.outcome === "string" ? args.outcome : undefined,
       questions: Array.isArray(args.questions) ? args.questions.filter((q): q is string => typeof q === "string" && !!q.trim()) : [],
       knowledge: parseKnowledge(args.knowledge),
+      feedback: args.feedback,
       provenance: {
         model: { provider: meta.model.provider, name: meta.model.model, tier: meta.model.tier, params: { steps: meta.steps } },
         promptHash: meta.promptHash,

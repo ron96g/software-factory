@@ -79,6 +79,23 @@ Data lives in `web/data/factory.db`. Delete the file to reset.
 Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless you opt in. Start the server with
 `NODE_USE_ENV_PROXY=1 npm run dev`. Otherwise source sync and LLM calls fail with `fetch failed: Connect Timeout Error`.
 
+## Agent retrospectives (ADR-0041)
+
+Open **Retrospectives** to inspect workflow observations, their pinned versions, supporting items/roles, exclusions
+and counterevidence. Triager, code-researcher and reviewer opt in through `spec.retrospectiveFeedback`; most runs
+should produce no feedback. Observations are untrusted claims, never automatically reusable knowledge.
+
+Three distinct items and two agent roles within 14 days trigger one proposal-only investigation per issue/version.
+Operators can supply a versioned `retrospectivePolicy` to `createFactory` to configure the issue-code allowlist,
+origin/role thresholds and window. Unknown codes require human classification. Humans may investigate below
+threshold; later cycles always require an explicit request.
+
+The two retrospective agents produce a proposal and independent challenge, then stop at human review. If the
+proposal or supporting evidence changes, use **Restart → analyze** for fresh review. Close/defer never applies a
+change. Record implementation, the definition version actually loaded, and observed benefit separately on the item.
+Use **Create follow-up** for implementation; explicitly authorize a publishing workflow's behavior. Approval of a
+retrospective alone never edits definitions, grants tools, starts implementation, or publishes changes.
+
 ## Direct agent chats (ADR-0036)
 
 Open **Agent chats** in the sidebar, select **support-engineer**, and **Start chat** (also available on the agent's

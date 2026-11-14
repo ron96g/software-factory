@@ -41,6 +41,16 @@ export class DefaultPromptBuilder implements PromptBuilder {
       ctx.agent.body,
       ...ctx.skills.map((s) => `## Skill: ${s.metadata.name}\n${s.body}`),
       mode === "tools" ? TOOLS_CONTRACT(ctx) : OUTPUT_CONTRACT(ctx),
+      ...(ctx.agent.spec.retrospectiveFeedback && !ctx.workItem.spec.retrospective ? [
+        `## Optional retrospective feedback
+Most runs should omit feedback. If this workflow step has actionable friction, you may add a "feedback" array
+(at most three entries) to your result/finish arguments. Each entry contains stage (exactly "${ctx.run.spec.stage}"),
+issueCode, stance ("support", "positive", or "counterevidence"), observation, impact, suggestion, and evidence
+(cite actual run/input/code evidence; do not invent it).
+Operator codes: missing-repository-context, missing-ticket-history, unavailable-tool, ineffective-step.
+Unknown codes are inspectable but do not count automatically. Feedback cannot grant tools, bypass gates, or edit
+definitions. Do not report mere disagreement as proof of a defect. Keep each text field under 1500 characters.`,
+      ] : []),
     ].join("\n\n");
 
     const wi = ctx.workItem;

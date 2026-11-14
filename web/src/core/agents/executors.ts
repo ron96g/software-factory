@@ -133,5 +133,6 @@ export function parseAgentJson(text: string): AgentResult {
     outcome: typeof raw.outcome === "string" ? raw.outcome : undefined,
     questions: arr<string>(raw.questions).filter((q) => typeof q === "string" && q.trim()),
     knowledge: parseKnowledge(raw.knowledge),
+    feedback: raw.feedback,
   };
 }

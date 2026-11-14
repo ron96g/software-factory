@@ -7,6 +7,7 @@ metadata:
     factory.ai-dlc.io/phase: inception
 spec:
   role: Triage Engineer
+  retrospectiveFeedback: true
   skillRefs:
     - name: work-item-classification
     - name: issue-triage

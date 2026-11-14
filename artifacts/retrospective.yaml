@@ -1,0 +1,15 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata:
+  name: improvement-proposal
+spec:
+  format: markdown
+  description: Evidence-backed proposed workflow improvement; not implementation or publication authority.
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata:
+  name: improvement-review
+spec:
+  format: markdown
+  description: Independent challenge of an improvement proposal and its supporting and contradicting evidence.

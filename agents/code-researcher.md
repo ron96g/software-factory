@@ -8,6 +8,7 @@ metadata:
     factory.ai-dlc.io/shared: "true"     # can be delegated to by any agent
 spec:
   role: Codebase Researcher
+  retrospectiveFeedback: true
   skillRefs:
     - name: codebase-research
     - name: knowledge-base

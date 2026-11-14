@@ -13,6 +13,7 @@ export interface CompiledStage {
   lifecyclePhase: string;
   /** Workflow that declared the stage (sub-workflows are inlined). */
   origin: string;
+  originNamespace?: string;
   mode?: string;
   steps: StepSpec[];
   gate?: GateSpec;
@@ -40,7 +41,7 @@ export type GateDecision =
   | { action: "advance" }
   | { action: "goto"; stage: string; /** Stage whose retry budget this consumes (ADR-0023, Q1). */ retryOf?: string }
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
-  | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"] }
+  | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"]; retrospective?: { fingerprint: string } }
   | { action: "block"; questions: string[] }
   | { action: "fail"; reason: string }
   /** Checks still running in the background; re-evaluate later (never block a reconcile). */

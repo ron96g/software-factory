@@ -51,7 +51,7 @@ spec:
     path: .                  # relative to the factory root (MVP: local checkouts only, ADR-0008)
   git:                       # ADR-0023: branches are pushed here and draft PRs opened
     url: https://github.com/ron96g/software-factory.git
-    defaultBranch: master
+    defaultBranch: main
     secretRef: { name: github-token }
   index:
     enabled: true

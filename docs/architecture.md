@@ -5,7 +5,7 @@
 | Category | Kinds | Who writes them | Where they live |
 |---|---|---|---|
 | **Definitions** (the factory "as code") | `Agent`, `Skill`, `Workflow`, `ArtifactType`, `Source`, `Repository`, `KnowledgeSource`, `ToolServer` | Platform team, via Git | this repo |
-| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `CheckRun` | UI, sync, agents; controllers write status | the factory's store/API |
+| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `RetrospectiveFeedback`, `CheckRun` | UI, sync, agents; controllers write status | the factory's store/API |
 
 Runtime objects follow the Kubernetes split: humans and sync write the **`spec`** (intent), and the factory
 controller writes the **`status`** (observed state). The UI is a view over `WorkItem` objects.
@@ -31,6 +31,9 @@ flowchart LR
   Agent -- writes artifacts / context --> WorkItem
   Agent -- proposes --> KE["KnowledgeEntry (human approves)"]
   KE -- approved, as context --> Agent
+  Agent -- observations --> RF["RetrospectiveFeedback (untrusted evidence)"]
+  RF -- "support threshold or human request" --> Retro["Retrospective WorkItem"]
+  Retro -- "proposal-only, human approval" --> Proposal["Improvement proposal"]
   KS["KnowledgeSource (docs, runbooks)"] -- searched by --> Agent
   Agent -- calls allowed tools --> TS["ToolServer (MCP)"]
   TS -- stdio --> KCR["Standalone Kubernetes CR MCP"]
@@ -50,6 +53,7 @@ flowchart LR
 | **CheckRun** | A named repository check pinned to its workspace tree, configuration and environment. Standalone jobs never advance items; verification-enabled workflows and recorded `run_check` calls share durable jobs, with plan/stage/round/attempt identity (ADR-0042). |
 | **Conversation** | Append-only dialogue. Explanation chats use existing evidence; standalone `agent-chat` invokes an opted-in agent with a curated read-only MCP tool intersection (ADR-0036). The Conversation controller serializes durable turns and retries model unavailability. No hidden WorkItem or AgentRun is created. |
 | **KnowledgeEntry** | A piece of reusable knowledge an agent proposed (or a human edited). Used by agents only after a human approves it (ADR-0030). It outlives the work item it came from. |
+| **RetrospectiveFeedback** | Immutable workflow observation with pinned origin identities and workflow versions. Untrusted evidence, not knowledge; independent lifetime. Its controller derives eligibility and durable investigation links (ADR-0041). |
 | **KnowledgeSource** | External docs agents can search, e.g. product docs or runbooks. `type: files` searches a local folder; other types (e.g. a vector store) plug in later. |
 | **Kubernetes CR MCP** | Independent read-only component (ADR-0035), not a new factory resource kind. A YAML catalog defines permitted external CR types, namespaces and directed object-reference relationships. The support engineer connects through the existing `ToolServer` adapter; the app neither stores cluster credentials nor imports the Kubernetes client. |
 | **code-researcher** (Agent) | A shared, read-only agent. Other agents **delegate** to it, for example: "What would it take to add X?" or "Where does this stack trace come from?" |
@@ -132,13 +136,33 @@ Recoverable handlers persist `Delivering` before POST. Restart recovery reads a 
 or the target status instead of repeating the write. Uncertain errors fail visibly for human inspection.
 Successful reply receipts survive a failed follow-on transition; no reply is automatically reposted.
 
-## Planned agent retrospectives (proposed ADR-0041)
+## Agent retrospectives (ADR-0041)
 
-[ADR-0041](adr/0041-agent-retrospectives.md) proposes workflow-scoped `RetrospectiveFeedback`, deterministic support
+[ADR-0041](adr/0041-agent-retrospectives.md) defines workflow-scoped `RetrospectiveFeedback`, deterministic support
 aggregation and a separate read-only `factory-retrospective` workflow producing human-reviewed improvement proposals.
 Feedback is untrusted historical evidence, not approved knowledge or agent instructions. Implementation follow-ups
 remain human-created and have independent gates; proposal approval never authorizes publication.
-X22 is planned only: no feedback kind, aggregation controller, retrospective workflow or UI is implemented yet.
+
+Scheduling pins the actual root/subworkflow version chain; agents can report only about the stage they executed.
+Terminal AgentRun status stores bounded, redacted candidates before a separate reconciler creates feedback. Capture
+retries never execute the business agent again. Replays, superseded/simulated/legacy runs, controller-only failures,
+positive observations, counterevidence and missing/replaced origins do not add automatic support. Evidence survives
+origin deletion. Human classification of an unknown code is audited; raw feedback is not ordinary agent context.
+Deletion of a run or its owning item conflicts while feedback capture is pending; a store guard checks this inside
+the cascade transaction. The independent feedback and a content-bound capture receipt must persist first.
+
+The default policy requires three distinct WorkItem UIDs and two reporter roles in 14 days. It triggers investigation,
+not authorization; repeated reports from an item count once. Groups never cross namespace, stage or definition chain.
+The first investigation is automatic at threshold; subsequent cycles require an explicit human request. Immutable
+snapshots (up to 12 reports) and feedback links prevent duplicate investigation after restart or deletion.
+
+Two different tool-free agents analyze and challenge the snapshot, then `retrospective-review` binds the exact proposal
+and current eligibility of its historical evidence. Rejection or drift permits at most two review retries; changed
+evidence can be reviewed afresh by restarting from `analyze`. New reports are visible without silently extending an
+existing approval. The Retrospectives view exposes counts, policy, evidence, exclusions, human classification and
+investigation links. The item view supports close/defer and separate human records for implementation, the loaded
+definition version, and measured benefit/regression. A publishing implementation follow-up requires explicit additional
+authorization; no automatic edits, workspace, commit, PR, merge, deployment or hot reload occur in a retrospective.
 
 ## Reliable verification (ADR-0042)
 

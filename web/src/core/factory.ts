@@ -83,11 +83,22 @@ import type { CheckResultClassifier } from "./ports/index.ts";
 import { DEFAULT_NAMESPACE } from "./model/resource.ts";
 import { ticketHandlers, ticketPublicationGate } from "./tickets/publication.ts";
 import type { SourceWritePolicy } from "./ports/index.ts";
+import type { RetrospectivePolicy } from "./model/kinds.ts";
+import { DefaultFeedbackCapture } from "./retrospectives/capture.ts";
+import { createFeedbackCaptureController } from "./retrospectives/capture-controller.ts";
+import { DefaultRetrospectiveAggregation } from "./retrospectives/aggregation.ts";
+import { DefaultRetrospectiveInvestigator } from "./retrospectives/investigator.ts";
+import { createRetrospectiveController } from "./retrospectives/controller.ts";
+import { RetrospectiveActions } from "./retrospectives/actions.ts";
+import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/review.ts";
+import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
+import { DEFAULT_RETROSPECTIVE_POLICY } from "./retrospectives/evidence.ts";
 
 /** Composition-root convenience alias; consumers depend on the individual ports. */
 type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport & WorkspaceSweeper;
 
 export interface FactoryOptions {
+  retrospectivePolicy?: RetrospectivePolicy;
   /** Repo root containing agents/, skills/, workflows/, … */
   definitionsRoot: string;
   /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
@@ -121,7 +132,7 @@ export async function createFactory(o: FactoryOptions) {
   // ── store & admission ────────────────────────────────────────────────
   const kinds = new KindRegistry();
   BUILTIN_KINDS.forEach((k) => kinds.register(k));
-  const runtime = new SqliteStore(db, clock);
+  const runtime = new SqliteStore(db, clock, [feedbackDeletionGuard]);
   const definitions = await new DefinitionStore(new GitDefinitionLoader(o.definitionsRoot)).init();
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
@@ -132,6 +143,7 @@ export async function createFactory(o: FactoryOptions) {
   admission.addValidator(refValidator());
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
   admission.addValidator(checkRunValidator(scopes));
+  admission.addValidator(retrospectiveValidator());
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
 
@@ -149,6 +161,10 @@ export async function createFactory(o: FactoryOptions) {
   ]) secrets.resolve(ref);
   const transcripts = new SqliteTranscriptStore(db, clock);
   const recorders = new DefaultRecorderFactory(transcripts, redactor);
+  const feedbackCapture = new DefaultFeedbackCapture(redactor, clock);
+  const retrospectiveAggregation = new DefaultRetrospectiveAggregation(store, clock, o.retrospectivePolicy ?? DEFAULT_RETROSPECTIVE_POLICY);
+  const retrospectiveReview = new RetrospectiveReview(store);
+  const retrospectives = new RetrospectiveActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, aggregation: retrospectiveAggregation, clock, redactor, events });
 
   // ── models, tools, skills ────────────────────────────────────────────
   const llmFactories = new Registry<LLMClientFactory>();
@@ -215,6 +231,7 @@ export async function createFactory(o: FactoryOptions) {
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
+      retrospectiveContext(store, redactor),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor })],
     models,
     recorders,
@@ -253,6 +270,7 @@ export async function createFactory(o: FactoryOptions) {
     gates.register(g.type, g);
   }
   for (const gate of verification.gates) gates.register(gate.type, gate);
+  gates.register(retrospectiveReview.type, retrospectiveReview);
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();
@@ -281,6 +299,10 @@ export async function createFactory(o: FactoryOptions) {
   // ── controllers ──────────────────────────────────────────────────────
   const reconcileErrors = new EventingReconcileErrorReporter({ reader: store, events, redactor, clock });
   const manager = new ControllerManager(store, o.log, reconcileErrors);
+  manager.register(createFeedbackCaptureController({ reader: store, writer: store, redactor }));
+  manager.register(createRetrospectiveController(store, new DefaultRetrospectiveInvestigator({
+    reader: store, writer: store, status: store, aggregation: retrospectiveAggregation, clock,
+  }), events, redactor));
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
@@ -300,6 +322,7 @@ export async function createFactory(o: FactoryOptions) {
   );
   const agentRunController = createAgentRunController({
     reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
+    feedback: feedbackCapture,
     gate: executionGate && { policy: executionGate, previews: contexts },
     onError: (message) => (o.log ?? console.error)(`[agentrun] ${message}`),
   });
@@ -325,6 +348,7 @@ export async function createFactory(o: FactoryOptions) {
   responders.register("refine-knowledge", new KnowledgeRefineResponder({ reader: store, transcripts, recorders, models, redactor }));
 
   const app = new FactoryApp({
+    approvalGuards: [retrospectiveReview],
     verificationGuard: verification,
     reader: store,
     writer: store,
@@ -356,6 +380,7 @@ export async function createFactory(o: FactoryOptions) {
     app,
     tickets,
     checkRuns,
+    retrospectives,
     verification,
     /** Streamable HTTP MCP endpoint handler (Request → Response). */
     mcp,

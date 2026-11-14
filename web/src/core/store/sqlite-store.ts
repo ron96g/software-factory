@@ -7,6 +7,7 @@ import {
   type Clock,
   type ListOptions,
   type ResourceStore,
+  type ResourceDeletionGuard,
   type Unsubscribe,
   type WatchEvent,
 } from "../ports/index.ts";
@@ -19,10 +20,12 @@ export class SqliteStore implements ResourceStore {
   private readonly listeners = new Set<{ fn: (e: WatchEvent) => void; kinds?: string[] }>();
   private readonly db: DatabaseSync;
   private readonly clock: Clock;
+  private readonly deletionGuards: ResourceDeletionGuard[];
 
-  constructor(db: DatabaseSync, clock: Clock) {
+  constructor(db: DatabaseSync, clock: Clock, deletionGuards: ResourceDeletionGuard[] = []) {
     this.db = db;
     this.clock = clock;
+    this.deletionGuards = deletionGuards;
     db.exec(`
       CREATE TABLE IF NOT EXISTS resources (
         namespace TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
@@ -110,10 +113,13 @@ export class SqliteStore implements ResourceStore {
   }
 
   async delete(kind: string, namespace: string, name: string): Promise<void> {
-    const obj = await this.get(kind, namespace, name);
-    if (!obj) throw new StoreError(`${kind} ${namespace}/${name} not found`, "NotFound");
     const deleted: Resource[] = [];
-    this.tx(() => this.deleteCascade(obj, deleted));
+    this.tx(() => {
+      const row = this.db.prepare("SELECT doc FROM resources WHERE namespace = ? AND kind = ? AND name = ?")
+        .get(namespace, kind, name) as { doc: string } | undefined;
+      if (!row) throw new StoreError(`${kind} ${namespace}/${name} not found`, "NotFound");
+      this.deleteCascade(JSON.parse(row.doc) as Resource, deleted);
+    });
     for (const d of deleted) this.emit({ type: "DELETED", object: d });
   }
 
@@ -153,6 +159,10 @@ export class SqliteStore implements ResourceStore {
   }
 
   private deleteCascade(obj: Resource, deleted: Resource[]): void {
+    for (const guard of this.deletionGuards) {
+      const reason = guard.check(obj);
+      if (reason) throw new StoreError(reason, "Conflict");
+    }
     const uid = obj.metadata.uid!;
     const children = this.db
       .prepare("SELECT r.doc FROM owners o JOIN resources r ON r.uid = o.uid WHERE o.owner_uid = ?")

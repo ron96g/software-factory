@@ -29,6 +29,11 @@ export interface StatusWriter {
   updateStatus<R extends Resource>(obj: R): Promise<R>;
 }
 
+/** Synchronous invariant checked for every object inside the cascade-deletion transaction. */
+export interface ResourceDeletionGuard {
+  check(obj: Resource): string | undefined;
+}
+
 export type WatchEventType = "ADDED" | "MODIFIED" | "DELETED";
 
 export interface WatchEvent<R extends Resource = Resource> {

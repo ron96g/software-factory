@@ -8,6 +8,7 @@ import type { Condition, DocumentResource, Ref, Resource } from "./resource.ts";
 
 export interface AgentSpec {
   role: string;
+  retrospectiveFeedback?: boolean;
   /** Required for agents with write/exec tools (ADR-0019). */
   sandboxRef?: Ref;
   model?: { tier?: string; providerRef?: Ref };
@@ -225,6 +226,15 @@ export interface WorkItemSpec {
   restart?: { id: string; stage?: string; requestedBy?: string };
   /** Explicit human hold; never implicitly lifted by restarting or approving a gate. */
   publicationDisabled?: boolean;
+  retrospective?: RetrospectiveSnapshot;
+  retrospectiveOutcome?: {
+    disposition: "open" | "deferred" | "closed";
+    by: string;
+    at: string;
+    implementation?: string;
+    loadedVersion?: string;
+    benefit?: string;
+  };
 }
 
 /** On artifacts that a restart replaced: kept for history, never used as agent input again. */
@@ -272,6 +282,8 @@ export interface AgentRunSpec {
   /** Set when this run re-runs another one (ADR-0012 replay). Replays never advance the workflow. */
   replayOf?: Ref;
   question?: string;
+  /** Compiler provenance at scheduling time, never reconstructed from today's definitions. */
+  workflow?: { versions: Record<string, string>; target: { namespace: string; name: string; version: string }; stage: string };
 }
 
 export interface AgentRunStatus {
@@ -289,8 +301,63 @@ export interface AgentRunStatus {
   retryAt?: string;
   /** Consecutive waits for the model (drives the backoff). */
   modelWaits?: number;
+  feedbackCandidates?: RetrospectiveFeedbackSpec[];
+  feedbackWarnings?: string[];
 }
 export type AgentRun = Resource<AgentRunSpec, AgentRunStatus>;
+
+export interface RetrospectivePolicy {
+  version: string;
+  issueCodes: string[];
+  minimumOrigins: number;
+  minimumRoles: number;
+  windowDays: number;
+}
+
+export interface RetrospectiveObservation {
+  stage: string;
+  issueCode: string;
+  stance: "support" | "positive" | "counterevidence";
+  observation: string;
+  impact: string;
+  suggestion: string;
+  evidence: string;
+}
+
+export interface RetrospectiveFeedbackSpec {
+  observation: RetrospectiveObservation;
+  target: { namespace: string; name: string; version: string; stage: string; workflowVersions: Record<string, string> };
+  reporter: { agent: string; role: string; kind: "agent" | "controller" };
+  origin: { workItem: string; workItemUid: string; agentRun: string; agentRunUid: string };
+  capturedAt: string;
+  executor: string;
+  verified: boolean;
+  replay: boolean;
+  superseded: boolean;
+  truncated: boolean;
+  review?: { disposition: "open" | "dismissed"; issueCode?: string; comment: string; by: string; at: string };
+  investigationRequest?: { id: string; by: string; at: string; revision: string };
+}
+
+export interface RetrospectiveFeedbackStatus {
+  phase: "Observed" | "Eligible" | "Investigating";
+  exclusions: string[];
+  conditions?: Condition[];
+  investigations?: { name: string; uid: string; cycle: string }[];
+}
+export type RetrospectiveFeedback = Resource<RetrospectiveFeedbackSpec, RetrospectiveFeedbackStatus>;
+
+export interface RetrospectiveSnapshot {
+  group: string;
+  cycle: string;
+  capturedAt: string;
+  policy: RetrospectivePolicy;
+  revision: string;
+  origins: number;
+  roles: string[];
+  truncated: boolean;
+  reports: { name: string; uid: string; fingerprint: string; eligible: boolean; exclusions: string[]; spec: RetrospectiveFeedbackSpec }[];
+}
 
 export type CheckOutcome = "Passed" | "AssertionFailed" | "SetupFailed" | "UnknownFailure" | "Unavailable" | "TimedOut" | "Cancelled" | "NotVerified";
 
@@ -359,6 +426,7 @@ export interface RunProvenance {
   definitions: Record<string, string>;
   /** Input artifact name → resourceVersion. */
   inputs: Record<string, string>;
+  contexts?: Record<string, string>;
   clarifications?: string[];
   promptHash?: string;
   /** Set when this run is a re-run of another. */
@@ -499,6 +567,7 @@ export interface ApprovalSpec {
   /** Approved despite blocking evidence (ADR-0027); the comment holds the reason. */
   overridden?: boolean;
   ticketPublication?: TicketPublication;
+  retrospective?: { fingerprint: string };
   verification?: {
     kind: "plan" | "candidate" | "waiver";
     fingerprint: string;

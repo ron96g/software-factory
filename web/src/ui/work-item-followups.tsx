@@ -1,5 +1,5 @@
 "use client";
-import { Accordion, Alert, Anchor, Button, Card, Group, Modal, MultiSelect, Select, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
+import { Accordion, Alert, Anchor, Button, Card, Checkbox, Group, Modal, MultiSelect, Select, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -52,6 +52,7 @@ export function FollowUpDialog({ item, onClose }: { item: WorkItem; onClose(): v
   const [loadingPreview, setLoadingPreview] = useState(true);
   const [creating, setCreating] = useState(false);
   const [pending, setPending] = useState<NewFollowUpInput | null>(null);
+  const [authorizePublication, setAuthorizePublication] = useState(false);
   useEffect(() => {
     let disposed = false;
     api<FollowUpPreview>(`${url}/preview`, { context: "" }).then((p) => {
@@ -84,6 +85,9 @@ export function FollowUpDialog({ item, onClose }: { item: WorkItem; onClose(): v
         <TextInput label="Title" value={title} onChange={(e) => setTitle(e.currentTarget.value)} required disabled={busy} />
         <Textarea label="Objective / description" placeholder="What should the new workflow accomplish?" value={description} onChange={(e) => setDescription(e.currentTarget.value)} autosize minRows={2} maxRows={8} disabled={busy} />
         <Select label="Workflow" placeholder="Choose a workflow" data={(options?.workflows ?? []).map((w) => ({ value: w.name, label: w.name }))} value={workflow} onChange={setWorkflow} allowDeselect={false} required disabled={busy} />
+        {item.spec.retrospective && <Checkbox
+          label="I explicitly authorize the selected workflow's publication behavior, including commit/push/draft PR before ship approval where configured. Retrospective approval alone does not authorize this."
+          checked={authorizePublication} onChange={(e) => setAuthorizePublication(e.currentTarget.checked)} disabled={busy} />}
         <MultiSelect label="Repositories" data={(options?.repositories ?? []).map((r) => r.name)} value={repositories} onChange={setRepos} disabled={busy} error={invalidRepos ? "An inherited repository is unavailable. Select usable repositories." : undefined} />
         <Textarea label="Additional context / instructions" description="Your instructions are kept separately from inherited evidence and shown to every agent. No silent truncation." placeholder="Address this issue by implementing a new feature that does XYZ..." value={context} onChange={(e) => setContext(e.currentTarget.value)} autosize minRows={4} maxRows={12} disabled={busy} error={context.length > 20000 ? "Instructions exceed the 20,000-character total context budget." : undefined} />
         {changed && <Alert color="yellow">The instructions or origin changed. Refresh the preview before creating; your edits are preserved.</Alert>}
@@ -109,7 +113,8 @@ export function FollowUpDialog({ item, onClose }: { item: WorkItem; onClose(): v
           <Button loading={creating} disabled={creating || loadingPreview || (!pending && (!options || !title.trim() || !workflow || !repositories.length || !!invalidRepos || !preview || changed || !!error || context.length > 20000))} onClick={async () => {
             if (pending) return submit(pending);
             if (!preview || !workflow) return;
-            await submit({ requestId, expectedRevision: preview.revision, title, description, context, workflowRef: workflow, repositoryRefs: repositories });
+            await submit({ requestId, expectedRevision: preview.revision, title, description, context, workflowRef: workflow, repositoryRefs: repositories,
+              ...(item.spec.retrospective ? { authorizePublication } : {}) });
           }}>{pending && !creating ? "Retry original request" : "Create & start workflow"}</Button>
         </Group>
       </Stack>

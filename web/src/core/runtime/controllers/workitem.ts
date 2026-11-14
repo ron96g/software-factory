@@ -227,6 +227,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             ] : stage.gate?.criteria,
             ticketPublication: decision.ticketPublication,
             verification: decision.verification,
+            retrospective: decision.retrospective,
           },
           status: { phase: "Pending" },
         };
@@ -292,6 +293,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       const wi = await d.reader.get<WorkItem>("WorkItem", namespace, name);
       if (!wi || (TERMINAL.has(wi.status?.phase ?? "") && !restartPending(wi))) return;
       try {
+        if (wi.spec.retrospectiveOutcome && wi.spec.retrospectiveOutcome.disposition !== "open") {
+          return write(wi, { phase: "Closed", blockedBy: undefined }, "Closed", `Retrospective ${wi.spec.retrospectiveOutcome.disposition} by ${wi.spec.retrospectiveOutcome.by}`);
+        }
         if (!wi.spec.workflowRef) return write(wi, { phase: "Failed", message: "no workflowRef" }, "Failed", "no workflowRef");
         const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
         if (restartPending(wi)) return restartItem(wi, wf, wi.spec.restart!);
@@ -369,6 +373,11 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                 skillRefs: step.skillRefs ?? [],
                 stage: stage.name,
                 step: step.name,
+                workflow: wf.versions && stage.originNamespace ? {
+                  versions: wf.versions,
+                  target: { namespace: stage.originNamespace, name: stage.origin, version: wf.versions[`${stage.originNamespace}/${stage.origin}`] ?? "" },
+                  stage: stage.name,
+                } : undefined,
                 inputs: (step.inputs ?? []).map((i) => i.artifactRef),
                 outputs: (step.outputs ?? []).map((o) => o.artifactRef),
                 modelTier: step.model?.tier,

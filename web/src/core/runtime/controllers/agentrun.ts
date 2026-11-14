@@ -20,6 +20,7 @@ import {
   type ResourceWriter,
   type StatusWriter,
   type TranscriptRecorderFactory,
+  type FeedbackCapture,
 } from "../../ports/index.ts";
 
 export interface AgentRunControllerDeps {
@@ -33,6 +34,7 @@ export interface AgentRunControllerDeps {
   recorders: TranscriptRecorderFactory;
   redactor: Redactor;
   onError: (message: string) => void;
+  feedback?: FeedbackCapture;
   /** ADR-0029: when set, runs wait (Pending) until the gate says ready, judged on a side-effect free preview. */
   gate?: { policy: ExecutionGate; previews: ExecutionContextPreviewer };
 }
@@ -65,6 +67,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       }
       const ctx = await d.contexts.create(current);
       const result = await d.executor.execute({ ...ctx, transcript: recorder });
+      const feedback = d.feedback?.prepare(ctx, result);
 
       const outputs: { name: string }[] = [];
       const superseded = (await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name))?.metadata.labels?.[LABEL_SUPERSEDED];
@@ -143,6 +146,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
           ...Object.fromEntries(ctx.skills.map((s) => [`Skill/${s.metadata.name}`, s.metadata.resourceVersion ?? ""])),
         },
         inputs: Object.fromEntries(ctx.inputs.map((a) => [a.metadata.name, a.metadata.resourceVersion ?? ""])),
+        contexts: Object.fromEntries(ctx.sections.filter((s) => s.revision).map((s) => [s.source, s.revision!])),
         clarifications: ctx.clarifications.map((c) => c.metadata.name),
         ...result.provenance,
         replayOf: run.spec.replayOf,
@@ -163,6 +167,8 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
           executor: provenance.executor,
           outputs,
           provenance,
+          feedbackCandidates: feedback?.candidates,
+          feedbackWarnings: feedback?.warnings,
           result: {
             summary: result.summary,
             outcome: result.outcome,

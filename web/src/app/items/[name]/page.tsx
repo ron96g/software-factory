@@ -35,6 +35,7 @@ import { EventTimeline } from "@/ui/event-timeline.tsx";
 import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
+import { RetrospectivePanel } from "@/ui/retrospectives.tsx";
 import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
 import { CheckRunsPanel } from "@/ui/check-runs.tsx";
 import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
@@ -102,6 +103,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       <StageProgress d={d} />
       {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
       <WorkItemFollowUps item={wi} />
+      {wi.spec.retrospective && <RetrospectivePanel item={wi} />}
       <Modal opened={chatOpen} onClose={() => setChatOpen(false)} title="Chat with an agent about this work item" size="lg">
         <Stack>
           <Text size="sm">The agent receives this item's details, runs, artifacts and human input, refreshed before each turn, and can use its allowed read-only MCP tools. The workflow and gates stay unchanged. Repository file access is not enabled by attaching the item.</Text>
@@ -129,9 +131,11 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       {/* Keyed by clarification: a new round's questions must start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
       {openAppr && !openAppr.spec.ticketPublication && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
-      <TicketActionsPanel key={wi.metadata.name} item={wi} />
-      <VerificationContractPanel key={wi.metadata.uid ?? wi.metadata.name} item={wi} />
-      <CheckRunsPanel key={wi.metadata.name} item={wi} />
+      {!wi.spec.retrospective && <>
+        <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />
+        <VerificationContractPanel key={wi.metadata.uid ?? wi.metadata.name} item={wi} />
+        <CheckRunsPanel key={`checks-${wi.metadata.name}`} item={wi} />
+      </>}
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
