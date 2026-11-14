@@ -10,13 +10,20 @@ import type { BranchPublisher, CodeHost, ConversationResponder, AgentTool, Clock
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
+import { inClusterRest } from "./k8s/rest.ts";
+import { RunPins } from "./store/run-pins.ts";
+import { K8sLoader } from "./k8s/loader.ts";
+import { StatusWriter, inClusterStatus } from "./k8s/status.ts";
+import { selectDefinitionLoader } from "./k8s/select.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
-import { CompositeStore, DefinitionStore, ScopeRouter } from "./store/composite-store.ts";
+import { snapshotAdmit } from "./admission/snapshot.ts";
+import { CompositeStore, DefinitionStore, type Admit, ScopeRouter } from "./store/composite-store.ts";
 import { AdmissionChain, AdmittedStore } from "./admission/chain.ts";
 import { nameValidator, namespaceDefaulter, refValidator, requiredFieldsValidator, sourceDefaultsMutator } from "./admission/builtins.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from "./transcripts/recorder.ts";
+import { K8sSecretResolver, SecretMissingError, inClusterSecrets } from "./k8s/secrets.ts";
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
 import { EventingReconcileErrorReporter } from "./runtime/reconcile-errors.ts";
@@ -80,7 +87,7 @@ import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
 import { VerificationService } from "./verification/service.ts";
 import { verificationContext } from "./verification/context.ts";
 import type { CheckResultClassifier } from "./ports/index.ts";
-import { DEFAULT_NAMESPACE } from "./model/resource.ts";
+import { DEFAULT_NAMESPACE, type Ref } from "./model/resource.ts";
 import { ticketHandlers, ticketPublicationGate } from "./tickets/publication.ts";
 import type { SourceWritePolicy } from "./ports/index.ts";
 import type { RetrospectivePolicy } from "./model/kinds.ts";
@@ -118,6 +125,10 @@ export interface FactoryOptions {
   /** SQLite file, or ":memory:". */
   databasePath: string;
   env?: Record<string, string | undefined>;
+  /** Test seam: REST port used by the in-cluster loader. */
+  k8sSecretsPort?: import("./k8s/secrets.ts").SecretsPort;
+  k8sStatusPort?: import("./k8s/status.ts").StatusPort;
+  k8sRest?: import("./k8s/loader.ts").RestPort;
   fetch?: typeof fetch;
   clock?: Clock;
   log?: (msg: string, err?: unknown) => void;
@@ -133,7 +144,22 @@ export async function createFactory(o: FactoryOptions) {
   const kinds = new KindRegistry();
   BUILTIN_KINDS.forEach((k) => kinds.register(k));
   const runtime = new SqliteStore(db, clock, [feedbackDeletionGuard]);
-  const definitions = await new DefinitionStore(new GitDefinitionLoader(o.definitionsRoot)).init();
+  let defAdmit: Admit | undefined;
+  const env0 = o.env ?? process.env;
+  const plural = (k: string) => BUILTIN_KINDS.find((b) => b.kind === k)!.plural;
+  const statusWriter = env0.KUBERNETES_SERVICE_HOST ? new StatusWriter(o.k8sStatusPort ?? inClusterStatus(env0, plural)) : undefined;
+  const defLoader = selectDefinitionLoader(
+    o.env ?? process.env,
+    () => new GitDefinitionLoader(o.definitionsRoot),
+    () => o.k8sRest ?? inClusterRest(o.env ?? process.env),
+    {
+      onReject: (r, why) => void statusWriter?.rejected(r, why),
+      onAccept: (r) => void statusWriter?.accepted(r),
+    },
+  );
+  const isK8s = defLoader instanceof K8sLoader;
+  const initialK8s = isK8s ? await defLoader.load() : [];
+  const definitions = await new DefinitionStore(isK8s ? { load: async () => [] } : defLoader, (c) => defAdmit?.(c)).init();
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
   const scopes = new GitModuleScopePlanner();
@@ -144,21 +170,69 @@ export async function createFactory(o: FactoryOptions) {
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
   admission.addValidator(checkRunValidator(scopes));
   admission.addValidator(retrospectiveValidator());
+  defAdmit = snapshotAdmit(admission);
   const store = new AdmittedStore(composite, admission);
+  if (isK8s) {
+    // Initial list goes through admission: as one bulk candidate, else one by one (invalid ones rejected + Ready=False).
+    const bulk = await definitions.bulkApply(initialK8s);
+    if (!bulk.ok) {
+      let pending = [...initialK8s];
+      for (let progress = true; progress && pending.length;) {
+        progress = false;
+        for (const r of [...pending]) {
+          if ((await definitions.apply(r)).ok) { pending = pending.filter((x) => x !== r); progress = true; void statusWriter?.accepted(r); }
+        }
+      }
+      for (const r of pending) void statusWriter?.rejected(r, (await definitions.apply(r)).reason ?? bulk.reason ?? "rejected");
+    } else for (const r of initialK8s) void statusWriter?.accepted(r);
+    (defLoader as K8sLoader).start(definitions);
+  }
   const events = new StoreEventRecorder(store);
 
   // ── secrets & transcripts ────────────────────────────────────────────
   const redactor = new SecretRedactor();
-  const secrets = new RedactingSecretResolver(new EnvSecretResolver(o.env ?? process.env), redactor);
+  const k8sSecrets = defLoader instanceof K8sLoader ? new K8sSecretResolver(o.k8sSecretsPort ?? inClusterSecrets(o.env ?? process.env)) : undefined;
+  const secrets = new RedactingSecretResolver(k8sSecrets ?? new EnvSecretResolver(o.env ?? process.env), redactor);
   // Queued chat text is persisted before any model/tool connection resolves its credentials.
   const [providers, servers, sources, repositories] = await Promise.all([
     store.list<ModelProvider>("ModelProvider"), store.list<ToolServer>("ToolServer"),
     store.list<Source>("Source"), store.list<Repository>("Repository"),
   ]);
-  for (const ref of [
-    ...providers.map((r) => r.spec.secretRef), ...servers.map((r) => r.spec.secretRef),
-    ...sources.map((r) => r.spec.connection?.secretRef), ...repositories.map((r) => r.spec.git?.secretRef),
-  ]) secrets.resolve(ref);
+  const collectRefs = async () => {
+    const [pv, sv, so, re] = await Promise.all([
+      definitions.list<ModelProvider>("ModelProvider"), definitions.list<ToolServer>("ToolServer"),
+      definitions.list<Source>("Source"), definitions.list<Repository>("Repository"),
+    ]);
+    return [
+      ...pv.map((r) => ({ ref: r.spec.secretRef as Ref | undefined, namespace: r.metadata.namespace, owner: r as import("./model/resource.ts").Resource })),
+      ...sv.map((r) => ({ ref: r.spec.secretRef as Ref | undefined, namespace: r.metadata.namespace, owner: r as import("./model/resource.ts").Resource })),
+      ...so.map((r) => ({ ref: r.spec.connection?.secretRef as Ref | undefined, namespace: r.metadata.namespace, owner: r as import("./model/resource.ts").Resource })),
+      ...re.map((r) => ({ ref: r.spec.git?.secretRef as Ref | undefined, namespace: r.metadata.namespace, owner: r as import("./model/resource.ts").Resource })),
+    ];
+  };
+  const refreshSecrets = async () => {
+    if (!k8sSecrets) return;
+    const rs = await collectRefs();
+    try { await k8sSecrets.refresh(rs); } catch (e) {
+      if (!(e instanceof SecretMissingError)) throw e;
+      // keep last good cache; report Ready=False on the owning CRs (no secret values involved)
+      for (const x of rs) if (x.ref?.name === e.secretName && (x.ref.namespace ?? x.namespace ?? "factory-system") === e.namespace) void statusWriter?.missingSecret(x.owner, e.secretName);
+    }
+  };
+  if (k8sSecrets) {
+    await refreshSecrets();
+    let t: ReturnType<typeof setTimeout> | undefined;
+    definitions.watch(() => { clearTimeout(t); t = setTimeout(() => void refreshSecrets().catch(() => {}), 50); }, ["ModelProvider", "ToolServer", "Source", "Repository"]);
+  } else for (const { ref } of await collectRefs()) secrets.resolve(ref);
+  // Run pinning: pin the definition snapshot while an AgentRun is active; unfinished runs re-pin on restart.
+  const runPins = new RunPins(db, definitions);
+  runPins.repinAll();
+  store.watch((e) => {
+    const id = `${e.object.metadata.namespace ?? "default"}/${e.object.metadata.name}`;
+    const phase = (e.object as { status?: { phase?: string } }).status?.phase;
+    if (e.type === "DELETED" || phase === "Succeeded" || phase === "Failed") runPins.end(id);
+    else if (phase === "Running" && runPins.versionOf(id) === undefined) runPins.start(id);
+  }, ["AgentRun"]);
   const transcripts = new SqliteTranscriptStore(db, clock);
   const recorders = new DefaultRecorderFactory(transcripts, redactor);
   const feedbackCapture = new DefaultFeedbackCapture(redactor, clock);

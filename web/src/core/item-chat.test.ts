@@ -83,7 +83,7 @@ test("X6: all questions answered with \"Don't know\" is accepted; the agent is t
     const { DefaultPromptBuilder } = await import("./agents/prompt-builder.ts");
     const prompt = new DefaultPromptBuilder().build({
       run: { spec: { stage: "triage", step: "x", outputs: [] } },
-      agent: { body: "" },
+      agent: { body: "", spec: {} },
       skills: [],
       workItem: { metadata: { name }, spec: { title: "t", sourceRef: { name: "manual" } } },
       inputs: [],
