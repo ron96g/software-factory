@@ -50,6 +50,18 @@ test("Gates stay human: the MCP surface offers no tool to approve, reject, overr
   });
 });
 
+test("AC-4: truncated tool results are flagged in the transcript", async () => {
+  const { DefaultRecordedToolTurns } = await import("../core/agents/recorded-tool-turns.ts");
+  const { formatMarker } = await import("../core/agents/truncation.ts");
+  const records: any[] = [];
+  await new DefaultRecordedToolTurns().invoke({
+    call: { name: "read_file", arguments: {} },
+    tool: { invoke: async () => `x\n${formatMarker("read_file", 5, "startLine=9")}` },
+    transcript: { record: async (r: any) => { records.push(r); } }, agent: "a", step: "s", turnId: "t",
+  } as any);
+  assert.deepEqual(records.find((r) => r.role === "tool-result").meta.truncated, { omitted: "5", next: "startLine=9" });
+});
+
 test("AC-30: one planner run, independent review, and withdrawn answers no longer steer planning", async () => {
   const calls: string[] = [];
   const plannerPrompts: string[] = [];
