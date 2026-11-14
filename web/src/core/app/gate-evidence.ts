@@ -28,8 +28,10 @@ export function parseVerdict(text: string | undefined): "pass" | "partial" | "fa
   return v.startsWith("pass") ? "pass" : v.startsWith("fail") ? "fail" : "partial";
 }
 
-export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[]; artifacts?: Artifact[] }): GateEvidence {
+export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[]; artifacts?: Artifact[]; verified?: boolean }): GateEvidence {
   const items: EvidenceItem[] = [];
+  const restart = input.verified && input.events.filter((event) => event.spec.reason === "Restarted").at(-1)?.metadata.creationTimestamp;
+  const events = restart ? input.events.filter((event) => !event.metadata.creationTimestamp || event.metadata.creationTimestamp >= restart) : input.events;
   // Evidence recorded before the latest code change is stale (e.g. a check that failed before the developer fixed it).
   const lastCodeChange = input.runs
     .filter((r) => !r.spec.replayOf && r.status?.phase === "Succeeded" && r.spec.outputs?.some((o) => o.name === "source-code"))
@@ -77,7 +79,7 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
 
   // Checks: the latest event per check name decides (a later pass clears an earlier failure).
   const checks = new Map<string, FactoryEvent>();
-  for (const e of input.events) {
+  for (const e of events) {
     if (!["CheckPassed", "CheckFailed", "CheckError"].includes(e.spec.reason)) continue;
     const name = e.spec.message.split(/[ :]/)[0];
     const prev = checks.get(name);
@@ -90,7 +92,7 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
     items.push({ severity, label: `Check: ${name} ${verb}${verb !== "passed" ? staleNote(at) : ""}`, detail: e.spec.message.split("\n")[0] });
   }
 
-  if (input.events.some((e) => e.spec.reason === "LoopExhausted")) {
+  if (events.some((e) => e.spec.reason === "LoopExhausted")) {
     items.push({ severity: "warning", label: "AI review loop exhausted", detail: "Blocking AI review findings may remain unresolved." });
   }
   const open = input.clarifications.filter((c) => !c.spec.answers?.length);

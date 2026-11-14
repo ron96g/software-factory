@@ -30,6 +30,7 @@ export interface ExecResult {
   /** Output was cut to the adapter's limit. */
   truncated: boolean;
   durationMs: number;
+  termination?: { kind: "exit" | "timeout" | "signal" | "spawn-error"; signal?: string };
 }
 
 export interface SandboxExec {

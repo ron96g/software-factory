@@ -3,7 +3,7 @@
  * Gate types and automated checks are extension points (Strategy + Registry).
  */
 import type { Ref } from "../model/resource.ts";
-import type { GateSpec, StageSpec, StepSpec, WorkItem } from "../model/kinds.ts";
+import type { GateSpec, StageSpec, StepSpec, WorkItem, TicketPublication } from "../model/kinds.ts";
 
 export interface CompiledStage {
   name: string;
@@ -20,6 +20,8 @@ export interface CompiledStage {
 
 export interface CompiledWorkflow {
   name: string;
+  versions?: Record<string, string>;
+  verification?: import("../model/kinds.ts").WorkflowSpec["verification"];
   stages: CompiledStage[];
   stage(name: string): CompiledStage | undefined;
   /** Stage after `name`, or undefined at the end. */
@@ -38,7 +40,7 @@ export type GateDecision =
   | { action: "advance" }
   | { action: "goto"; stage: string; /** Stage whose retry budget this consumes (ADR-0023, Q1). */ retryOf?: string }
   | { action: "end"; phase: "Done" | "Closed"; reason: string }
-  | { action: "await-approval" }
+  | { action: "await-approval"; ticketPublication?: TicketPublication; verification?: import("../model/kinds.ts").ApprovalSpec["verification"] }
   | { action: "block"; questions: string[] }
   | { action: "fail"; reason: string }
   /** Checks still running in the background; re-evaluate later (never block a reconcile). */

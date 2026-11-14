@@ -12,6 +12,7 @@ import {
   Group,
   List,
   Menu,
+  Modal,
   Stack,
   Tabs,
   Text,
@@ -32,6 +33,11 @@ import { MarkdownView } from "@/ui/markdown.tsx";
 import { ChatPanel, RunDrawer } from "@/ui/run-inspector.tsx";
 import { EventTimeline } from "@/ui/event-timeline.tsx";
 import { RunList } from "@/ui/run-list.tsx";
+import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
+import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
+import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
+import { CheckRunsPanel } from "@/ui/check-runs.tsx";
+import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
 
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
@@ -42,6 +48,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const { data: d, error } = useLive<WorkItemDetail>(`/api/workitems/${name}`, (n) => n.workItem === name || n.name === name);
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
+  const { data: chats, error: chatsError } = useLive<Conversation[]>(chatOpen ? `/api/chats?workItem=${encodeURIComponent(name)}` : null, (n) => n.kind === "Conversation");
 
   if (error) return <Alert color="red" title="Error">{error}</Alert>;
   if (!d) return <Text c="dimmed">Loading…</Text>;
@@ -59,7 +68,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Group>
       </Anchor>
 
-      <Group justify="space-between" align="flex-start" wrap="nowrap">
+      <Group justify="space-between" align="flex-start">
         <div>
           <Group gap="sm">
             <Title order={2}>{wi.spec.title}</Title>
@@ -80,15 +89,32 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
             {" · "}workflow {wi.spec.workflowRef?.name} · repos {(wi.spec.repositoryRefs ?? []).map((r) => r.name).join(", ") || "–"}
           </Text>
         </div>
-        <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
+        <Group gap="sm">
           <RestartMenu d={d} />
           <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)}>
             Ask about this item
           </Button>
+          <Button variant="light" leftSection={<IconRobot size={16} />} onClick={() => setChatOpen(true)}>Chat with agent</Button>
+          <Button variant="light" onClick={() => setFollowUpOpen(true)}>Create follow-up</Button>
         </Group>
       </Group>
 
       <StageProgress d={d} />
+      {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
+      <WorkItemFollowUps item={wi} />
+      <Modal opened={chatOpen} onClose={() => setChatOpen(false)} title="Chat with an agent about this work item" size="lg">
+        <Stack>
+          <Text size="sm">The agent receives this item's details, runs, artifacts and human input, refreshed before each turn, and can use its allowed read-only MCP tools. The workflow and gates stay unchanged. Repository file access is not enabled by attaching the item.</Text>
+          <Text size="sm" fw={600}>Context: {wi.spec.title}</Text>
+          <StartAgentChat workItemName={name} />
+          {chatsError && <Alert color="red">{chatsError}</Alert>}
+          {!!chats?.length && <Stack gap="xs">
+            <Text size="sm" fw={600}>Resume a conversation</Text>
+            {chats.map((c) => <Anchor key={c.metadata.name} component={Link} href={`/chats/${c.metadata.name}`}>{c.spec.title || c.metadata.name} ({c.spec.agentRef?.name})</Anchor>)}
+          </Stack>}
+        </Stack>
+      </Modal>
+      {wi.spec.conversationRef && <Anchor component={Link} href={`/chats/${wi.spec.conversationRef.name}`} size="sm">Originating agent conversation</Anchor>}
 
       {st?.phase === "Waiting" && (
         <Alert color="violet" icon={<IconHourglass />} title="Waiting">
@@ -102,7 +128,10 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       )}
       {/* Keyed by clarification: a new round's questions must start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
-      {openAppr && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
+      {openAppr && !openAppr.spec.ticketPublication && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} evidence={d.evidence} onOpenRun={setOpenRun} />}
+      <TicketActionsPanel key={wi.metadata.name} item={wi} />
+      <VerificationContractPanel key={wi.metadata.uid ?? wi.metadata.name} item={wi} />
+      <CheckRunsPanel key={wi.metadata.name} item={wi} />
 
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
@@ -246,6 +275,7 @@ function ContextCard({ d }: { d: WorkItemDetail }) {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const hasRuns = d.runs.length > 0;
+  const available = 20000 - (wi.spec.originSnapshot?.content.length ?? 0);
   return (
     <Card className="sf-surface" mb="md">
       <Group justify="space-between" mb={editing || wi.spec.context ? "xs" : 0}>
@@ -279,6 +309,7 @@ function ContextCard({ d }: { d: WorkItemDetail }) {
             placeholder={"e.g. Environment: prod (eu-central). The team uses the Rover CLI, not the UI.\nAlready tried: re-applying the subscription."}
             value={text}
             onChange={(e) => setText(e.currentTarget.value)}
+            error={text.length > available ? `At most ${available} characters fit alongside inherited evidence.` : undefined}
             data-autofocus
           />
           <Group justify="flex-end">

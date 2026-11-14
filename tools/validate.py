@@ -20,9 +20,12 @@ REF_KINDS = {
     "sourceRef": "Source",
     "sourceRefs": "Source",
     "repositoryRefs": "Repository",
+    "repositoryRef": "Repository",
+    "workspaceRef": "Workspace",
     "providerRef": "ModelProvider",
     "sandboxRef": "SandboxProfile",
     "toolServerRefs": "ToolServer",
+    "conversationRef": "Conversation",
 }
 
 
@@ -40,6 +43,9 @@ def load_all():
         if path.parent.name in ("agents", "skills") and path.parent.parent == ROOT:
             docs += [(path, d) for d in load_markdown(path)]
     for path in ROOT.glob("**/*.yaml"):
+        # Standalone components validate their own configuration schemas.
+        if path.relative_to(ROOT).parts[0] == "components":
+            continue
         if {".venv", "node_modules", ".next", ".serena", "data", ".workspaces"} & set(path.relative_to(ROOT).parts):
             continue
         docs += [(path, d) for d in yaml.safe_load_all(path.read_text()) if d]

@@ -14,6 +14,7 @@ import {
   type ExecutionContextPreviewer,
   type ExecutionGate,
   type InitialKeys,
+  type Lifecycle,
   type Redactor,
   type ResourceReader,
   type ResourceWriter,
@@ -31,6 +32,7 @@ export interface AgentRunControllerDeps {
   executor: AgentExecutor;
   recorders: TranscriptRecorderFactory;
   redactor: Redactor;
+  onError: (message: string) => void;
   /** ADR-0029: when set, runs wait (Pending) until the gate says ready, judged on a side-effect free preview. */
   gate?: { policy: ExecutionGate; previews: ExecutionContextPreviewer };
 }
@@ -42,8 +44,9 @@ export interface AgentRunControllerDeps {
 const MODEL_RETRY_BASE_MS = 60_000;
 const MODEL_RETRY_MAX_MS = 15 * 60_000;
 
-export function createAgentRunController(d: AgentRunControllerDeps): Controller & InitialKeys {
+export function createAgentRunController(d: AgentRunControllerDeps): Controller & InitialKeys & Pick<Lifecycle, "stop"> {
   const inFlight = new Set<string>();
+  const jobs = new Set<Promise<void>>();
   const seenSinceStart = new Set<string>();
 
   async function execute(key: string, run: AgentRun) {
@@ -135,6 +138,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       const provenance: RunProvenance = {
         executor: d.executor.name,
         definitions: {
+          ...Object.fromEntries(Object.entries(ctx.workflowVersions ?? {}).map(([key, value]) => [`Workflow/${key}`, value])),
           [`Agent/${ctx.agent.metadata.name}`]: ctx.agent.metadata.resourceVersion ?? "",
           ...Object.fromEntries(ctx.skills.map((s) => [`Skill/${s.metadata.name}`, s.metadata.resourceVersion ?? ""])),
         },
@@ -172,6 +176,10 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
     } catch (e) {
       const message = d.redactor.redact(e instanceof Error ? e.message : String(e)).trim(); // ADR-0015
       const latest = await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name);
+      if (latest?.status?.phase === "Succeeded") {
+        // Retrying audit publication must not rerun an already completed business agent.
+        throw e;
+      }
       if (latest && isModelUnavailable(e)) {
         // Quota / rate limit is not the agent's fault: wait and retry instead of failing the work item.
         const waits = (latest.status?.modelWaits ?? 0) + 1;
@@ -198,6 +206,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
   return {
     name: "agentrun",
     primaryKind: "AgentRun",
+    stop: async () => { await Promise.all([...jobs]); },
     watches: ["AgentRun"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>
@@ -237,7 +246,10 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         throw e;
       }
       inFlight.add(key);
-      void execute(key, run);
+      const job = execute(key, run)
+        .catch((e: unknown) => d.onError(d.redactor.redact(e instanceof Error ? e.message : String(e))))
+        .finally(() => jobs.delete(job));
+      jobs.add(job);
     },
   };
 }

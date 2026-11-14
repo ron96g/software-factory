@@ -195,6 +195,7 @@ export interface CodeSearcher {
  * `read` and `search` come from the workspace (no sandbox needed); `exec`, `write`, `artifacts` only from a sandbox.
  */
 export interface ToolCapabilities {
+  checks?: { run(input: { workspace: string; check: string; requestId: string }): Promise<import("../model/kinds.ts").CheckRun> };
   read?: FileReader;
   search?: CodeSearcher;
   /** ADR-0030: approved knowledge + docs, already scoped to the run's repositories/workflow. Read-only. */
@@ -226,6 +227,7 @@ export interface AgentTool extends AgentToolInfo {
 // ── Outbox (outbound side effects) ───────────────────────────────────────
 
 export interface OutboxDelivery {
+  namespace: string;
   /** Resolved source, when the message targets a source item. */
   source?: Source;
   externalId?: string;

@@ -1,5 +1,4 @@
-import type { Agent, AgentRun, Approval, Artifact, Clarification, Repository, Skill, WorkItem, Workspace } from "../model/kinds.ts";
-import type { Ref } from "../model/resource.ts";
+import type { Agent, AgentRun, Approval, Artifact, Clarification, Repository, WorkItem, Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import type {
   ContextProvider,
@@ -11,10 +10,12 @@ import type {
   ResourceReader,
   TranscriptRecorder,
   TranscriptRecorderFactory,
+  WorkflowCompiler,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { LABEL_REPLAY } from "./replayer.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
+import { resolveSkills } from "./skills.ts";
 
 const PREVIEW_RECORDER: TranscriptRecorder = {
   ref: { namespace: "", id: "" },
@@ -29,6 +30,7 @@ export interface ContextFactoryDeps {
   models: ModelResolver;
   recorders: TranscriptRecorderFactory;
   environments: ExecutionEnvironmentSelector;
+  compiler?: WorkflowCompiler;
 }
 
 /** Assembles everything an executor needs: definitions, inputs, human answers, repos, enrichment, model. */
@@ -59,7 +61,7 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
     if (!workItem) throw new Error(`work item "${run.spec.workItemRef.name}" not found`);
 
     const skillRefs = run.spec.skillRefs.length ? run.spec.skillRefs : agent.spec.skillRefs ?? [];
-    const skills = await this.skillsWithRequires(skillRefs, ns);
+    const skills = await resolveSkills(reader, skillRefs, ns);
 
     const owned = { kind: "WorkItem", name: workItem.metadata.name, namespace: ns };
     // Artifacts produced by replays or superseded by a restart never become inputs of the real workflow (ADR-0012).
@@ -119,6 +121,8 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
       repositories,
       workspaces,
       sections: [],
+      workflowVersions: workItem.spec.workflowRef && this.d.compiler
+        ? (await this.d.compiler.compile(workItem.spec.workflowRef, ns)).versions : undefined,
       transcript: forExecution ? await this.d.recorders.forRun(run) : PREVIEW_RECORDER,
       model,
       sandbox,
@@ -130,16 +134,4 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
     return ctx;
   }
 
-  private async skillsWithRequires(refs: Ref[], ns: string): Promise<Skill[]> {
-    const out = new Map<string, Skill>();
-    const visit = async (ref: Ref) => {
-      if (out.has(ref.name)) return;
-      const s = await resolveRef<Skill>(this.d.reader, "Skill", ref, ns);
-      if (!s) throw new Error(`skill "${ref.name}" not found`);
-      out.set(ref.name, s);
-      for (const r of s.spec.requires ?? []) await visit(r);
-    };
-    for (const r of refs) await visit(r);
-    return [...out.values()];
-  }
 }

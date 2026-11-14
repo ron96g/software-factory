@@ -17,6 +17,7 @@ const PHASE_COLORS: Record<string, MantineColor> = {
   Succeeded: "teal",
   Proposed: "yellow",
   Approved: "teal",
+  Delivering: "blue",
   Rejected: "red",
   Retired: "gray",
 };

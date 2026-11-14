@@ -1,5 +1,5 @@
 import type { Source } from "../../model/kinds.ts";
-import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector } from "../../ports/index.ts";
+import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
 type Adf = { type?: string; text?: string; content?: Adf[] };
@@ -50,7 +50,7 @@ const DIALECTS: Record<string, JiraDialect> = {
  * Jira connector. `connection.deployment`: `cloud` (default) or `datacenter`. Token from `connection.secretRef` (ADR-0015).
  * Filter: `sync.filter.jql`.
  */
-export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader {
+export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter {
   readonly type = "jira";
   private readonly secrets: SecretResolver;
   private readonly f: Fetch;
@@ -72,10 +72,12 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
     return base;
   }
 
-  private async call(source: Source, path: string, init: RequestInit = {}): Promise<Response> {
+  private async call(source: Source, path: string, init: RequestInit = {}, permission: "comment" | "reply" | "transition" = "comment"): Promise<Response> {
     const method = (init.method ?? "GET").toUpperCase();
-    if (method !== "GET" && !source.spec.sync?.bidirectional) {
-      throw new Error(`source ${source.metadata.name} is read-only (sync.bidirectional is not true): refusing ${method} ${path}`);
+    if (method !== "GET") {
+      const allowed = permission === "comment" ? source.spec.sync?.bidirectional
+        : permission === "reply" ? Array.isArray(source.spec.writeBack?.replyVisibilities) && source.spec.writeBack.replyVisibilities.length > 0 : source.spec.writeBack?.transitions === true;
+      if (!allowed) throw new Error(`source ${source.metadata.name} is read-only for ${permission}: refusing ${method} ${path}`);
     }
     const email = source.spec.connection?.email as string | undefined;
     const token = this.secrets.resolve(source.spec.connection?.secretRef);
@@ -123,5 +125,48 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
     return body.comments
       .map((c) => ({ author: c.author.displayName, body: adfToText(c.body), createdAt: new Date(c.created).toISOString() }))
       .filter((c) => !since || c.createdAt >= since);
+  }
+
+  async publishReply(source: Source, externalId: string, body: string, visibility: "public" | "internal"): Promise<{ id: string }> {
+    if (!Array.isArray(source.spec.writeBack?.replyVisibilities) || !source.spec.writeBack.replyVisibilities.includes(visibility)) throw new Error(`source does not allow ${visibility} replies`);
+    const res = await this.call(source, `/rest/servicedeskapi/request/${encodeURIComponent(externalId)}/comment`, {
+      method: "POST", body: JSON.stringify({ body, public: visibility === "public" }),
+    }, "reply");
+    const reply = await res.json() as { id?: string };
+    if (typeof reply.id !== "string" || !reply.id) throw new Error("Jira did not return a comment receipt; delivery outcome requires verification");
+    return { id: reply.id };
+  }
+
+  async findReply(source: Source, externalId: string, marker: string, visibility: "public" | "internal") {
+    let start = 0;
+    for (let page = 0; page < 100; page++) {
+      const res = await this.call(source, `/rest/servicedeskapi/request/${encodeURIComponent(externalId)}/comment?start=${start}&limit=100`);
+      const data = await res.json() as { values: { id: string; body: string; public: boolean }[]; isLastPage: boolean };
+      const match = data.values.find((c) => c.public === (visibility === "public") && c.body.includes(marker));
+      if (match) return { id: match.id };
+      if (data.isLastPage) return null;
+      if (!data.values.length) throw new Error("Jira returned an empty non-final comment page");
+      start += data.values.length;
+    }
+    throw new Error("Jira receipt search exceeded 10,000 comments; verify delivery manually");
+  }
+
+  async ticketState(source: Source, externalId: string): Promise<TicketState> {
+    const path = `${this.dialect(source).api}/issue/${encodeURIComponent(externalId)}`;
+    const issue = await (await this.call(source, `${path}?fields=status`)).json() as { fields: { status: { id: string; name: string } } };
+    const data = await (await this.call(source, `${path}/transitions?expand=transitions.fields`)).json() as {
+      transitions: { id: string; name: string; to: { id: string; name: string }; fields?: Record<string, { required?: boolean; hasDefaultValue?: boolean }> }[];
+    };
+    if (!issue.fields.status?.id || !issue.fields.status.name || !Array.isArray(data.transitions)) throw new Error("Jira returned invalid ticket state/transitions");
+    return { ...issue.fields.status, transitions: data.transitions.map((t) => ({
+      id: t.id, name: t.name, to: t.to,
+      requiresFields: Object.values(t.fields ?? {}).some((f) => f.required && !f.hasDefaultValue),
+    })) };
+  }
+
+  async transitionTicket(source: Source, externalId: string, transitionId: string): Promise<void> {
+    await this.call(source, `${this.dialect(source).api}/issue/${encodeURIComponent(externalId)}/transitions`, {
+      method: "POST", body: JSON.stringify({ transition: { id: transitionId } }),
+    }, "transition");
   }
 }

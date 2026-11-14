@@ -62,8 +62,11 @@ spec:
     mode: poll
     pollInterval: 5m
     filter: { jql: "project = SDDHEI AND labels = factory AND statusCategory != Done ORDER BY updated DESC" }
-    # Read-only: customers would see the factory's comments. Enforced by the outbox and the Jira connector.
+    # No automatic clarification posting or inbound comment-answer sync.
     bidirectional: false
+  writeBack:
+    replyVisibilities: [public, internal]  # only after explicit human publication review
+    transitions: true                    # only live Jira transitions confirmed by a human
   mapping:
     title: fields.summary
     description: fields.description

@@ -5,6 +5,11 @@ spec: { format: markdown, description: "Raw input: manual intent, issue, or moni
 ---
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: ArtifactType
+metadata: { name: validation-plan }
+spec: { format: json, description: "Reviewed criterion-to-named-check mappings and same-environment preflights; policy defines commands and mandatory minimums (ADR-0042)." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
 metadata: { name: triage-decision }
 spec: { format: yaml, description: "Outcome (accept|needs-info|duplicate|reject), type, priority, size, and rationale." }
 ---

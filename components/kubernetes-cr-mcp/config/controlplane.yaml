@@ -1,0 +1,44 @@
+# Copy outside Git and set the namespaces you permit agents to read.
+# Forward relationships verified against telekom/controlplane main:
+# 79aab2dba3d9c7b9a50690b4855ec475164768de (2026-11-13).
+namespaces: [default]
+resources:
+  - apiVersion: rover.cp.ei.telekom.de/v1
+    kind: Rover
+    plural: rovers
+    scope: Namespaced
+    description: Entry point for an application's exposures and subscriptions.
+    relationships:
+      - { name: application, path: status.application, apiVersion: application.cp.ei.telekom.de/v1, kind: Application }
+      - { name: api-exposures, path: "status.apiExposures.*", apiVersion: api.cp.ei.telekom.de/v1, kind: ApiExposure }
+      - { name: api-subscriptions, path: "status.apiSubscriptions.*", apiVersion: api.cp.ei.telekom.de/v1, kind: ApiSubscription }
+  - apiVersion: application.cp.ei.telekom.de/v1
+    kind: Application
+    plural: applications
+    scope: Namespaced
+    relationships:
+      - { name: zone, path: spec.zone, apiVersion: admin.cp.ei.telekom.de/v1, kind: Zone }
+    redactPaths: [spec.secret, spec.rotatedSecret, status.clientSecret, status.rotatedClientSecret]
+  - apiVersion: api.cp.ei.telekom.de/v1
+    kind: ApiExposure
+    plural: apiexposures
+    scope: Namespaced
+    relationships:
+      - { name: zone, path: spec.zone, apiVersion: admin.cp.ei.telekom.de/v1, kind: Zone }
+      - { name: route, path: status.route, apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route }
+      - { name: failover-routes, path: "status.failoverRoutes.*", apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route }
+      - { name: proxy-routes, path: "status.proxyRoutes.*", apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route }
+  - apiVersion: api.cp.ei.telekom.de/v1
+    kind: ApiSubscription
+    plural: apisubscriptions
+    scope: Namespaced
+    relationships:
+      - { name: application, path: spec.application, apiVersion: application.cp.ei.telekom.de/v1, kind: Application }
+      - { name: zone, path: spec.zone, apiVersion: admin.cp.ei.telekom.de/v1, kind: Zone }
+      - { name: route, path: status.route, apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route }
+      - { name: consume-route, path: status.consumeRoute, apiVersion: gateway.cp.ei.telekom.de/v1, kind: ConsumeRoute }
+      - { name: failover-routes, path: "status.failoverRoutes.*", apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route }
+      - { name: failover-consume-routes, path: "status.failoverConsumeRoutes.*", apiVersion: gateway.cp.ei.telekom.de/v1, kind: ConsumeRoute }
+  - { apiVersion: gateway.cp.ei.telekom.de/v1, kind: Route, plural: routes, scope: Namespaced }
+  - { apiVersion: gateway.cp.ei.telekom.de/v1, kind: ConsumeRoute, plural: consumeroutes, scope: Namespaced }
+  - { apiVersion: admin.cp.ei.telekom.de/v1, kind: Zone, plural: zones, scope: Namespaced }

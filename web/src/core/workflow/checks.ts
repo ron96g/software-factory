@@ -1,7 +1,8 @@
-import type { Repository, Workspace } from "../model/kinds.ts";
+import type { ModuleCheckScope, Repository, Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
-import type { CommandRunner, EventRecorder, GateCheckLookup, GateContext, GateDecision, GateEvaluator, Redactor, ResourceReader } from "../ports/index.ts";
+import type { CommandRunner, EventRecorder, GateCheckLookup, GateContext, GateDecision, GateEvaluator, ModuleScopePlanner, Redactor, ResourceReader } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { resolveCheckConfig } from "../checks/config.ts";
 
 type Result = { passed: boolean; message: string };
 
@@ -17,18 +18,19 @@ export function automatedGate(d: {
   runner: CommandRunner;
   redactor: Redactor;
   pollMs?: number;
+  scopes?: ModuleScopePlanner;
 }): GateEvaluator {
   const running = new Map<string, Promise<void>>();
   const results = new Map<string, Result>();
   const warned = new Set<string>();
 
-  async function runCommand(key: string, ctx: GateContext, ws: Workspace, repos: Repository[], name: string, command: string) {
+  async function runCommand(key: string, ctx: GateContext, ws: Workspace, repos: Repository[], name: string, command: string, timeoutMs: number, scope?: ModuleCheckScope) {
     try {
-      const r = await d.runner.run(ws, repos, command);
+      const r = await d.runner.run(ws, repos, command, timeoutMs);
       const tail = d.redactor.redact(r.output.slice(-1500)); // ADR-0015: command output can echo env/config
       const passed = r.exitCode === 0;
       results.set(key, { passed, message: `${ws.spec.repositoryRef.name}: \`${command}\` → exit ${r.exitCode} (${r.durationMs} ms)\n${tail}` });
-      const msg = `${name} on ${ws.spec.repositoryRef.name}: exit ${r.exitCode} in ${r.durationMs} ms${passed ? "" : `\n${tail}`}`;
+      const msg = `${name} on ${ws.spec.repositoryRef.name}: exit ${r.exitCode} in ${r.durationMs} ms${scope ? `\nScope: ${scope.mode}; ${scope.reason}\nCommand: ${command}` : ""}${passed ? "" : `\n${tail}`}`;
       if (passed) await d.events.normal(ctx.workItem, "CheckPassed", msg);
       else await d.events.warning(ctx.workItem, "CheckFailed", msg);
     } catch (e) {
@@ -61,10 +63,11 @@ export function automatedGate(d: {
           if (!r.passed) failures.push(`${name}: ${r.message ?? "failed"}`);
           continue;
         }
-        const targets = workspaces.flatMap((ws) => {
-          const cmd = repos.find((r) => r.metadata.name === ws.spec.repositoryRef.name)?.spec.checks?.[name];
-          return cmd ? [{ ws, cmd }] : [];
-        });
+        const targets = [];
+        for (const ws of workspaces) {
+          const repo = repos.find((r) => r.metadata.name === ws.spec.repositoryRef.name);
+          if (repo?.spec.checks?.[name]) targets.push({ ws, ...await resolveCheckConfig(repo, name, ws, d.scopes) });
+        }
         if (!targets.length) {
           const wkey = `${base}/${name}`;
           if (!warned.has(wkey)) {
@@ -73,7 +76,7 @@ export function automatedGate(d: {
           }
           continue;
         }
-        for (const { ws, cmd } of targets) {
+        for (const { ws, command, timeoutMs, scope } of targets) {
           const key = `${base}/${name}/${ws.metadata.name}`;
           const done = results.get(key);
           if (done) {
@@ -82,7 +85,7 @@ export function automatedGate(d: {
           }
           pending = true;
           if (!running.has(key)) {
-            running.set(key, runCommand(key, ctx, ws, repos, name, cmd).finally(() => running.delete(key)));
+            running.set(key, runCommand(key, ctx, ws, repos, name, command, timeoutMs, scope).finally(() => running.delete(key)));
           }
         }
       }

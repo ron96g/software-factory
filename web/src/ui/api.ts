@@ -80,10 +80,15 @@ export function useLive<T>(url: string | null, matches: (n: ChangeNotice) => boo
   return { data, error, reload: load };
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
 export async function api<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError((json as { error?: string }).error ?? `HTTP ${res.status}`, res.status);
   return json as T;
 }
 

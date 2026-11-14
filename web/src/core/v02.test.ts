@@ -164,6 +164,7 @@ test("read-only source: the Jira connector refuses writes and the outbox never d
     events: { normal: async () => {}, warning: async (_o: unknown, reason: string) => void warnings.push(reason) } as never,
     clock: { now: () => new Date() },
     handlers: { get: () => ({ action: "comment", deliver: async () => void delivered++ }) } as never,
+    policies: { get: () => ({ check: () => "read-only (sync.bidirectional is not true)" }), keys: () => ["comment"] },
     redactor: { redact: (x: string) => x } as never,
   });
   assert.equal(await controller.reconcile("default/m"), undefined, "no retry");

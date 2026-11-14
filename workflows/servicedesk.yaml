@@ -5,7 +5,8 @@ metadata:
   annotations:
     description: >
       Service desk requests: classify → investigate (code research + analysis) → respond (draft reply)
-      → response-review [human]. Read-only towards the ticket: humans post the approved reply themselves.
+      → response-review [human] → publish-response [human visibility review, outbox delivery].
+      Automatic source synchronization remains read-only.
 spec:
   trigger:
     sourceRefs:
@@ -65,6 +66,17 @@ spec:
             approvers: [{ role: service-desk-agent }]
             criteria: [Correct and grounded in the analysis, No internal details, Ready to post on the ticket]
             onReject: { next: respond }   # the reject reason reaches the agent as a "Human gate decision"
+
+        - name: publish-response
+          steps: []
+          gate:
+            type: ticket-publication
+            publication:
+              artifactRef: { name: customer-response }
+              reviewStage: response-review
+            approvers: [{ role: service-desk-agent }]
+            criteria: [Exact reply reviewed, Explicit public or internal visibility, Optional ticket transition reviewed]
+            onReject: { next: respond }
 
   humanInput:
     sets: { phase: Blocked }

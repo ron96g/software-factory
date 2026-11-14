@@ -1,6 +1,6 @@
 # ADR-0027: Gate evidence and guarded approvals
 
-- **Status:** Accepted (refines ADR-0023 "verifier verdict is advisory")
+- **Status:** Superseded by ADR-0042 for migrated verification evidence; Accepted for legacy evidence and guarded approvals (refines ADR-0023 "verifier verdict is advisory")
 - **Date:** 2026-11-11
 
 ## Context

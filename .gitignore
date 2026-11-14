@@ -2,6 +2,7 @@
 node_modules/
 web/.next/
 web/out/
+components/kubernetes-cr-mcp/dist/
 *.tsbuildinfo
 web/next-env.d.ts
 

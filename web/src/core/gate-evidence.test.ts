@@ -36,6 +36,27 @@ test("X5: failures recorded before the latest code change are downgraded (stale)
   assert.match(e.items[0].label, /outdated: code changed since/);
 });
 
+test("verified migration keeps historical check/loop events out of current gate blockers without hiding fresh failures", () => {
+  const input = {
+    runs: [],
+    clarifications: [],
+    events: [
+      ev("CheckFailed", "build on repo: exit 137", "2026-01-01T00:00:01Z"),
+      ev("LoopExhausted", "old code-review loop exhausted", "2026-01-01T00:00:02Z"),
+      ev("Restarted", "validation planning", "2026-01-01T00:00:03Z"),
+    ],
+  };
+  assert.equal(deriveGateEvidence(input).status, "blocking", "legacy behavior is unchanged");
+  assert.deepEqual(deriveGateEvidence({ ...input, verified: true }), { status: "ok", items: [] });
+  const current = deriveGateEvidence({ ...input, verified: true,
+    runs: [run("x-spec-review-0-r22", "review", "fail")],
+    events: [...input.events, ev("CheckFailed", "tests on repo: exit 1", "2026-01-01T00:00:04Z")] });
+  assert.equal(current.status, "blocking");
+  assert.ok(current.items.some((item) => item.label === "Check: tests failed"));
+  assert.ok(current.items.some((item) => item.runName === "x-spec-review-0-r22"));
+  assert.ok(!current.items.some((item) => /build|loop exhausted/.test(item.label)));
+});
+
 test("X5: evidence uses the latest round per step; a later passing check clears an earlier failure", () => {
   const e = deriveGateEvidence({
     runs: [run("x-verify-0-r5", "verify-against-spec", "fail"), run("x-verify-0-r7", "verify-against-spec", "pass")],

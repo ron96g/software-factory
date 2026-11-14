@@ -12,11 +12,12 @@ import type {
 type Registered = Controller & Partial<InitialKeys>;
 
 /** De-duplicating queue: a key is never processed concurrently and is collapsed while pending. */
-export class KeyedQueue implements WorkQueue {
+export class KeyedQueue implements WorkQueue, Pick<Lifecycle, "stop"> {
   private readonly pending = new Set<string>();
   private readonly active = new Set<string>();
   private readonly dirty = new Set<string>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly running = new Set<Promise<void>>();
   private readonly process: (key: string) => Promise<void>;
   private stopped = false;
 
@@ -32,10 +33,14 @@ export class KeyedQueue implements WorkQueue {
     }
     if (this.pending.has(key)) return;
     this.pending.add(key);
-    queueMicrotask(() => void this.run(key));
+    queueMicrotask(() => {
+      const task = this.run(key).finally(() => this.running.delete(task));
+      this.running.add(task);
+    });
   }
 
   addAfter(key: string, delayMs: number): void {
+    if (this.stopped) return;
     if (delayMs <= 0) return this.add(key);
     const t = setTimeout(() => {
       this.timers.delete(t);
@@ -48,14 +53,16 @@ export class KeyedQueue implements WorkQueue {
     return this.pending.size === 0 && this.active.size === 0 && this.timers.size === 0;
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     this.timers.forEach(clearTimeout);
     this.timers.clear();
+    await Promise.all([...this.running]);
   }
 
   private async run(key: string): Promise<void> {
     this.pending.delete(key);
+    if (this.stopped) return;
     this.active.add(key);
     try {
       await this.process(key);
@@ -121,7 +128,7 @@ export class ControllerManager implements ControllerRegistrar, ControllerTrigger
   async stop(): Promise<void> {
     this.unsubscribe?.();
     this.resyncTimers.forEach(clearInterval);
-    this.controllers.forEach(({ q }) => q.stop());
+    await Promise.all(this.controllers.map(({ q }) => q.stop()));
   }
 
   /** Test helper: resolves when all queues are idle. */

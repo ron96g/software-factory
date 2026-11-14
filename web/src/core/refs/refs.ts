@@ -1,7 +1,7 @@
 import { SYSTEM_NAMESPACE, type Ref, type Resource } from "../model/resource.ts";
 import type { ResourceReader } from "../ports/index.ts";
 
-/** `*Ref` field name → target kind. Mirrors tools/validate.py. */
+/** Live `*Ref` field → target kind. Historical originWorkItemRef deliberately survives deletion (ADR-0039). */
 export const REF_FIELDS: Record<string, string> = {
   agentRef: "Agent",
   skillRefs: "Skill",
@@ -13,6 +13,8 @@ export const REF_FIELDS: Record<string, string> = {
   sourceRef: "Source",
   sourceRefs: "Source",
   repositoryRefs: "Repository",
+  repositoryRef: "Repository",
+  workspaceRef: "Workspace",
   providerRef: "ModelProvider",
   sandboxRef: "SandboxProfile",
   workItemRef: "WorkItem",
@@ -20,6 +22,7 @@ export const REF_FIELDS: Record<string, string> = {
   parentRunRef: "AgentRun",
   knowledgeRef: "KnowledgeEntry",
   toolServerRefs: "ToolServer",
+  conversationRef: "Conversation",
 };
 
 /** ADR-0011: same namespace first, then factory-system. Explicit namespace only for factory-system. */

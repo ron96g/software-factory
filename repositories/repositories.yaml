@@ -64,6 +64,11 @@ spec:
   checks:                    # ADR-0023: commands for the automated gate, run in the workspace
     build: cd web && npx tsc --noEmit -p .
     unit-tests: cd web && npm test --silent
+    preflight: node --version && npm --version && test -d web/node_modules
+  verification:
+    requiredChecks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
+    preflightChecks: [preflight]
+    waivableChecks: [integration-tests, acceptance-criteria, security-scan]
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
     setup:
       - cd web && npm ci --no-audit --no-fund --loglevel=error
@@ -90,6 +95,24 @@ spec:
   context:
     docs: [AGENTS.md, README.md]
   sandboxRef: { name: go-build }
-  checks:                    # The repo's AGENTS.md: always use the Makefile targets. Checks time out after 15 min.
-    build: make build-all
-    unit-tests: make test-all
+  moduleScope:
+    graph: .github/ci/module-graph.json
+    sharedPaths: [Makefile, "hack/**", ".github/**", ".golangci.yml", ".ko.yaml", "**/go.mod", "**/go.sum", "go.work*"]
+    nonBuildPaths: ["docs/**"]
+  checks:                    # Affected modules + transitive dependents; shared/unknown changes retain full validation.
+    build: { command: make build-all, timeoutMs: 1800000, moduleScoped: true }
+    unit-tests: { command: make test-all, timeoutMs: 3600000, moduleScoped: true }
+    focused-tests: { command: make test-all, timeoutMs: 900000, moduleScoped: true }
+    full-build: { command: make build-all, timeoutMs: 1800000 }
+    full-tests: { command: make test-all, timeoutMs: 3600000 }
+    preflight:
+      command: >-
+        go version && command -v make && command -v gotestsum &&
+        make -C rover controller-gen envtest &&
+        rover/bin/setup-envtest use 1.32.0 --bin-dir rover/bin -p path
+      timeoutMs: 600000
+  verification:
+    requiredChecks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
+    preflightChecks: [preflight]
+    preparationChecks: [build]
+    waivableChecks: [integration-tests, acceptance-criteria, security-scan]
