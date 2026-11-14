@@ -60,3 +60,7 @@ as service desk tickets are written by outsiders (prompt injection). Rule 8 (AI 
   UI loses the propose/approve flow.
 - A vector database now: better recall, but a new dependency before we know the volume (deferred to a new
   `KnowledgeSource.type`).
+
+## Note: read-only vs managed
+
+`KnowledgeSource` is external and read-only (optional `access: read-only`, other values rejected). `KnowledgeEntry` is the managed knowledge: agent-proposed, human-approved, and the only knowledge the factory writes. Search hits are tagged `doc` or `entry`; approval and ADR-0015 redaction are unchanged.
