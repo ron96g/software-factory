@@ -45,6 +45,7 @@ import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
 import { knowledgeProvider } from "./knowledge/context.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
+import { definitionCatalogProvider, skillRequester } from "./agents/definitions.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
@@ -63,6 +64,7 @@ import { HostEnvironment } from "./adapters/sandbox/host.ts";
 import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
+import { DefaultDelegator } from "./agents/delegator.ts";
 import { ToolLoopExecutor } from "./agents/tool-loop.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
@@ -268,7 +270,7 @@ export async function createFactory(o: FactoryOptions) {
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
-      retrospectiveContext(store, redactor), artifactSchemaContext(schemas),
+      retrospectiveContext(store, redactor), artifactSchemaContext(schemas), definitionCatalogProvider(workspaces, store, redactor),
       planningContext({ reader: store, compiler, redactor }),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
       unitContext({ ledger: units, compiler, redactor }),
@@ -281,6 +283,8 @@ export async function createFactory(o: FactoryOptions) {
   const prompts = new DefaultPromptBuilder();
   const recordedTurns = new DefaultRecordedToolTurns();
   const toolProvider = new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor });
+  let chain: ExecutorChain | undefined;
+  const delegator = new DefaultDelegator({ reader: store, writer: store, status: store, recorders, executor: () => chain!, workspaces, redactor });
   const realExecutors = [
     new ToolLoopExecutor({
       reader: store,
@@ -291,6 +295,8 @@ export async function createFactory(o: FactoryOptions) {
       knowledge,
       toolProvider,
       turns: recordedTurns,
+      skills: skillRequester(workspaces, store, redactor),
+      delegator,
       checks: verification,
       finish: new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders }),
     }),
@@ -298,6 +304,7 @@ export async function createFactory(o: FactoryOptions) {
     new SkillHandlerExecutor(skillHandlers),
   ];
   const executor = new ExecutorChain([...realExecutors, new SimulatedExecutor()]);
+  chain = executor;
   // ADR-0029: `allow` (default) falls back to simulated output; `wait` keeps runs Pending until a real executor fits.
   const simulation = env.FACTORY_SIMULATION ?? "allow";
   if (simulation !== "allow" && simulation !== "wait") throw new Error(`FACTORY_SIMULATION must be "allow" or "wait", got "${simulation}"`);
