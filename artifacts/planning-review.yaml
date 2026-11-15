@@ -1,0 +1,119 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: planning-review }
+spec:
+  format: json
+  description: Typed independent planning findings, answerable human decisions and code-checked claims (ADR-0055, ADR-0057).
+  schema:
+    version: "2"
+    jsonSchema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, summary, decisions, findings]
+      properties:
+        schemaVersion: { const: "2" }
+        summary: { type: string, minLength: 1, maxLength: 4000, pattern: '\S' }
+        decisions:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, question, options, rationale, required]
+            properties:
+              id: &id { type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$' }
+              question: { type: string, minLength: 1, maxLength: 2000, pattern: '\S' }
+              options: { type: array, minItems: 2, maxItems: 20, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 1000, pattern: '\S' } }
+              rationale: { type: string, minLength: 1, maxLength: 3000, pattern: '\S' }
+              required: { const: true }
+              recommendation: { type: string, minLength: 1, maxLength: 2000, pattern: '\S' }
+        findings:
+          type: array
+          maxItems: 100
+          items:
+            oneOf:
+              - type: object
+                additionalProperties: false
+                required: [id, kind, summary, evidence, claim, investigation]
+                properties:
+                  id: *id
+                  kind: { const: research-gap }
+                  summary: &summary { type: string, minLength: 1, maxLength: 3000, pattern: '\S' }
+                  evidence: &evidence
+                    type: array
+                    minItems: 1
+                    maxItems: 20
+                    uniqueItems: true
+                    items:
+                      description: Exactly one of an input artifact at its exact resourceVersion, or code lines you read.
+                      type: object
+                      additionalProperties: false
+                      minProperties: 1
+                      maxProperties: 1
+                      properties:
+                        artifact:
+                          type: object
+                          additionalProperties: false
+                          required: [name, resourceVersion]
+                          properties:
+                            name: { type: string, minLength: 1, maxLength: 300, pattern: '\S' }
+                            resourceVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+                        code: &code
+                          description: Lines in one of this run's pinned workspaces, as read_file shows them.
+                          type: object
+                          additionalProperties: false
+                          required: [repository, path, startLine, endLine]
+                          properties:
+                            repository: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+                            path: { type: string, minLength: 1, maxLength: 500, pattern: '\S' }
+                            startLine: { type: integer, minimum: 1 }
+                            endLine: { type: integer, minimum: 1 }
+                  claim: *summary
+                  investigation:
+                    description: What you checked before reporting the gap (at least one code location or search) and why it did not settle the claim.
+                    type: object
+                    additionalProperties: false
+                    required: [checked, searches, unresolvedBecause]
+                    properties:
+                      checked: { type: array, maxItems: 20, items: *code }
+                      searches: { type: array, maxItems: 20, items: { type: string, minLength: 1, maxLength: 300, pattern: '\S' } }
+                      unresolvedBecause: *summary
+              - type: object
+                additionalProperties: false
+                required: [id, kind, summary, evidence, requestedChange]
+                properties:
+                  id: *id
+                  kind: { const: plan-defect }
+                  summary: *summary
+                  evidence: *evidence
+                  requestedChange: *summary
+              - type: object
+                additionalProperties: false
+                required: [id, kind, summary, evidence, decisionId]
+                properties:
+                  id: *id
+                  kind: { const: human-decision }
+                  summary: *summary
+                  evidence: *evidence
+                  decisionId: *id
+              - type: object
+                additionalProperties: false
+                required: [id, kind, summary, evidence]
+                properties:
+                  id: *id
+                  kind: { const: advisory }
+                  summary: *summary
+                  evidence: *evidence
+        verified:
+          description: Claims you confirmed in code. Not findings; they never block.
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, claim, evidence]
+            properties:
+              id: *id
+              claim: *summary
+              evidence: { type: array, minItems: 1, maxItems: 10, items: *code }

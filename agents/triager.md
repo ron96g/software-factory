@@ -28,7 +28,8 @@ You take a classified work item and decide whether it is ready for spec work.
 - Detect duplicates and link related work.
 - **Delegate to `code-researcher`** to understand what the change involves at a high level: affected
   components, size, and risks. Attach the resulting `research-notes` to the work item.
-- When business intent or acceptance criteria are unclear, use `human-clarification`. This blocks the item.
+- When business intent or acceptance criteria are unclear, use `human-clarification`, but only for true human-only blockers: mark them `blocker: true` and give answer options. This blocks the item.
+- Defer every other question (no blocker flag) to the planner as an upstream question; it does not block. Never ask what the planner will ask.
 - Emit a `triage-decision`.
 
 ## Boundaries

@@ -81,6 +81,41 @@ export interface ArtifactCheck {
   check(item: WorkItem, artifact: import("../model/kinds.ts").Artifact): Promise<string | undefined>;
 }
 
+/** ADR-0057: the producing run as it saw its inputs, whether the artifact is still proposed or already persisted. */
+export interface ArtifactProducer {
+  runName: string;
+  stage: string;
+  /** Input artifact name → resourceVersion. */
+  inputs: Record<string, string>;
+  /** Context source → revision. */
+  contexts: Record<string, string>;
+  outcome?: string;
+  questions: string[];
+  /** Repositories of the producing run's pinned workspaces. */
+  repositories: string[];
+}
+
+export interface ProposedArtifact {
+  item: WorkItem;
+  type: string;
+  content: string;
+  producer: ArtifactProducer;
+  /**
+   * Read-only access to the producer's pinned workspaces, for checks that verify code locations.
+   * `null` when they are no longer readable at the recorded commits; such checks must fail, never pass.
+   */
+  files: import("./sandbox.ts").FileReader | null;
+}
+
+/**
+ * ADR-0057: one check implementation for an artifact type, used both in-loop (before `finish` ends the run) and
+ * post-run (adapted to `ArtifactCheck`). Side-effect free. Returns an actionable problem or undefined.
+ */
+export interface ProposedArtifactCheck {
+  readonly artifactType: string;
+  check(artifact: ProposedArtifact): Promise<string | undefined>;
+}
+
 /** A single automated check referenced by `gate.checks[]`. */
 export interface GateCheck {
   readonly name: string;

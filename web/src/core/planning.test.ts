@@ -16,6 +16,12 @@ import { planningReview } from "./planning/review.ts";
 import { VerificationService } from "./verification/service.ts";
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { Registry } from "./registry/registry.ts";
+import { readFileSync } from "node:fs";
+import { persistedArtifactCheck } from "./artifacts/output-checks.ts";
+import { parse as parseYaml } from "yaml";
+import type { ArtifactType } from "./model/kinds.ts";
+import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
+import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
 
 const document: PlanningDocument = {
   outcome: "Customers can export their own records.", scope: "Include CSV. Exclude bulk tenant exports.",
@@ -34,7 +40,9 @@ async function fixture() {
   const compiler = new DefaultWorkflowCompiler(store);
   const events = new StoreEventRecorder(store);
   const redactor = { redact: (text: string) => text.replaceAll("secret-value", "[REDACTED]") };
-  const planning = new PlanningService({ namespace: "default", reader: store, writer: store, compiler, events, redactor });
+  const schemas = new DefinitionArtifactSchemas(store);
+  const planning = new PlanningService({ namespace: "default", reader: store, writer: store, compiler, events, redactor,
+    schemas, schemaValidator: new AjvSchemaValidator() });
   const workflow = await store.create<Workflow>({ apiVersion: API_VERSION, kind: "Workflow", metadata: { name: "planned", namespace: "factory-system" },
     spec: { planning: { revisionStage: "spec", synthesisStage: "implementation-plan", reviewStage: "spec-review" },
       verification: { planningStage: "validation-plan", reviewStage: "spec-review", preflightStage: "preflight",
@@ -149,8 +157,67 @@ async function fixture() {
     await seed(plan);
     return openReview();
   }
-  return { db, store, compiler, planning, verification, workflow, item, controller, seed, seedSingleRun, openReview, revise, regenerate, clock, redactor };
+  return { db, store, compiler, planning, verification, workflow, item, controller, seed, seedSingleRun, openReview, revise, regenerate, clock, redactor, schemas };
 }
+
+test("typed review approval pins the schema contract; legacy reports remain readable but cannot stand in for the new contract", async () => {
+  const f = await fixture();
+  try {
+    await f.seedSingleRun();
+    assert.equal((await f.planning.inspect(p, "item")).ready, true, "legacy workflows retain their original contract");
+    const workflow = (await f.store.get<Workflow>("Workflow", "factory-system", "planned"))!;
+    await f.store.update({ ...workflow, spec: { ...workflow.spec, phases: workflow.spec.phases.map((phase) => ({
+      ...phase, stages: phase.stages.map((stage) => stage.name === "spec-review" ? { ...stage, steps: [{
+        name: "typed-review", agentRef: { name: "reviewer" }, outputs: [{ artifactRef: { name: "planning-review" } }],
+      }] } : stage),
+    })) } });
+    const historical = (await f.store.list<Artifact>("Artifact")).find((artifact) => artifact.spec.artifactTypeRef.name === "review-report")!;
+    let workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.ready, false);
+    assert.match(workspace.issues.join(" "), /historical Markdown reports remain readable/);
+    assert.equal((await f.store.get<Artifact>("Artifact", "default", historical.metadata.name))?.spec.content, historical.spec.content);
+
+    const definition = parseYaml(readFileSync(new URL("../../../artifacts/planning-review.yaml", import.meta.url), "utf8")) as ArtifactType;
+    await f.store.create({ ...definition, metadata: { ...definition.metadata, namespace: "factory-system" } });
+    const schema = (await f.schemas.get("planning-review", "default"))!;
+    const review = await f.store.update<Artifact>({ ...historical, spec: { ...historical.spec,
+      artifactTypeRef: { name: "planning-review" }, format: "json",
+      content: JSON.stringify({ schemaVersion: "2", summary: "Reviewed the current proposal.", decisions: [], findings: [] }),
+    } });
+    const run = (await f.store.get<AgentRun>("AgentRun", "default", review.spec.producedBy!.agentRunRef.name))!;
+    await f.store.update<AgentRun>({ ...run, spec: { ...run.spec, outputs: [{ name: "planning-review" }] } });
+    const fresh = (await f.store.get<AgentRun>("AgentRun", "default", run.metadata.name))!;
+    await f.store.updateStatus<AgentRun>({ ...fresh, status: { ...fresh.status!, provenance: { ...fresh.status!.provenance!,
+      contexts: { ...fresh.status!.provenance!.contexts, "artifact-schema:planning-review": schema.digest },
+    } } });
+    const persisted = persistedArtifactCheck(f.planning.reviewCheck, { reader: f.store, readers: { forWorkspaces: () => assert.fail("no workspaces pinned") } });
+    assert.equal(await persisted.check(await f.item(), review), undefined);
+    const approval = await f.openReview();
+    workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.readiness, "ready");
+
+    await f.verification.validate(approval, "approve");
+
+    const stored = (await f.store.get<ArtifactType>("ArtifactType", "factory-system", "planning-review"))!;
+    await f.store.update({ ...stored, spec: { ...stored.spec, schema: { ...stored.spec.schema!,
+      jsonSchema: { ...stored.spec.schema!.jsonSchema, $comment: "Revised contract; a fresh review must consume it." },
+    } } });
+    workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.ready, false);
+    assert.equal(workspace.readiness, "needs-agent-repair");
+    assert.match(workspace.issues.join(" "), /schema changed/);
+    await assert.rejects(f.verification.validate(approval, "approve", "Accept despite all concerns"), /schema changed/);
+    // ADR-0057: an earlier schema version stays readable but can no longer back an approval.
+    const v1 = { schemaVersion: "1", summary: "Earlier review.", decisions: [], findings: [
+      { id: "F1", kind: "advisory", summary: "Old evidence shape.", evidence: [{ name: "spec", resourceVersion: "1" }] }] };
+    const current = (await f.store.get<Artifact>("Artifact", "default", review.metadata.name))!;
+    await f.store.update<Artifact>({ ...current, spec: { ...current.spec, content: JSON.stringify(v1) } });
+    workspace = await f.planning.inspect(p, "item");
+    assert.equal(workspace.readiness, "needs-agent-repair");
+    assert.equal(workspace.review?.summary, "Earlier review.");
+    assert.match(workspace.issues.join(" "), /schema version 1; the current version is 2/);
+  } finally { f.db.close(); }
+});
 
 test("legacy planning can migrate explicitly and supersedes old-workflow evidence", async () => {
   const f = await fixture();
@@ -266,8 +333,10 @@ test("decision-sheet workflows accept only risks and decisions and expose the pl
     await f.verification.validate(approval, "approve");
 
     const plan = bundle[3];
-    assert.equal(await f.planning.artifactCheck.check(await f.item(), plan), undefined);
-    assert.match(await f.planning.artifactCheck.check(await f.item(), { ...plan, spec: { ...plan.spec, content: JSON.stringify(document) } }) ?? "",
+    const proposed = async (content: string) => f.planning.artifactCheck.check({ item: await f.item(), type: "implementation-plan", content, files: null,
+      producer: { runName: "", stage: "", inputs: {}, contexts: {}, questions: [], repositories: [] } });
+    assert.equal(await proposed(plan.spec.content), undefined);
+    assert.match(await proposed(JSON.stringify(document)) ?? "",
       /only risks and decisions; remove outcome, scope, approach, delivery, acceptance/);
     await assert.rejects(f.revise("revise", "full-draft", { draft: { ...document } }), /only risks and decisions/);
     const revised = await f.revise("revise", "risks-draft", { draft: { risks: "Hits may be cached." } });
@@ -568,4 +637,25 @@ test("upstream questions citing an existing decision ID fold into that decision 
   const decisions = (service as unknown as { decisions(item: WorkItem, d: typeof document, runs: AgentRun[], stages: Set<string>): { id: string }[] })
     .decisions({ spec: {} } as WorkItem, document, [run], new Set(["spec"]));
   assert.deepEqual(decisions.map((d) => d.id.startsWith("question-") ? "question" : d.id), ["OD-1", "question", "question"]);
+});
+
+test("AC-3 decisions keep answersQuestionIds and reject malformed links", () => {
+  const d = { id: "d1", question: "q", options: [], rationale: "r", required: false, recommendation: "x", answersQuestionIds: ["q-abc"] };
+  const doc = parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [d] }));
+  assert.deepEqual(doc.decisions[0].answersQuestionIds, ["q-abc"]);
+  assert.throws(() => parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [{ ...d, answersQuestionIds: [1] }] })), /Each decision needs/);
+});
+
+test("AC-3 a decision citing an upstream question id suppresses it regardless of wording, and answered state", () => {
+  const document = parsePlanningDocument(JSON.stringify({ risks: "r",
+    decisions: [{ id: "D1", question: "Completely different wording?", options: ["A", "B"], rationale: "r", required: true, answersQuestionIds: ["q-up-1"] }] }));
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const run = { spec: { stage: "triage", agentRef: { name: "triager" } },
+    status: { result: { questions: [{ id: "q-up-1", text: "Which scope?" }, { id: "q-up-2", text: "Another thing?" }] } } } as AgentRun;
+  const call = (item: WorkItem) => (service as unknown as { decisions(i: WorkItem, d: typeof document, r: AgentRun[], s: Set<string>): { id: string; answer?: string }[] })
+    .decisions(item, document, [run], new Set(["triage"]));
+  assert.deepEqual(call({ spec: {} } as WorkItem).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
+  const answered = { spec: { planning: { answers: { D1: { question: "x", signature: "s", answer: "A" } } } } } as unknown as WorkItem;
+  assert.deepEqual(call(answered).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
 });

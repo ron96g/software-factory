@@ -1,6 +1,7 @@
 # ADR-0049: Simpler planning loop and a phase-focused item page
 
 - **Status:** Accepted
+- **Amended by:** ADR-0055 (invalid output fails visibly after bounded self-repair; it never advances); ADR-0057 (output is first corrected inside the producing run at `finish`)
 - **Date:** 2026-11-14
 - **Deciders:** project owner
 - **Extends:** ADR-0042, ADR-0045/0046, ADR-0047, ADR-0048

@@ -17,3 +17,4 @@ export * from "./verification.ts";
 export * from "./retrospectives.ts";
 export * from "./planning.ts";
 export * from "./units.ts";
+export * from "./schema.ts";

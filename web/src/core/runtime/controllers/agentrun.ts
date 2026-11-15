@@ -1,4 +1,5 @@
-import type { AgentRun, Artifact, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
+import type { AgentRun, Artifact, ArtifactType, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
+import { resolveRef } from "../../refs/refs.ts";
 import { LABEL_WORKITEM } from "../event-recorder.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
@@ -73,6 +74,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       const superseded = (await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name))?.metadata.labels?.[LABEL_SUPERSEDED];
       for (const a of result.artifacts ?? []) {
         const name = `${run.metadata.name}-${a.type}`;
+        const definition = await resolveRef<ArtifactType>(d.reader, "ArtifactType", { name: a.type }, ns);
         const art: Artifact = {
           apiVersion: API_VERSION,
           kind: "Artifact",
@@ -91,7 +93,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
             artifactTypeRef: { name: a.type },
             workItemRef: run.spec.workItemRef,
             producedBy: { agentRunRef: { name: run.metadata.name }, agentRef: run.spec.agentRef },
-            format: a.format ?? "markdown",
+            format: definition?.spec.schema ? definition.spec.format : a.format ?? "markdown",
             content: a.content,
           },
         };
@@ -147,6 +149,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         },
         inputs: Object.fromEntries(ctx.inputs.map((a) => [a.metadata.name, a.metadata.resourceVersion ?? ""])),
         contexts: Object.fromEntries(ctx.sections.filter((s) => s.revision).map((s) => [s.source, s.revision!])),
+        ...(ctx.sections.some((s) => s.counts) ? { contextCounts: Object.fromEntries(ctx.sections.filter((s) => s.counts).map((s) => [s.source, s.counts!])) } : {}),
         clarifications: ctx.clarifications.map((c) => c.metadata.name),
         ...result.provenance,
         replayOf: run.spec.replayOf,

@@ -7,6 +7,7 @@ import type { TranscriptMessage } from "@/core/ports/transcripts.ts";
 import { act, api, useLive } from "./api.ts";
 import { PhaseBadge } from "./badges.tsx";
 import { MarkdownView } from "./markdown.tsx";
+import { normalizeQuestions } from "@/core/questions.ts";
 
 const ROLE_ICON: Record<string, React.ReactNode> = {
   system: <IconSettings size={14} />,
@@ -281,7 +282,7 @@ function RunSummary({ run, artifacts }: { run: AgentRun; artifacts: Artifact[] }
       <Text size="sm">{r?.summary ?? "–"}</Text>
       {r?.outcome && <Text size="sm"><b>Outcome:</b> {r.outcome}</Text>}
       {r?.questions?.length ? (
-        <Text size="sm"><b>Questions:</b> {r.questions.join(" · ")}</Text>
+        <Text size="sm"><b>Questions:</b> {normalizeQuestions(r.questions).map((q) => q.text).join(" · ")}</Text>
       ) : null}
       {r?.classification && <Code block>{JSON.stringify(r.classification, null, 2)}</Code>}
       {own.map((a) => (

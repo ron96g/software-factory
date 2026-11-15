@@ -124,6 +124,8 @@ export interface EvidenceItem {
   stage?: string;
   /** Run that produced it (for linking to the transcript). */
   runName?: string;
+  /** Artifacts that run read or produced, so a summary referring to them ("option 1 of the research notes") can be read at the gate. */
+  artifacts?: { name: string; type: string; role: "input" | "output" }[];
 }
 
 export interface GateEvidence {

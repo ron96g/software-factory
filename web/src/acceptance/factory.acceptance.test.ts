@@ -50,6 +50,18 @@ test("Gates stay human: the MCP surface offers no tool to approve, reject, overr
   });
 });
 
+test("AC-4: truncated tool results are flagged in the transcript", async () => {
+  const { DefaultRecordedToolTurns } = await import("../core/agents/recorded-tool-turns.ts");
+  const { formatMarker } = await import("../core/agents/truncation.ts");
+  const records: any[] = [];
+  await new DefaultRecordedToolTurns().invoke({
+    call: { name: "read_file", arguments: {} },
+    tool: { invoke: async () => `x\n${formatMarker("read_file", 5, "startLine=9")}` },
+    transcript: { record: async (r: any) => { records.push(r); } }, agent: "a", step: "s", turnId: "t",
+  } as any);
+  assert.deepEqual(records.find((r) => r.role === "tool-result").meta.truncated, { omitted: "5", next: "startLine=9" });
+});
+
 test("AC-30: one planner run, independent review, and withdrawn answers no longer steer planning", async () => {
   const calls: string[] = [];
   const plannerPrompts: string[] = [];
@@ -79,7 +91,9 @@ test("AC-30: one planner run, independent review, and withdrawn answers no longe
           rationale: "This changes the privacy boundary.", required: true }],
       }) });
     }
-    if (step === "ai-plan-review") artifacts.push({ type: "review-report", content: "The four artifacts agree." });
+    if (step === "ai-plan-review") artifacts.push({ type: "planning-review", content: JSON.stringify({
+      schemaVersion: "2", summary: "The four artifacts agree.", decisions: [], findings: [],
+    }) });
     return Response.json({ choices: [{ message: { content: JSON.stringify({
       summary: "Completed planning step", artifacts,
       outcome: step === "triage-signal" ? "accept" : step === "ai-plan-review" ? "approve" : undefined,
@@ -114,7 +128,7 @@ test("AC-30: one planner run, independent review, and withdrawn answers no longe
     assert.equal((await f.planning.inspect(p, item.metadata.name)).ready, false);
     const sheet = await f.planning.inspect(p, item.metadata.name);
     assert.equal(sheet.format, "decision-sheet", "ADR-0051: factory-plan's implementation plan is a focused decision sheet");
-    assert.deepEqual(sheet.sources.map((source) => source.type), ["spec", "units-of-work", "validation-plan"]);
+    assert.deepEqual(sheet.sources.map((source) => source.type), ["spec", "units-of-work", "validation-plan", "research-notes"]);
     const workflow = await f.app.getResource(p, "workflows", "factory-plan") as Workflow | null;
     const design = workflow?.spec.phases.flatMap((phase) => phase.stages).find((stage) => stage.name === "design");
     assert.equal(design?.gate?.type, "human-approval", "ADR-0051: a human approves the design before code is written");

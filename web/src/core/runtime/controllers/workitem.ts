@@ -37,6 +37,7 @@ import { routeToDecision } from "../../model/routes.ts";
 import { resolveRef } from "../../refs/refs.ts";
 
 const TERMINAL = new Set(["Done", "Closed", "Failed"]);
+import { normalizeQuestions, type AgentQuestion } from "../../questions.ts";
 const DEFAULT_QUESTION = "The agent needs more information to continue. Please add details.";
 
 export interface WorkItemControllerDeps {
@@ -277,7 +278,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     return list.every((w) => w.status?.phase === "Ready") ? "ready" : "waiting";
   }
 
-  async function block(wi: WorkItem, stage: CompiledStage, questions: string[], askedBy: ClarificationSpec["askedBy"], details?: string) {
+  async function block(wi: WorkItem, stage: CompiledStage, questions: string[], askedBy: ClarificationSpec["askedBy"], details?: string, options?: string[][]) {
     const st = wi.status!;
     const name = `${wi.metadata.name}-${stage.name}-r${st.round}`;
     const c: Clarification = {
@@ -285,6 +286,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       kind: "Clarification",
       metadata: { name, namespace: nsOf(wi), ownerReferences: [ownerRef(wi)] },
       spec: { workItemRef: { name: wi.metadata.name }, stage: stage.name, questions: questions.length ? questions : [DEFAULT_QUESTION], askedBy,
+        ...(options?.some((o) => o.length) ? { options } : {}),
         ...(details?.trim() ? { details } : {}) },
       status: { phase: "Open" },
     };
@@ -563,7 +565,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return;
           }
           const rs = run.status as
-            | { phase?: string; result?: { outcome?: string; questions?: string[]; classification?: WorkItemStatus["classification"] }; message?: string; modelWaits?: number }
+            | { phase?: string; result?: { outcome?: string; questions?: AgentQuestion[]; classification?: WorkItemStatus["classification"] }; message?: string; modelWaits?: number }
             | undefined;
           if (rs?.phase === "Failed") {
             const recovery = await d.runFailures?.recover(wi, stage, run as AgentRun);
@@ -586,8 +588,14 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return;
           }
           const problems: string[] = [];
-          for (const ref of (run as AgentRun).status?.outputs ?? []) {
-            const artifact = await d.reader.get<Artifact>("Artifact", namespace, ref.name);
+          const outputArtifacts = await Promise.all(((run as AgentRun).status?.outputs ?? []).map((ref) =>
+            d.reader.get<Artifact>("Artifact", namespace, ref.name)));
+          for (const expected of (run as AgentRun).spec.outputs) {
+            if (d.artifactChecks?.get(expected.name) && !outputArtifacts.some((artifact) => artifact?.spec.artifactTypeRef.name === expected.name)) {
+              problems.push(`Missing required output: ${expected.name}`);
+            }
+          }
+          for (const artifact of outputArtifacts) {
             const check = artifact && d.artifactChecks?.get(artifact.spec.artifactTypeRef.name);
             const problem = check && await check.check(wi, artifact);
             if (problem) problems.push(`${artifact.spec.artifactTypeRef.name}: ${problem}`);
@@ -599,15 +607,22 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return write(wi, { round: st.round! + 1, step: stepIdx, retries: { ...st.retries, [outputKey]: (st.retries?.[outputKey] ?? 0) + 1 },
               ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
           }
+          if (problems.length) {
+            return apply(wi, wf, stage, { action: "fail",
+              reason: `Invalid output from ${stage.name}/${step.name} after ${MAX_OUTPUT_RETRIES} retries: ${problems.join("; ")}. Request a revision to retry.` });
+          }
           const r = rs.result ?? {};
           const patch: Partial<WorkItemStatus> = {
             classification: r.classification ? { ...st.classification, ...r.classification } : st.classification,
             lastOutcome: r.outcome ?? st.lastOutcome,
           };
-          if (r.questions?.length && !await d.questionPolicy?.deferQuestions(wi, stage)) {
+          const asked = normalizeQuestions(r.questions);
+          const blockers = asked.filter((q) => q.blocker);
+          // Non-blockers are deferred: they stay in result.questions as upstream context for the planner.
+          if (blockers.length && !await d.questionPolicy?.deferQuestions(wi, stage)) {
             await write(wi, { ...patch, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
             const fresh = (await d.reader.get<WorkItem>("WorkItem", namespace, name))!;
-            return block(fresh, stage, r.questions, { agentRunRef: { name: rn } });
+            return block(fresh, stage, blockers.map((q) => q.text), { agentRunRef: { name: rn } }, undefined, blockers.map((q) => q.options));
           }
           return write(wi, { ...patch, step: stepIdx + 1, ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
         }

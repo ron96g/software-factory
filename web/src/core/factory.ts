@@ -5,9 +5,9 @@ import { repoContextProvider } from "./agents/repo-context.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import type { ModelProvider, ToolServer, Source, Repository } from "./model/kinds.ts";
+import type { ModelProvider, ToolServer, Source, Repository, ArtifactType } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -101,6 +101,11 @@ import { planningContext } from "./planning/context.ts";
 import { planningReview } from "./planning/review.ts";
 import { UnitExecutionService } from "./units/service.ts";
 import { unitContext } from "./units/context.ts";
+import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
+import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
+import { persistedArtifactCheck, RegistryFinishValidator, schemaArtifactCheck } from "./artifacts/output-checks.ts";
+import { citedCodeContext } from "./agents/cited-code.ts";
+import { artifactSchemaContext } from "./artifacts/context.ts";
 
 /** Composition-root convenience alias; consumers depend on the individual ports. */
 type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport & WorkspaceSweeper;
@@ -236,21 +241,39 @@ export async function createFactory(o: FactoryOptions) {
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
   const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes });
-  const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor });
+  const schemas = new DefinitionArtifactSchemas(store);
+  const schemaValidator = new AjvSchemaValidator();
+  const artifactTypes = await store.list<ArtifactType>("ArtifactType");
+  for (const type of artifactTypes) {
+    const schema = await schemas.get(type.metadata.name, type.metadata.namespace!);
+    if (schema) schemaValidator.validate(schema.jsonSchema, null);
+  }
+  const workspaceReaders = new LocalWorkspaceReaders(new RipgrepCodeSearch());
+  const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor,
+    schemas, schemaValidator, readers: workspaceReaders });
   // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
   const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
     snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning,
     completeness: { beforeCandidate: (...a) => units.beforeCandidate(...a), assertComplete: (...a) => units.assertComplete(...a) } });
   const units = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
-    scheduler: checkScheduler, readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()), events, clock, redactor });
+    scheduler: checkScheduler, readers: workspaceReaders, events, clock, redactor });
+  // ADR-0055/0057: one check per artifact type, applied when the agent calls `finish` and again after the run.
+  const proposedChecks = new Registry<ProposedArtifactCheck>();
+  const artifactChecks = new Registry<ArtifactCheck>();
+  const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck].map((check) => [check.artifactType, check]));
+  for (const type of new Set([...artifactTypes.filter((type) => type.spec.schema).map((type) => type.metadata.name), ...domainChecks.keys()])) {
+    const check = schemaArtifactCheck(type, schemas, schemaValidator, domainChecks.get(type));
+    proposedChecks.register(type, check);
+    artifactChecks.register(type, persistedArtifactCheck(check, { reader: store, readers: workspaceReaders }));
+  }
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [repoContextProvider(workspaces, redactor), codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
-      retrospectiveContext(store, redactor),
+      retrospectiveContext(store, redactor), artifactSchemaContext(schemas),
       planningContext({ reader: store, compiler, redactor }),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
       unitContext({ ledger: units, compiler, redactor }),
-      outputFeedbackContext({ reader: store, redactor }), baseConflictProvider()],
+      outputFeedbackContext({ reader: store, redactor }), baseConflictProvider(), citedCodeContext(workspaceReaders)],
     models,
     recorders,
     environments,
@@ -265,11 +288,12 @@ export async function createFactory(o: FactoryOptions) {
       prompts,
       tools,
       environments,
-      readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()),
+      readers: workspaceReaders,
       knowledge,
       toolProvider,
       turns: recordedTurns,
       checks: verification,
+      finish: new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders }),
     }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
@@ -291,8 +315,6 @@ export async function createFactory(o: FactoryOptions) {
     gate.type === "verification-plan-review" ? planningReview(gate, compiler) : gate);
   gates.register(retrospectiveReview.type, retrospectiveReview);
   gates.register(units.gate.type, units.gate);
-  const artifactChecks = new Registry<ArtifactCheck>();
-  for (const check of [verification.artifactCheck, planning.artifactCheck]) artifactChecks.register(check.artifactType, check);
 
   // ── sources & outbox (rule 7) ────────────────────────────────────────
   const connectors = new Registry<SourceConnector>();

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from jsonschema import validate, ValidationError
+from jsonschema import validate, ValidationError, Draft202012Validator, SchemaError
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = json.loads((ROOT / "schemas/common.schema.json").read_text())
@@ -82,6 +82,17 @@ def main():
         if key in index:
             errors.append(f"{path}: duplicate {key}")
         index[key] = path
+        if doc["kind"] == "ArtifactType" and "schema" in doc["spec"]:
+            contract = doc["spec"]["schema"]
+            if (doc["spec"].get("format") != "json" or not isinstance(contract, dict)
+                    or not isinstance(contract.get("version"), str) or not contract["version"].strip()
+                    or not isinstance(contract.get("jsonSchema"), dict)):
+                errors.append(f"{path}: ArtifactType schema requires JSON format, a version and a JSON Schema object")
+            else:
+                try:
+                    Draft202012Validator.check_schema(contract["jsonSchema"])
+                except SchemaError as e:
+                    errors.append(f"{path}: invalid ArtifactType schema: {e.message}")
 
     for path, doc in docs:
         for ref_key, name in walk_refs({"spec": doc.get("spec", {}), "status": doc.get("status", {})}):

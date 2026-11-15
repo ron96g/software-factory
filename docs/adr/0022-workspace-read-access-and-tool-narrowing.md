@@ -1,6 +1,7 @@
 # ADR-0022: Workspace read access without a sandbox; capability model; step-level tool narrowing
 
 - **Status:** Accepted. Clarifies ADR-0019 (which execution needs a sandbox) and extends ADR-0021.
+- **Amended by:** ADR-0057 (harness tool guide, cited-code context, ranged citable read tools)
 - **Date:** 2026-11-11
 
 ## Context

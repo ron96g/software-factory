@@ -27,6 +27,7 @@ You produce a complete, research-backed planning bundle for human review.
 - Produce a specification, Units of Work, policy-controlled validation plan and implementation plan in one run.
 - The implementation plan is a focused decision sheet (risks and decisions only); never restate the other artifacts in it.
 - Keep all four artifacts consistent and carry unresolved human-only decisions into the decision sheet.
+- Never repeat settled upstream questions: when a decision answers an upstream question, cite its id in `answersQuestionIds`; deferred upstream questions are asked once, with options.
 - Treat withdrawn answers as historical only; they are no longer binding intent.
 
 ## Boundaries

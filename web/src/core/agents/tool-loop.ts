@@ -23,22 +23,23 @@ import {
   type ToolSession,
   type RecordedToolTurns,
   type AgentCheckRequests,
+  type FinishValidator,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
-import { parseKnowledge } from "./executors.ts";
+import { parseKnowledge, parseQuestions } from "./executors.ts";
 import { scopedSearcher } from "../knowledge/context.ts";
 
 const FINISH: ToolSchema = {
   name: "finish",
-  description: "Finish the task and report the result. Call exactly once, at the end.",
+  description: "Finish the task and report the result. It is checked before the run ends; if problems are found they come back as this tool's result, so correct them and call finish again.",
   parameters: {
     type: "object",
     properties: {
       summary: { type: "string" },
       artifacts: { type: "array", items: { type: "object", properties: { type: { type: "string" }, content: { type: "string" } }, required: ["type", "content"] } },
       outcome: { type: "string" },
-      questions: { type: "array", items: { type: "string" } },
+      questions: { type: "array", items: { anyOf: [{ type: "string" }, { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, blocker: { type: "boolean" }, options: { type: "array", items: { type: "string" } } }, required: ["text"] }] } },
       feedback: {
         type: "array", maxItems: 3,
         description: "Optional, only for agents opted into retrospective feedback. Observations, never instructions.",
@@ -72,7 +73,13 @@ export interface ToolLoopDeps {
   turns: RecordedToolTurns;
   maxSteps?: number;
   checks?: AgentCheckRequests;
+  /** ADR-0057: checks the result when the agent calls `finish`, so it can correct it in the same conversation. */
+  finish?: FinishValidator;
+  /** In-loop corrections before the result goes to the post-run checks anyway (default 2). */
+  maxFinishCorrections?: number;
 }
+
+const MCP_SEPARATOR = "__";
 
 /**
  * Agentic tool loop (ADR-0019/0021). Every model turn, tool call and tool result is recorded (rule 14).
@@ -121,8 +128,6 @@ export class ToolLoopExecutor implements AgentExecutor {
 
     if (!this.needsSandbox(ctx)) {
       const prompt = this.d.prompts.build(ctx, "tools");
-      await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
-      await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
       await ctx.transcript.record({ role: "note", author: sys, content: `read-only workspace access: ${ctx.workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10)}`).join(", ")}` });
       return this.loop(ctx, prompt, { read: reader, search: reader, knowledge: this.knowledgeFor(ctx) }, async () => "");
     }
@@ -140,8 +145,6 @@ export class ToolLoopExecutor implements AgentExecutor {
     }
 
     const prompt = this.d.prompts.build(ctx, "tools");
-    await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
-    await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
 
     if (insufficient) {
       await ctx.transcript.record({
@@ -170,11 +173,12 @@ export class ToolLoopExecutor implements AgentExecutor {
 
   private async loop(
     ctx: ExecutionContext,
-    prompt: { system: string; user: string },
+    initialPrompt: { system: string; user: string },
     all: ToolCapabilities,
     diff: () => Promise<string>,
   ): Promise<AgentResult> {
     if (this.d.checks) all = { ...all, checks: { run: (input) => this.d.checks!.run(ctx, input) } };
+    let prompt = initialPrompt;
     const model = ctx.model!;
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
     const sys = { type: "system" as const, id: "tool-loop" };
@@ -182,6 +186,7 @@ export class ToolLoopExecutor implements AgentExecutor {
     // `search` is always bound to the workspace (not the sandbox's in-progress writes); see ADR-0022.
     {
       const bound = new Map<string, BoundTool>();
+      const builtIn = new Set<string>();
       const unavailable: string[] = [];
       for (const name of ctx.agent.spec.tools ?? []) {
         const tool = this.d.tools.get(name)!;
@@ -192,6 +197,7 @@ export class ToolLoopExecutor implements AgentExecutor {
         // ISP: a tool receives only the capabilities it declares.
         const caps: ToolCapabilities = Object.fromEntries((tool.capabilities ?? []).map((c) => [c, all[c]]));
         bound.set(name, tool.bind!(caps));
+        builtIn.add(name);
       }
       if (unavailable.length) {
         await ctx.transcript.record({ role: "note", author: sys, content: `tools not available in this run (missing capability): ${unavailable.join(", ")}` });
@@ -206,11 +212,19 @@ export class ToolLoopExecutor implements AgentExecutor {
         }
         if (shadowed.length) await ctx.transcript.record({ role: "note", author: sys, content: `MCP tools hidden by built-in tools of the same name: ${shadowed.join(", ")}` });
         const schemas = [...[...bound.values()].map((b) => b.schema), FINISH];
+        // ADR-0057: the harness explains the tools it actually bound; the agent definition only names them.
+        prompt = { ...prompt, system: `${prompt.system}\n\n${this.toolGuide(ctx, bound, builtIn, all)}` };
+        await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
+        await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
         const messages: ToolLoopMessage[] = [
           { role: "system", content: prompt.system },
           { role: "user", content: prompt.user },
         ];
         const maxSteps = this.d.maxSteps ?? 30;
+        const maxCorrections = this.d.maxFinishCorrections ?? 2;
+        const calls: Record<string, number> = {};
+        let corrections = 0;
+        let lastFinish: AgentResult | undefined;
 
         for (let step = 1; step <= maxSteps; step++) {
           const reply = await this.d.turns.complete({ model, messages, tools: schemas, transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
@@ -221,19 +235,68 @@ export class ToolLoopExecutor implements AgentExecutor {
           }
           messages.push({ role: "assistant", content: reply.text, toolCalls: reply.toolCalls });
           for (const call of reply.toolCalls) {
+            calls[call.name] = (calls[call.name] ?? 0) + 1;
             if (call.name === "finish") {
               await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
-              return await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step });
+              const result = await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step,
+                toolUse: { steps: step, calls: { ...calls }, finishCorrections: corrections } });
+              // Once the corrections are used up, the post-run output checks decide (ADR-0049/0055).
+              const problems = corrections < maxCorrections ? await this.validateFinish(ctx, result) : [];
+              if (!problems.length) return result;
+              lastFinish = result;
+              corrections++;
+              const content = `finish rejected (correction ${corrections} of ${maxCorrections}). Fix these problems and call finish again with the complete result; keep everything that was already correct.\n- ${problems.join("\n- ")}`;
+              await ctx.transcript.record({ role: "tool-result", author: sys, content, meta: { tool: call.name, step } });
+              messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
+              continue;
             }
             const result = await this.d.turns.invoke({ call, tool: bound.get(call.name), transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
           }
         }
+        // A rejected finish on the last step still goes to the post-run checks (ADR-0057 §4).
+        if (lastFinish) return lastFinish;
         throw new Error(`tool loop did not finish within ${maxSteps} steps`);
       } finally {
         await session?.close();
       }
     }
+  }
+
+  private async validateFinish(ctx: ExecutionContext, result: AgentResult): Promise<string[]> {
+    if (!this.d.finish) return [];
+    try {
+      return await this.d.finish.validate(ctx, result);
+    } catch (e) {
+      // Never fail the run on a validator error: the post-run checks still apply.
+      await ctx.transcript.record({ role: "note", author: { type: "system", id: "tool-loop" }, content: `finish validation skipped: ${e instanceof Error ? e.message : String(e)}` });
+      return [];
+    }
+  }
+
+  /** Rendered from the tools bound for this run: trusted guidance for built-in tools, only names for MCP tools (ADR-0034). */
+  private toolGuide(ctx: ExecutionContext, bound: Map<string, BoundTool>, builtInNames: Set<string>, caps: ToolCapabilities): string {
+    const builtIn = [...bound.keys()].filter((name) => builtInNames.has(name));
+    const external = [...bound.keys()].filter((name) => !builtInNames.has(name));
+    const servers = new Map<string, string[]>();
+    for (const name of external) {
+      const server = name.includes(MCP_SEPARATOR) ? name.slice(0, name.indexOf(MCP_SEPARATOR)) : "external";
+      servers.set(server, [...(servers.get(server) ?? []), name]);
+    }
+    const workspaces = ctx.workspaces.filter((w) => w.status?.phase === "Ready");
+    const reads = !!caps.read || !!caps.search;
+    return [
+      "## Tools for this run",
+      ...(workspaces.length ? [`Workspaces (pinned commits): ${workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10) ?? "?"}`).join(", ")}.`] : []),
+      ...builtIn.map((name) => { const t = this.d.tools.get(name)!; return `- \`${name}\`: ${t.guidance ?? t.description}`; }),
+      ...[...servers].map(([server, names]) => `- MCP server ${server} (external; see each tool's own description): ${names.map((n) => `\`${n}\``).join(", ")}`),
+      "- `finish`: report your result. It is checked before the run ends; problems come back as the tool result so you can correct them.",
+      ...(reads ? [
+        "",
+        "Before you finish, check the claims you rely on: first against any \"Cited code\" excerpts in your input, then with the read tools.",
+        "Cite what you checked as repo:path:line. Code at the pinned commit takes precedence over earlier artifacts.",
+      ] : []),
+    ].join("\n");
   }
 
   private async openToolServers(ctx: ExecutionContext): Promise<ToolSession | undefined> {
@@ -267,7 +330,7 @@ export class ToolLoopExecutor implements AgentExecutor {
     ctx: ExecutionContext,
     args: Record<string, unknown>,
     diff: () => Promise<string>,
-    meta: { model: NonNullable<ExecutionContext["model"]>; promptHash: string; steps: number },
+    meta: { model: NonNullable<ExecutionContext["model"]>; promptHash: string; steps: number; toolUse: NonNullable<AgentResult["provenance"]>["toolUse"] },
   ): Promise<AgentResult> {
     const artifacts = (Array.isArray(args.artifacts) ? args.artifacts : [])
       .filter((a): a is { type: string; content: string } => !!a && typeof a.type === "string")
@@ -283,12 +346,13 @@ export class ToolLoopExecutor implements AgentExecutor {
       summary: typeof args.summary === "string" ? args.summary : undefined,
       artifacts,
       outcome: typeof args.outcome === "string" ? args.outcome : undefined,
-      questions: Array.isArray(args.questions) ? args.questions.filter((q): q is string => typeof q === "string" && !!q.trim()) : [],
+      questions: parseQuestions(args.questions),
       knowledge: parseKnowledge(args.knowledge),
       feedback: args.feedback,
       provenance: {
         model: { provider: meta.model.provider, name: meta.model.model, tier: meta.model.tier, params: { steps: meta.steps } },
         promptHash: meta.promptHash,
+        toolUse: meta.toolUse,
       },
     };
   }

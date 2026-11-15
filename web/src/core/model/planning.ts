@@ -20,6 +20,8 @@ export interface PlanningDecision {
   recommendation?: string;
   rationale: string;
   required: boolean;
+  /** IDs of upstream agent questions this decision answers (explicit link, independent of wording). */
+  answersQuestionIds?: string[];
 }
 
 export interface PlanningDocument extends PlanningSections {
