@@ -43,7 +43,7 @@ export class LocalWorkspaceReaders implements WorkspaceReaderFactory {
     };
     const prefix = (ws: Workspace, path: string) => (multi ? `${ws.spec.repositoryRef.name}/${path}` : path);
 
-    return {
+    const api: FileReader & CodeSearcher = {
       async readFile(p: string): Promise<string> {
         const { ws, rel } = locate(p);
         // Lexical checks aren't enough: a committed symlink (e.g. link -> ~/.ssh) must not lead outside the workspace.
@@ -68,14 +68,30 @@ export class LocalWorkspaceReaders implements WorkspaceReaderFactory {
         }
         return out;
       },
-      async searchCode(query: string, o: { glob?: string; maxHits?: number } = {}): Promise<CodeHit[]> {
+      async searchCode(query: string, o: { glob?: string; maxHits?: number; context?: number } = {}): Promise<CodeHit[]> {
         const hits: CodeHit[] = [];
         for (const ws of ready) {
           const repo = { metadata: { name: ws.spec.repositoryRef.name }, spec: { index: o.glob ? { include: [o.glob] } : {} } } as unknown as Repository;
           hits.push(...(await search.search(repo, ws.status!.path!, { terms: [query], maxHitsPerTerm: o.maxHits ?? 40 })));
         }
-        return hits.slice(0, o.maxHits ?? 40);
+        const selected = hits.slice(0, o.maxHits ?? 40);
+        if (!o.context) return selected;
+        const files = new Map<string, Promise<string[] | undefined>>();
+        return Promise.all(selected.map(async (hit) => {
+          const ws = ready.find((w) => w.spec.repositoryRef.name === hit.repository);
+          if (!ws) return hit;
+          const key = `${hit.repository}/${hit.path}`;
+          if (!files.has(key)) files.set(key, api.readFile(prefix(ws, hit.path)).then((t) => t.split("\n"), () => undefined));
+          const lines = await files.get(key)!;
+          if (!lines) return hit;
+          const context: [number, string][] = [];
+          for (let n = Math.max(1, hit.line - o.context!); n <= Math.min(lines.length, hit.line + o.context!); n++) {
+            if (n !== hit.line) context.push([n, lines[n - 1]]);
+          }
+          return { ...hit, context };
+        }));
       },
     };
+    return api;
   }
 }

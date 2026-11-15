@@ -74,6 +74,12 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
       detail: r.status?.result?.summary ?? "",
       stage: r.spec.stage,
       runName: r.metadata.name,
+      artifacts: [
+        ...(input.artifacts ?? []).filter((a) => r.status?.provenance?.inputs[a.metadata.name] !== undefined)
+          .map((a) => ({ name: a.metadata.name, type: a.spec.artifactTypeRef.name, role: "input" as const })),
+        ...(input.artifacts ?? []).filter((a) => a.spec.producedBy?.agentRunRef.name === r.metadata.name)
+          .map((a) => ({ name: a.metadata.name, type: a.spec.artifactTypeRef.name, role: "output" as const })),
+      ],
     });
   }
 

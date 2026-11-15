@@ -70,6 +70,10 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Skill** (`kind: Skill`) | A reusable, instructable capability (procedure) that agents use. Defined in Markdown. |
 | **Workflow** (`kind: Workflow`) | A declarative flow of phases → stages → steps, with gates. Defined as a YAML custom resource. |
 | **ArtifactType** (`kind: ArtifactType`) | A typed output that is passed between steps. It implements *persistent context*. |
+| **Artifact schema contract** | An optional versioned draft-2020-12 JSON Schema on an ArtifactType. It validates output structure before domain checks; schema identity is recorded in agent context (ADR-0055). |
+| **Cited-code context** | Line-numbered excerpts of every `repo:path:line` citation in a run's inputs, resolved deterministically against the pinned workspace before the first model step, with unresolved citations marked (ADR-0057). |
+| **In-loop output validation** | Schema and domain checks run when an agent calls `finish`; errors return as the tool result so the agent corrects in the same conversation. Post-run rejection and rerun remain the backstop (ADR-0057). |
+| **Planning review** | The typed `planning-review` artifact in `factory-plan`: research gaps, plan defects, answerable human decisions and advisory findings with exact reviewed evidence references. Its findings drive the displayed report and validated outcome (ADR-0055). |
 | **Stage** | A group of steps inside a phase, e.g. `mob-elaboration` or `bolts`. |
 | **Step** | One agent invocation with skills, inputs, and outputs. |
 | **Gate** | A checkpoint at the end of a stage or phase: `human-approval` (implements *human oversight*) or `automated` (CI checks). |
@@ -80,6 +84,9 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Role** | A configurable tag (e.g. `ProductOwner`, `Engineer`) that grants permissions and matches `gate.approvers[].role`. |
 | **Squad** | A team. Users belong to one or more squads, and work items are visible and editable only within them. |
 | **Principal** | The authenticated caller (user + roles + squads) that is passed to every API entry point. |
+| **WorkItem owner** (proposed ADR-0056) | The single accountable human who accepts or rejects peer feedback. Ownership grants neither namespace access nor gate-approver roles. |
+| **Feedback thread** (proposed `FeedbackThread`, ADR-0056) | Revision-bound human discussion on an item, plan or design, with append-only replies and owner decisions. Separate from agent Conversations. |
+| **Accepted peer input** (proposed ADR-0056) | Exact owner-approved instructions queued for a safe plan/design revision and pinned in the relevant AgentRun. Acceptance is not gate approval or proof of implementation. |
 | **AgentRun** | One execution of an agent for a step (Job pattern). It has a transcript and provenance. |
 | **Transcript** | The append-only, ordered log of everything in an AgentRun or Conversation: prompts, responses, tool calls, delegations. |
 | **Provenance** | What a run used (model, definition versions, inputs, answers). It makes runs explainable and re-runnable. |

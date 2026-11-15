@@ -2,6 +2,7 @@ import type { WorkItem } from "../model/kinds.ts";
 import type { Principal } from "./app.ts";
 import type { CompiledStage, GateDecision } from "./workflow.ts";
 import type { PlanFormat, PlanningDecision, PlanningDocument, PlanningSections } from "../model/planning.ts";
+import type { PlanningReadiness, PlanningReviewDocument } from "../model/planning-review.ts";
 export type { PlanFormat, PlanningDecision, PlanningDocument, PlanningSections } from "../model/planning.ts";
 
 export interface PlanningWorkspace {
@@ -28,6 +29,8 @@ export interface PlanningWorkspace {
   disposition?: "rejected" | "deferred";
   /** The independent AI review requested changes: approving needs an explicit human reason (the human decides). */
   reviewFindings?: boolean;
+  readiness?: PlanningReadiness;
+  review?: PlanningReviewDocument;
 }
 
 export interface PlanningQueries {

@@ -1,6 +1,7 @@
 # ADR-0048: AI plan review advises; the human decides
 
 - **Status:** Accepted
+- **Amended by:** ADR-0055 (typed planning-review findings and decision references)
 - **Date:** 2026-11-14
 - **Deciders:** project owner
 - **Amends:** ADR-0046 (only its rule that unresolved AI review findings block plan approval)

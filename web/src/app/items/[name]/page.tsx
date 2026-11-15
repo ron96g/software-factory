@@ -32,6 +32,7 @@ import type { GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/
 import { act, api, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
+import { EvidenceArtifacts } from "@/ui/evidence-artifacts.tsx";
 import { ChatPanel, RunDrawer } from "@/ui/run-inspector.tsx";
 import { EventTimeline } from "@/ui/event-timeline.tsx";
 import { RunList } from "@/ui/run-list.tsx";
@@ -705,7 +706,7 @@ const SEVERITY = {
   ok: { color: "teal", icon: IconCheck, label: "OK" },
 } as const;
 
-function EvidenceList({ evidence, onOpenRun }: { evidence: GateEvidence; onOpenRun: (n: string) => void }) {
+function EvidenceList({ evidence, artifacts, onOpenRun }: { evidence: GateEvidence; artifacts: WorkItemDetail["artifacts"]; onOpenRun: (n: string) => void }) {
   if (!evidence.items.length) {
     return (
       <Text size="sm" c="dimmed">
@@ -736,6 +737,7 @@ function EvidenceList({ evidence, onOpenRun }: { evidence: GateEvidence; onOpenR
                   {i.detail}
                 </Text>
               )}
+              <EvidenceArtifacts refs={i.artifacts} artifacts={artifacts} />
             </div>
           </Group>
         );
@@ -786,7 +788,7 @@ function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; on
               {SEVERITY[evidence.status].label}
             </Badge>
           </Group>
-          <EvidenceList evidence={evidence} onOpenRun={onOpenRun} />
+          <EvidenceList evidence={evidence} artifacts={d.artifacts} onOpenRun={onOpenRun} />
         </Card>
         {outputs.length > 0 && (
           <Accordion variant="contained" defaultValue={outputs[0].metadata.name}>

@@ -29,6 +29,23 @@ test("X5: verdicts stated only in text count (older runs / agents ignoring the o
   assert.match(e.items[0].label, /fail \(from report text\)/);
 });
 
+test("gate evidence links the artifacts its run read and produced, so referenced content can be read before approving", () => {
+  const triage = { kind: "AgentRun", metadata: { name: "x-triage-1-r2" }, spec: { stage: "triage", step: "triage-signal", agentRef: { name: "triager" }, outcomes: ["accept"] },
+    status: { phase: "Succeeded", result: { outcome: "accept", summary: "Recommended direction is option 1 from the research notes." },
+      provenance: { executor: "llm", definitions: {}, inputs: { "x-triage-0-r2-research-notes": "7" } } } } as unknown as AgentRun;
+  const artifact = (name: string, type: string, run: string) => ({ kind: "Artifact", metadata: { name },
+    spec: { artifactTypeRef: { name: type }, content: "", producedBy: { agentRunRef: { name: run } } } }) as never;
+  const e = deriveGateEvidence({ runs: [triage], events: [], clarifications: [], artifacts: [
+    artifact("x-triage-0-r2-research-notes", "research-notes", "x-triage-0-r2"),
+    artifact("x-triage-1-r2-triage-decision", "triage-decision", "x-triage-1-r2"),
+    artifact("unrelated", "spec", "other"),
+  ] });
+  assert.deepEqual(e.items[0].artifacts, [
+    { name: "x-triage-0-r2-research-notes", type: "research-notes", role: "input" },
+    { name: "x-triage-1-r2-triage-decision", type: "triage-decision", role: "output" },
+  ]);
+});
+
 test("X5: failures recorded before the latest code change are downgraded (stale)", () => {
   const dev = { kind: "AgentRun", metadata: { name: "x-implement-0-r6" }, spec: { stage: "implement", step: "write-code", agentRef: { name: "developer" }, outputs: [{ name: "source-code" }] }, status: { phase: "Succeeded", finishedAt: "2026-01-01T00:00:05Z" } } as unknown as AgentRun;
   const e = deriveGateEvidence({ runs: [dev], events: [ev("CheckFailed", "build on repo: exit 1", "2026-01-01T00:00:01Z")], clarifications: [] });

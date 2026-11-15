@@ -12,7 +12,7 @@ import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { Registry } from "./registry/registry.ts";
 import { outputFeedbackContext } from "./agents/output-feedback.ts";
 
-test("malformed output reruns only its step with the reason, then hands over after the bounded budget", async () => {
+test("malformed output reruns only its step with the reason, then fails without advancing after the bounded budget", async () => {
   const db = new DatabaseSync(":memory:");
   const clock = { now: () => new Date("2026-11-14T12:00:00Z") };
   const store = new SqliteStore(db, clock);
@@ -52,9 +52,11 @@ test("malformed output reruns only its step with the reason, then hands over aft
 
     wi = await produce("bad");
     wi = await produce("bad");
-    assert.equal(wi.status?.step, 2, "after the budget the existing gate handling takes over");
+    assert.equal(wi.status?.step, 1, "invalid output never advances");
+    assert.equal(wi.status?.phase, "Failed");
+    assert.match(wi.status?.message ?? "", /Invalid output.*recommendation/);
     wi = await current();
-    await store.updateStatus({ ...wi, status: { ...wi.status!, step: 1, round: 9, retries: {} } });
+    await store.updateStatus({ ...wi, status: { ...wi.status!, phase: "Running", step: 1, round: 9, retries: {} } });
     wi = await produce("ok");
     assert.equal(wi.status?.step, 2, "well-formed output proceeds immediately");
   } finally { db.close(); }

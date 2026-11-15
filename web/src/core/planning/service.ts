@@ -2,21 +2,66 @@ import { createHash } from "node:crypto";
 import type { AgentRun, Approval, Artifact, CheckRun, OutboxMessage, WorkItem } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
-import type { AgentQuestionPolicy, ArtifactCheck, CompiledStage, EventRecorder, PlanningCommands, PlanningDecision, PlanningReviewOutcome,
+import type { AgentQuestionPolicy, ArtifactProducer, CompiledStage, FileReader, ProposedArtifactCheck, EventRecorder, PlanningCommands, PlanningDecision, PlanningReviewOutcome,
   PlanningDocument, PlanningQueries, PlanningReviewBinding, PlanningRevisionInput, PlanningSections, PlanningWorkspace,
   Principal, Redactor, ResourceReader, ResourceWriter, WorkflowCompiler, WorkItemIntentPolicy } from "../ports/index.ts";
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LEGACY_PLAN_SECTIONS, type PlanFormat } from "../model/planning.ts";
 import { currentPlanningRuns, planningIntent } from "./evidence.ts";
+import type { ArtifactSchemaReader, JsonSchemaValidator } from "../ports/schema.ts";
+import type { WorkspaceReaderFactory } from "../ports/integration.ts";
+import { PLANNING_REVIEW_SCHEMA_VERSION, planningReviewOutcome, type CodeLocation, type PlanningReviewDocument } from "../model/planning-review.ts";
+import { readCited } from "../code/citations.ts";
+import { pinnedWorkspaceFiles } from "../code/pinned.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const invalid = (message: string): never => { throw new StoreError(message, "Invalid"); };
 const current = (resource: { metadata: { labels?: Record<string, string> } }) =>
   !resource.metadata.labels?.[LABEL_SUPERSEDED] && !resource.metadata.labels?.["factory.ai-dlc.io/replay"];
+/** The review producer as recorded by a persisted run. */
+const runProducer = (run: AgentRun | undefined): ArtifactProducer => ({
+  runName: run?.metadata.name ?? "", stage: run?.spec.stage ?? "", inputs: run?.status?.provenance?.inputs ?? {},
+  contexts: run?.status?.provenance?.contexts ?? {}, outcome: run?.status?.result?.outcome, questions: run?.status?.result?.questions ?? [],
+  repositories: Object.keys(run?.status?.provenance?.workspaces ?? {}),
+});
+
+/** Best-effort display of a review that no longer validates (e.g. an earlier schema version). Never used for decisions. */
+function readableReview(content: string): PlanningReviewDocument | undefined {
+  try {
+    const value = JSON.parse(content) as Partial<PlanningReviewDocument>;
+    return typeof value?.summary === "string" && Array.isArray(value.findings) ? value as PlanningReviewDocument : undefined;
+  } catch { return undefined; }
+}
+
+/** ADR-0057: code evidence must point at real lines of the producer's pinned workspaces. Location, not truth. */
+async function checkLocations(locations: { where: string; location: CodeLocation }[], repositories: string[], files: FileReader | null) {
+  if (!locations.length) return;
+  if (!files) return invalid("The pinned workspace this review read is no longer available, so its code evidence cannot be checked. Request a fresh planning revision.");
+  const read = new Map<string, Promise<string[]>>();
+  for (const { where, location } of locations) {
+    const { repository, path, startLine, endLine } = location;
+    const cited = `${repository}:${path}:${startLine}-${endLine}`;
+    if (!repositories.includes(repository)) {
+      return invalid(`${where}: repository "${repository}" is not one of this run's workspaces (${repositories.join(", ") || "none"}). Cite repository, path and lines exactly as read_file shows them.`);
+    }
+    if (endLine < startLine) return invalid(`${where}: ${cited} has endLine before startLine`);
+    const key = `${repository}/${path}`;
+    if (!read.has(key)) read.set(key, readCited(files, repositories, { repository, path }));
+    let lines: string[];
+    try { lines = await read.get(key)!; }
+    catch (error) {
+      return invalid(`${where}: ${repository}:${path} could not be read (${error instanceof Error ? error.message : String(error)}). Cite a file you read with read_file.`);
+    }
+    if (endLine > lines.length) return invalid(`${where}: ${cited} is out of range; the file has ${lines.length} lines.`);
+  }
+}
+
 const normalized = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
 const signature = (decision: PlanningDecision) => hash([
   normalized(decision.question), decision.options.map(normalized).sort(), decision.required,
 ]);
+const savedAnswer = (item: WorkItem, decision: PlanningDecision) => item.spec.planning?.answers[decision.id] ??
+  Object.values(item.spec.planning?.answers ?? {}).find((answer) => answer.signature === signature(decision));
 
 /** Without a format, either complete shape is accepted (history and human drafts across a migration). */
 export function parsePlanningSections(value: unknown, format?: PlanFormat): PlanningSections {
@@ -75,15 +120,26 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
   private readonly d: {
     namespace: string; reader: ResourceReader; writer: ResourceWriter; compiler: WorkflowCompiler;
     events: EventRecorder; redactor: Redactor;
+    schemas?: ArtifactSchemaReader; schemaValidator?: JsonSchemaValidator;
+    /** ADR-0057: reopens a review's pinned workspaces to check its code locations for display and approval. */
+    readers?: WorkspaceReaderFactory;
   };
   constructor(d: PlanningService["d"]) { this.d = d; }
 
   /** ADR-0049/0051: a malformed plan, or one in the wrong format for its workflow, goes back to its author immediately. */
-  readonly artifactCheck: ArtifactCheck = {
+  readonly artifactCheck: ProposedArtifactCheck = {
     artifactType: "implementation-plan",
-    check: async (item, artifact) => {
-      try { parsePlanningDocument(artifact.spec.content, (await this.workflow(item))?.format); return undefined; }
+    check: async ({ item, content }) => {
+      try { parsePlanningDocument(content, (await this.workflow(item))?.format); return undefined; }
       catch (e) { if (!isStoreError(e, "Invalid")) throw e; return e.message; }
+    },
+  };
+
+  readonly reviewCheck: ProposedArtifactCheck = {
+    artifactType: "planning-review",
+    check: async ({ item, content, producer, files }) => {
+      try { await this.typedReview(item, content, producer, files); return undefined; }
+      catch (error) { if (!isStoreError(error, "Invalid")) throw error; return error.message; }
     },
   };
 
@@ -112,7 +168,9 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
       return invalid("Planning needs ordered planner/review or revision/synthesis/review stages and the existing verified human plan gate");
     }
     const format: PlanFormat = policy.planFormat ?? "full";
-    return { workflow, policy, plannerStage, revisionStage, synthesisStage, format };
+    const reviewType = workflow.stage(policy.reviewStage)?.steps.some((step) =>
+      step.outputs?.some((output) => output.artifactRef.name === "planning-review")) ? "planning-review" : "review-report";
+    return { workflow, policy, plannerStage, revisionStage, synthesisStage, format, reviewType };
   }
 
   private async state(item: WorkItem) {
@@ -139,23 +197,118 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     return { runs, allArtifacts: allArtifacts.filter(owned), artifact, approvals: approvals.filter(owned), canRevise, revision };
   }
 
-  private decisions(item: WorkItem, document: PlanningDocument, runs: AgentRun[], stages: Set<string>) {
-    const decisions = [...document.decisions];
+  private decisions(item: WorkItem, document: PlanningDocument, runs: AgentRun[], stages: Set<string>, review?: PlanningReviewDocument) {
+    const decisions = [...document.decisions, ...(review?.decisions ?? [])];
     for (const run of runs.filter((run) => stages.has(run.spec.stage))) {
       for (const question of run.status?.result?.questions ?? []) {
         if (decisions.some((decision) => normalized(decision.question) === normalized(question))) continue;
         // A question that explicitly cites a structured decision ("OD-1: …") is that decision, not a new blocker.
         const cited = /^\s*\[?([a-zA-Z0-9][a-zA-Z0-9_-]{0,79})\]?\s*[:—–]/.exec(question)?.[1];
-        if (cited && document.decisions.some((decision) => decision.id === cited)) continue;
+        if (cited && decisions.some((decision) => decision.id === cited)) continue;
         decisions.push({ id: `question-${hash(normalized(question)).slice(0, 20)}`, question, options: [], required: true,
           rationale: `Unresolved question recorded by ${run.spec.agentRef.name} in ${run.spec.stage}.` });
       }
     }
     return decisions.map((decision) => {
-      const saved = item.spec.planning?.answers[decision.id] ??
-        Object.values(item.spec.planning?.answers ?? {}).find((answer) => answer.signature === signature(decision));
+      const saved = savedAnswer(item, decision);
       return { ...decision, answer: saved?.signature === signature(decision) ? saved.answer : undefined };
     });
+  }
+
+  /**
+   * `files`: the producer's pinned workspaces for checking code locations; `null` when no longer readable (fails);
+   * `undefined` skips location checks for display and approval, which only see reviews that already passed them.
+   */
+  /**
+   * Code locations are checked whenever the review's pinned workspaces are still readable. Once they are gone
+   * (e.g. cleaned up after completion) the check is skipped here: the review already passed it before advancing.
+   */
+  private async locations(item: WorkItem, run: AgentRun | undefined): Promise<FileReader | undefined> {
+    if (!this.d.readers || !run) return undefined;
+    return (await pinnedWorkspaceFiles(this.d.reader, this.d.readers, item, run.status?.provenance)).files ?? undefined;
+  }
+
+  private async typedReview(item: WorkItem, content: string, producer: ArtifactProducer, files?: FileReader | null): Promise<{ document: PlanningReviewDocument; digest: string }> {
+    const schema = await this.d.schemas?.get("planning-review", nsOf(item));
+    if (!schema || schema.version !== PLANNING_REVIEW_SCHEMA_VERSION || !this.d.schemaValidator) return invalid("The supported planning-review schema is unavailable");
+    let value: unknown;
+    try { value = JSON.parse(content); }
+    catch (error) { if (!(error instanceof SyntaxError)) throw error; return invalid("planning-review must contain a JSON object"); }
+    const version = (value as { schemaVersion?: unknown } | null)?.schemaVersion;
+    if (typeof version === "string" && version !== PLANNING_REVIEW_SCHEMA_VERSION) {
+      return invalid(`This review uses planning-review schema version ${version}; the current version is ${PLANNING_REVIEW_SCHEMA_VERSION}. Request a fresh planning revision.`);
+    }
+    let schemaError: string | undefined;
+    const isReview = (candidate: unknown): candidate is PlanningReviewDocument => {
+      schemaError = this.d.schemaValidator!.validate(schema.jsonSchema, candidate);
+      return !schemaError;
+    };
+    if (!isReview(value)) return invalid(schemaError!);
+    const review = value;
+    // Apply the shared semantic rules as well as the ArtifactType's structural contract.
+    parsePlanningDocument(JSON.stringify({ risks: "Review decisions", decisions: review.decisions }));
+    const state = await this.state(item);
+    const config = await this.workflow(item);
+    const plan = state.artifact("implementation-plan");
+    if (!plan) return invalid("A typed planning review requires the current implementation plan");
+    const document = parsePlanningDocument(plan.spec.content, config?.format);
+    const decisions = new Map(document.decisions.map((decision) => [decision.id, decision]));
+    for (const decision of review.decisions) {
+      if (decisions.has(decision.id) || [...decisions.values()].some((existing) => normalized(existing.question) === normalized(decision.question))) {
+        return invalid(`Review decision ${decision.id} duplicates a plan decision; reference its existing ID instead`);
+      }
+      decisions.set(decision.id, decision);
+    }
+    if (!state.runs.some((run) => run.metadata.name === producer.runName) || producer.stage !== config?.policy.reviewStage) {
+      return invalid("The typed review must come from the current review stage");
+    }
+    if (producer.contexts["artifact-schema:planning-review"] !== schema.digest) {
+      return invalid("The planning-review schema changed or was not recorded. Request a fresh review revision.");
+    }
+    if (producer.questions.length) return invalid("Typed review questions must be structured decisions referenced by human-decision findings; result.questions must be empty");
+    const ids = new Set<string>();
+    const referenced = new Set<string>();
+    const locations: { where: string; location: CodeLocation }[] = [];
+    for (const finding of review.findings) {
+      if (ids.has(finding.id)) return invalid(`Duplicate review finding ID: ${finding.id}`);
+      ids.add(finding.id);
+      for (const entry of finding.evidence) {
+        if ("code" in entry) {
+          locations.push({ where: `Finding ${finding.id} evidence`, location: entry.code });
+          continue;
+        }
+        const ref = entry.artifact;
+        const evidence = state.allArtifacts.find((candidate) => candidate.metadata.name === ref.name && current(candidate));
+        if (!evidence || evidence.metadata.resourceVersion !== ref.resourceVersion ||
+            state.artifact(evidence.spec.artifactTypeRef.name)?.metadata.uid !== evidence.metadata.uid ||
+            producer.inputs[ref.name] !== ref.resourceVersion) {
+          return invalid(`Finding ${finding.id} requires current, exact reviewed input evidence: ${ref.name}`);
+        }
+      }
+      if (finding.kind === "research-gap") {
+        const { checked, searches } = finding.investigation;
+        if (!checked.length && !searches.length) {
+          return invalid(`Research gap ${finding.id} must say what you investigated: add the code you read to investigation.checked or the queries you ran to investigation.searches. If the code settles the claim, record it under verified instead of raising a finding.`);
+        }
+        locations.push(...checked.map((location) => ({ where: `Research gap ${finding.id} investigation`, location })));
+      }
+      if (finding.kind === "human-decision") {
+        const decision = decisions.get(finding.decisionId);
+        if (!decision?.required || decision.options.length < 2) return invalid(`Finding ${finding.id} must reference a required, answerable decision: ${finding.decisionId}`);
+        const answer = savedAnswer(item, decision);
+        if (answer?.signature === signature(decision)) return invalid(`Finding ${finding.id} re-asks answered decision ${decision.id}; use the recorded answer instead`);
+        referenced.add(finding.decisionId);
+      }
+    }
+    if (review.decisions.some((decision) => !referenced.has(decision.id))) return invalid("Every review-proposed decision must be referenced by a human-decision finding");
+    for (const verified of review.verified ?? []) {
+      if (ids.has(verified.id)) return invalid(`Verified claim ${verified.id} reuses a finding or verified ID; IDs must be unique`);
+      ids.add(verified.id);
+      locations.push(...verified.evidence.map((location) => ({ where: `Verified claim ${verified.id}`, location })));
+    }
+    if (producer.outcome !== planningReviewOutcome(review)) return invalid("The review outcome contradicts its typed findings");
+    if (files !== undefined) await checkLocations(locations, producer.repositories, files);
+    return { document: review, digest: schema.digest };
   }
 
   private async evidence(item: WorkItem) {
@@ -172,7 +325,10 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
       return invalid(`The proposed plan does not match this workflow's ${config.format} format (${error.message}). Request a revision to regenerate it.`);
     }
     const spec = state.artifact("spec"), units = state.artifact("units-of-work"), validation = state.artifact("validation-plan");
-    const review = state.artifact("review-report");
+    const review = state.artifact(config.reviewType);
+    if (!review && config.reviewType === "planning-review") {
+      return invalid("This workflow requires a schema-backed planning-review. Request a fresh planning revision; historical Markdown reports remain readable.");
+    }
     const artifacts = [spec, units, validation, plan, review];
     if (artifacts.some((artifact) => !artifact)) return invalid("Specification, Units, validation, implementation plan and independent review are all required");
     const intent = planningIntent(item);
@@ -217,9 +373,10 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     if (planningRuns[3].spec.stage !== config.synthesisStage || reviewRun.spec.stage !== config.policy.reviewStage ||
         planningRuns[3].spec.agentRef.name === reviewRun.spec.agentRef.name) return invalid("The plan needs an independent review of the synthesized revision");
     const stages = new Set(workflow.stages.slice(0, workflow.stages.findIndex((stage) => stage.name === policy.reviewStage) + 1).map((stage) => stage.name));
-    const decisions = this.decisions(item, document, state.runs, stages);
+    const typed = config.reviewType === "planning-review" ? await this.typedReview(item, r.spec.content, runProducer(reviewRun), await this.locations(item, reviewRun)) : undefined;
+    const decisions = this.decisions(item, document, state.runs, stages, typed?.document);
     return { ...state, document, decisions, reviewer: reviewRun,
-      fingerprint: hash([intent, workflow.versions, artifacts.map((a, index) => [a!.metadata.uid, a!.metadata.resourceVersion,
+      fingerprint: hash([intent, workflow.versions, typed?.digest, artifacts.map((a, index) => [a!.metadata.uid, a!.metadata.resourceVersion,
         index < planningRuns.length ? planningRuns[index].metadata.uid : reviewRun.metadata.uid]),
         decisions.map((decision) => [signature(decision), decision.answer ?? (!decision.required ? decision.recommendation : undefined)])]) };
   }
@@ -254,16 +411,19 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     const planningStop = ["Blocked", "AwaitingApproval"].includes(item.status?.phase ?? "") &&
       itemStage >= planningStart && itemStage <= reviewEnd;
     const stopped = ["Failed", "Done", "Closed"].includes(item.status?.phase ?? "");
-    const sources = config.format === "decision-sheet" ? ["spec", "units-of-work", "validation-plan"].flatMap((type) => {
+    // Research notes hold the options the plan builds on; humans must see them to approve the chosen direction.
+    const sources = config.format === "decision-sheet" ? ["spec", "units-of-work", "validation-plan", "research-notes"].flatMap((type) => {
       const artifact = state.artifact(type);
       return artifact ? [{ type, artifact: artifact.metadata.name, format: artifact.spec.format, content: artifact.spec.content }] : [];
     }) : [];
     const result: PlanningWorkspace = { enabled: true, revision: state.revision, format: config.format, sources, decisions: [], unansweredQuestions: [],
       recordedAnswers: [], withdrawnAnswers: item.spec.planning?.withdrawn ?? [],
       batchSubmitted: item.spec.planning?.batchSubmitted ?? false, draft: item.spec.planning?.draft, ready: false, issues: [],
-      canRevise: state.canRevise, canMigrate: !config.plannerStage && state.canRevise && (stopped || planningStop),
+      canRevise: state.canRevise, readiness: state.canRevise ? "needs-agent-repair" : "working",
+      canMigrate: !config.plannerStage && state.canRevise && (stopped || planningStop),
       disposition: item.spec.planning?.disposition };
     const plan = state.artifact("implementation-plan");
+    let validReview = false;
     try {
       if (plan) {
         try { result.document = parsePlanningDocument(plan.spec.content); }
@@ -272,11 +432,27 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
           throw new StoreError(`The generated plan is malformed (${error.message}). Request a revision, optionally with feedback, to regenerate it; nothing was approved.`, "Invalid");
         }
         const index = config.workflow.stages.findIndex((stage) => stage.name === config.policy.reviewStage);
-        result.decisions = this.decisions(item, result.document, state.runs, new Set(config.workflow.stages.slice(0, index + 1).map((stage) => stage.name)));
+        const stages = new Set(config.workflow.stages.slice(0, index + 1).map((stage) => stage.name));
+        result.decisions = this.decisions(item, result.document, state.runs, stages);
+        const review = config.reviewType === "planning-review" ? state.artifact(config.reviewType) : undefined;
+        if (review) {
+          try {
+            const run = state.runs.find((candidate) => candidate.metadata.name === review.spec.producedBy?.agentRunRef.name);
+            result.review = (await this.typedReview(item, review.spec.content, runProducer(run), await this.locations(item, run))).document;
+            validReview = true;
+          } catch (error) {
+            // An outdated or invalid review stays readable; readiness still reports it as needing repair.
+            if (isStoreError(error, "Invalid")) result.review = readableReview(review.spec.content);
+            throw error;
+          }
+        }
+        if (result.review) result.decisions = this.decisions(item, result.document, state.runs, stages, result.review);
+        if (result.review) result.reviewFindings = planningReviewOutcome(result.review) === "changes-requested";
       }
       await this.assertReady(item);
       result.ready = true;
       result.reviewFindings = await this.requestsChanges(item);
+      result.readiness = result.reviewFindings || result.review?.findings.length ? "ready-with-findings" : "ready";
     } catch (error) {
       if (!isStoreError(error, "Invalid") && !isStoreError(error, "Conflict")) throw error;
       result.issues.push(error.message);
@@ -296,6 +472,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
       }
     }
     result.unansweredQuestions = result.decisions.filter((decision) => decision.required && !decision.answer).map((decision) => decision.question);
+    if (result.unansweredQuestions.length && (config.reviewType !== "planning-review" || validReview)) result.readiness = "needs-answers";
     const approval = state.approvals.find((a) => a.metadata.name === item.status?.blockedBy?.name &&
       item.status.phase === "AwaitingApproval" && a.spec.verification?.kind === "plan" && !a.spec.verification.rebinds && !a.spec.decision);
     result.approval = approval?.metadata.name;
