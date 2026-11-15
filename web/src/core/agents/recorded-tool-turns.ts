@@ -1,4 +1,5 @@
 import { canCallTools, type RecordedToolTurns } from "../ports/index.ts";
+import { parseMarker } from "./truncation.ts";
 
 export class DefaultRecordedToolTurns implements RecordedToolTurns {
   async complete(input: Parameters<RecordedToolTurns["complete"]>[0]) {
@@ -27,7 +28,11 @@ export class DefaultRecordedToolTurns implements RecordedToolTurns {
     } catch (e) {
       result = `error: ${e instanceof Error ? e.message : String(e)}`;
     }
-    await transcript.record({ role: "tool-result", author: { type: "system", id: "tool-loop" }, content: result, meta: { tool: call.name, step, turnId } });
+    const marker = parseMarker(result);
+    await transcript.record({
+      role: "tool-result", author: { type: "system", id: "tool-loop" }, content: result,
+      meta: { tool: call.name, step, turnId, truncated: marker ? { omitted: marker.omitted, next: marker.next } : false },
+    });
     return result;
   }
 }

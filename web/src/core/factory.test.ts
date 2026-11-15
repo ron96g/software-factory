@@ -398,3 +398,10 @@ test("AC-2: blocker triager questions create a Clarification with default option
     assert.ok(d.clarifications[0].spec.options?.[0]?.length);
   }, triageWith([{ text: "Which db?", blocker: true }]));
 });
+
+test("AC-3: truncation marker is stable and actionable", async () => {
+  const { clipResult, parseMarker, MAX_RESULT } = await import("./agents/truncation.ts");
+  const out = clipResult("a".repeat(MAX_RESULT * 2), "list_files", "narrow_glob");
+  assert.ok(out.length <= MAX_RESULT);
+  assert.equal(parseMarker(out)?.next, "narrow_glob");
+});
