@@ -1,6 +1,7 @@
 # ADR-0057: Accessible agent tools and grounded reviews
 
 - **Status:** Accepted
+- **Amended by:** ADR-0058 (runs out of budget end with a finish-only wrap-up step)
 - **Date:** 2026-11-15
 - **Deciders:** project owner
 - **Amends:** ADR-0022 (how read tools are offered), ADR-0049 and ADR-0055 (where output is validated),

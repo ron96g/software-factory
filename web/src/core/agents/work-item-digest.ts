@@ -1,4 +1,5 @@
 import type { WorkItemRecord } from "../ports/agent-chat.ts";
+import { normalizeQuestions } from "../questions.ts";
 
 const roundOf = (name: string) => /-r(\d+)(?:-replay-\d+)?$/.exec(name)?.[1] ?? "?";
 const clip = (s: string | undefined, n: number) => (!s ? "" : s.length > n ? `${s.slice(0, n)} …[truncated]` : s);
@@ -19,7 +20,7 @@ export function workItemDigest({ workItem: wi, runs, artifacts, clarifications: 
         `- **${r.spec.agentRef.name}** · ${r.spec.stage}/${r.spec.step} · round ${roundOf(r.metadata.name)}${r.spec.replayOf ? " · replay" : ""} · ${r.status?.phase} · ${p?.executor ?? ""}${p?.model ? ` (${p.model.name})` : ""} · run \`${r.metadata.name}\``,
         res?.summary ? `  - summary: ${clip(res.summary, 800)}` : "",
         res?.outcome ? `  - outcome: ${res.outcome}` : "",
-        res?.questions?.length ? `  - asked: ${res.questions.join(" | ")}` : "",
+        res?.questions?.length ? `  - asked: ${normalizeQuestions(res.questions).map((q) => q.text).join(" | ")}` : "",
         r.status?.message ? `  - message: ${clip(r.status.message, 400)}` : "",
       ].filter(Boolean).join("\n");
     }),

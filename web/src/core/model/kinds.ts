@@ -486,7 +486,7 @@ export interface RunProvenance {
   /** Code state the agent saw: repository → commit (ADR-0021). */
   workspaces?: Record<string, string>;
   /** ADR-0057: how the agent used its tools. Observability only, never gate criteria. */
-  toolUse?: { steps: number; calls: Record<string, number>; finishCorrections: number };
+  toolUse?: { steps: number; calls: Record<string, number>; finishCorrections: number; wrapUp?: boolean };
   /** ADR-0057: counts reported by context providers, by source (e.g. cited-code resolved/unresolved). */
   contextCounts?: Record<string, Record<string, number>>;
 }
@@ -559,7 +559,7 @@ export interface AgentResultSummary {
   summary?: string;
   outcome?: string;
   classification?: Classification;
-  questions?: string[];
+  questions?: (string | { id?: string; text: string; blocker?: boolean; options?: string[] })[];
 }
 
 export interface ArtifactSpec {
@@ -575,6 +575,8 @@ export interface ClarificationSpec {
   workItemRef: Ref;
   stage: string;
   questions: string[];
+  /** Answer options per question (parallel to questions; empty = free-form). */
+  options?: string[][];
   /** Who stopped the item: the agent run that asked, or the gate that needs a human decision. */
   askedBy?: { agentRunRef?: Ref; gate?: string };
   /** Supporting Markdown shown beside the questions (not part of them). */

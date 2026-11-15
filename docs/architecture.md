@@ -207,6 +207,9 @@ artifact or code evidence; code locations must exist in those workspaces. Resear
 investigated, and claims confirmed in code are listed as verified, not raised as findings. Provenance records tool
 use and cited-code counts for observability only.
 
+The tool guide also states the run's step budget. Near the end the harness tells the agent to wrap up, and the last
+step only offers `finish`, so a run out of budget reports what it completed instead of failing (ADR-0058).
+
 ## Proposed: owner-led peer feedback (ADR-0056)
 
 This is a proposal, not shipped behavior. A collaboration-enabled WorkItem would have one accountable human owner.

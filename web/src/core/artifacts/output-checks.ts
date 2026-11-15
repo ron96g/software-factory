@@ -1,3 +1,4 @@
+import { normalizeQuestions } from "../questions.ts";
 import { nsOf } from "../model/meta.ts";
 import { pinnedWorkspaceFiles } from "../code/pinned.ts";
 import type { AgentRun, Workspace } from "../model/kinds.ts";
@@ -45,7 +46,7 @@ export function persistedArtifactCheck(check: ProposedArtifactCheck, d: { reader
       const { repositories, files } = await pinnedWorkspaceFiles(d.reader, d.readers, item, provenance);
       const producer: ArtifactProducer = {
         runName: runName ?? "", stage: run?.spec.stage ?? "", inputs: provenance?.inputs ?? {}, contexts: provenance?.contexts ?? {},
-        outcome: run?.status?.result?.outcome, questions: run?.status?.result?.questions ?? [], repositories,
+        outcome: run?.status?.result?.outcome, questions: normalizeQuestions(run?.status?.result?.questions).map((q) => q.text), repositories,
       };
       return check.check({ item, type: artifact.spec.artifactTypeRef.name, content: artifact.spec.content, producer, files });
     },
@@ -70,7 +71,7 @@ export class RegistryFinishValidator implements FinishValidator {
       runName: ctx.run.metadata.name, stage: ctx.run.spec.stage,
       inputs: Object.fromEntries(ctx.inputs.map((a) => [a.metadata.name, a.metadata.resourceVersion ?? ""])),
       contexts: Object.fromEntries(ctx.sections.filter((s) => s.revision).map((s) => [s.source, s.revision!])),
-      outcome: result.outcome, questions: result.questions ?? [], repositories: workspaces.map((w) => w.spec.repositoryRef.name),
+      outcome: result.outcome, questions: normalizeQuestions(result.questions).map((q) => q.text), repositories: workspaces.map((w) => w.spec.repositoryRef.name),
     };
     for (const artifact of artifacts) {
       const check = this.d.checks.get(artifact.type);

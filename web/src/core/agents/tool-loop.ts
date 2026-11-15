@@ -27,7 +27,7 @@ import {
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
-import { parseKnowledge } from "./executors.ts";
+import { parseKnowledge, parseQuestions } from "./executors.ts";
 import { REQUEST_SKILL, type SkillRequester } from "./definitions.ts";
 import { SPAWN_SUBAGENT, type DefaultDelegator } from "./delegator.ts";
 import { scopedSearcher } from "../knowledge/context.ts";
@@ -41,7 +41,7 @@ const FINISH: ToolSchema = {
       summary: { type: "string" },
       artifacts: { type: "array", items: { type: "object", properties: { type: { type: "string" }, content: { type: "string" } }, required: ["type", "content"] } },
       outcome: { type: "string" },
-      questions: { type: "array", items: { type: "string" } },
+      questions: { type: "array", items: { anyOf: [{ type: "string" }, { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, blocker: { type: "boolean" }, options: { type: "array", items: { type: "string" } } }, required: ["text"] }] } },
       feedback: {
         type: "array", maxItems: 3,
         description: "Optional, only for agents opted into retrospective feedback. Observations, never instructions.",
@@ -86,6 +86,15 @@ export interface ToolLoopDeps {
 }
 
 const MCP_SEPARATOR = "__";
+/** Steps before the end at which the agent is told to wrap up (ADR-0058). */
+const WRAP_UP_WARNING = 3;
+
+/** Adds a harness notice to what the model reads next, without breaking tool-call/result pairing. */
+function notice(messages: ToolLoopMessage[], text: string) {
+  const last = messages.at(-1);
+  if (last && (last.role === "tool" || last.role === "user")) last.content = `${last.content}\n\n${text}`;
+  else messages.push({ role: "user", content: text });
+}
 
 /**
  * Agentic tool loop (ADR-0019/0021). Every model turn, tool call and tool result is recorded (rule 14).
@@ -220,21 +229,31 @@ export class ToolLoopExecutor implements AgentExecutor {
         const canSpawn = !!this.d.delegator && !ctx.run.spec.parentRunRef && !bound.has(SPAWN_SUBAGENT.name);
         const schemas = [...[...bound.values()].map((b) => b.schema), ...(this.d.skills && !bound.has(REQUEST_SKILL.name) ? [REQUEST_SKILL] : []), ...(canSpawn ? [SPAWN_SUBAGENT] : []), FINISH];
         // ADR-0057: the harness explains the tools it actually bound; the agent definition only names them.
-        prompt = { ...prompt, system: `${prompt.system}\n\n${this.toolGuide(ctx, bound, builtIn, all)}` };
+        const maxSteps = this.d.maxSteps ?? 30;
+        prompt = { ...prompt, system: `${prompt.system}\n\n${this.toolGuide(ctx, bound, builtIn, all, maxSteps)}` };
         await ctx.transcript.record({ role: "system", author: sys, content: prompt.system });
         await ctx.transcript.record({ role: "user", author: sys, content: prompt.user });
         const messages: ToolLoopMessage[] = [
           { role: "system", content: prompt.system },
           { role: "user", content: prompt.user },
         ];
-        const maxSteps = this.d.maxSteps ?? 30;
         const maxCorrections = this.d.maxFinishCorrections ?? 2;
         const calls: Record<string, number> = {};
         let corrections = 0;
         let lastFinish: AgentResult | undefined;
 
+        const say = async (text: string, step: number) => {
+          notice(messages, text);
+          await ctx.transcript.record({ role: "note", author: sys, content: text, meta: { step } });
+        };
+
         for (let step = 1; step <= maxSteps; step++) {
-          const reply = await this.d.turns.complete({ model, messages, tools: schemas, transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
+          // ADR-0058: the last step only offers `finish`, so a run out of budget reports instead of losing its result.
+          const final = step === maxSteps;
+          if (final) {
+            await say(`[harness] Last model step (budget ${maxSteps}). Only finish is available: report what you completed and list anything unfinished or unverified in the summary.`, step);
+          }
+          const reply = await this.d.turns.complete({ model, messages, tools: final ? [FINISH] : schemas, transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
           if (!reply.toolCalls.length) {
             messages.push({ role: "assistant", content: reply.text ?? "" });
             messages.push({ role: "user", content: "Continue using the tools, or call `finish` when you are done." });
@@ -246,7 +265,7 @@ export class ToolLoopExecutor implements AgentExecutor {
             if (call.name === "finish") {
               await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
               const result = await this.finish(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: step,
-                toolUse: { steps: step, calls: { ...calls }, finishCorrections: corrections } });
+                toolUse: { steps: step, calls: { ...calls }, finishCorrections: corrections, ...(final ? { wrapUp: true } : {}) } });
               // Once the corrections are used up, the post-run output checks decide (ADR-0049/0055).
               const problems = corrections < maxCorrections ? await this.validateFinish(ctx, result) : [];
               if (!problems.length) return result;
@@ -280,8 +299,12 @@ export class ToolLoopExecutor implements AgentExecutor {
               messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: body });
               continue;
             }
-            const result = await this.d.turns.invoke({ call, tool: bound.get(call.name), transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
+            const result = await this.d.turns.invoke({ call, tool: final ? undefined : bound.get(call.name), transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
+          }
+          const left = maxSteps - step;
+          if (left > 0 && left <= WRAP_UP_WARNING) {
+            await say(`[harness] ${left} model step(s) left; the last one only allows finish. Wrap up now: complete or stop the current change and call finish.`, step);
           }
         }
         // A rejected finish on the last step still goes to the post-run checks (ADR-0057 §4).
@@ -305,7 +328,7 @@ export class ToolLoopExecutor implements AgentExecutor {
   }
 
   /** Rendered from the tools bound for this run: trusted guidance for built-in tools, only names for MCP tools (ADR-0034). */
-  private toolGuide(ctx: ExecutionContext, bound: Map<string, BoundTool>, builtInNames: Set<string>, caps: ToolCapabilities): string {
+  private toolGuide(ctx: ExecutionContext, bound: Map<string, BoundTool>, builtInNames: Set<string>, caps: ToolCapabilities, maxSteps: number): string {
     const builtIn = [...bound.keys()].filter((name) => builtInNames.has(name));
     const external = [...bound.keys()].filter((name) => !builtInNames.has(name));
     const servers = new Map<string, string[]>();
@@ -323,6 +346,7 @@ export class ToolLoopExecutor implements AgentExecutor {
       ...(this.d.delegator && !ctx.run.spec.parentRunRef ? ["- `spawn_subagent`: run a listed agent as a subagent on a question; you get its summary back. Example: { \"agent\": \"code-researcher\", \"question\": \"...\" }."] : []),
       ...(this.d.skills ? ["- `request_skill`: load the full text of a skill listed in the context (only metadata is shown there). Example: { \"name\": \"knowledge-base\" }."] : []),
       "- `finish`: report your result. It is checked before the run ends; problems come back as the tool result so you can correct them.",
+      `Step budget: ${maxSteps} model steps. You are warned ${WRAP_UP_WARNING} steps before the end; the last step only allows \`finish\`. Avoid open-ended investigation outside your task.`,
       ...(reads ? [
         "",
         "Before you finish, check the claims you rely on: first against any \"Cited code\" excerpts in your input, then with the read tools.",
@@ -378,7 +402,7 @@ export class ToolLoopExecutor implements AgentExecutor {
       summary: typeof args.summary === "string" ? args.summary : undefined,
       artifacts,
       outcome: typeof args.outcome === "string" ? args.outcome : undefined,
-      questions: Array.isArray(args.questions) ? args.questions.filter((q): q is string => typeof q === "string" && !!q.trim()) : [],
+      questions: parseQuestions(args.questions),
       knowledge: parseKnowledge(args.knowledge),
       feedback: args.feedback,
       provenance: {
