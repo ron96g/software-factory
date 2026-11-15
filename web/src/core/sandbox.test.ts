@@ -57,7 +57,7 @@ test("S2: without a runtime, construction agents are simulated with a visible re
     const wi = await f.app.createWorkItem(ANONYMOUS, { title: "Sandbox reason", description: "A long enough description so triage accepts it right away.", workflowRef: "factory-loop" });
     for (let i = 0; i < 400; i++) {
       const d = await f.app.getWorkItem(ANONYMOUS, wi.metadata.name);
-      if (d?.workItem.status?.stage === "spec-review") {
+      if (d?.workItem.status?.stage === "spec-review" && d.approvals.length) {
         await f.app.decideApproval(ANONYMOUS, d.approvals.at(-1)!.metadata.name, "approve");
       }
       const dev = d?.runs.find((r) => r.spec.step === "write-code" && r.status?.phase === "Succeeded");

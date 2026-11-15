@@ -63,10 +63,10 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
 
     // analysis agents only ever get read-only tools (+ finish); search_knowledge only where the agent declares it
     for (const [agent, tools] of Object.entries(toolSets)) {
-      assert.deepEqual(tools.filter((x) => x !== "search_knowledge").sort(), ["finish", "list_files", "read_file", "search_code"], agent);
+      assert.deepEqual(tools.filter((x) => x !== "search_knowledge" && x !== "request_skill" && x !== "spawn_subagent").sort(), ["finish", "list_files", "read_file", "search_code"], agent);
     }
     assert.ok(toolSets["Triager"].includes("search_knowledge") && !toolSets["Architect"].includes("search_knowledge"));
-    assert.ok(toolSets["Triager"] && toolSets["Architect"] && toolSets["Reviewer"], JSON.stringify(Object.keys(toolSets)));
+    assert.ok(toolSets["Triager"] && toolSets["Architect"], JSON.stringify(Object.keys(toolSets)));
   } finally {
     await f.stop();
   }

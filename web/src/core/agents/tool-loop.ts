@@ -28,6 +28,8 @@ import {
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
 import { parseKnowledge, parseQuestions } from "./executors.ts";
+import { REQUEST_SKILL, type SkillRequester } from "./definitions.ts";
+import { SPAWN_SUBAGENT, type DefaultDelegator } from "./delegator.ts";
 import { scopedSearcher } from "../knowledge/context.ts";
 
 const FINISH: ToolSchema = {
@@ -71,6 +73,10 @@ export interface ToolLoopDeps {
   /** ADR-0034: opens the agent's ToolServers (MCP). */
   toolProvider?: ToolProvider;
   turns: RecordedToolTurns;
+  /** Lazy skill injection: offers `request_skill` when set. */
+  skills?: SkillRequester;
+  /** Subagents: offers `spawn_subagent` when set (depth 1: runs that already have a parent never get it). */
+  delegator?: Pick<DefaultDelegator, "delegate">;
   maxSteps?: number;
   checks?: AgentCheckRequests;
   /** ADR-0057: checks the result when the agent calls `finish`, so it can correct it in the same conversation. */
@@ -220,7 +226,8 @@ export class ToolLoopExecutor implements AgentExecutor {
           else bound.set(t.schema.name, t);
         }
         if (shadowed.length) await ctx.transcript.record({ role: "note", author: sys, content: `MCP tools hidden by built-in tools of the same name: ${shadowed.join(", ")}` });
-        const schemas = [...[...bound.values()].map((b) => b.schema), FINISH];
+        const canSpawn = !!this.d.delegator && !ctx.run.spec.parentRunRef && !bound.has(SPAWN_SUBAGENT.name);
+        const schemas = [...[...bound.values()].map((b) => b.schema), ...(this.d.skills && !bound.has(REQUEST_SKILL.name) ? [REQUEST_SKILL] : []), ...(canSpawn ? [SPAWN_SUBAGENT] : []), FINISH];
         // ADR-0057: the harness explains the tools it actually bound; the agent definition only names them.
         const maxSteps = this.d.maxSteps ?? 30;
         prompt = { ...prompt, system: `${prompt.system}\n\n${this.toolGuide(ctx, bound, builtIn, all, maxSteps)}` };
@@ -269,6 +276,29 @@ export class ToolLoopExecutor implements AgentExecutor {
               messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
               continue;
             }
+            if (call.name === SPAWN_SUBAGENT.name && canSpawn) {
+              await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
+              const agentName = String(call.arguments?.agent ?? "");
+              let out: string;
+              let delegatedRunRef: { name: string } | undefined;
+              try {
+                const r = await this.d.delegator!.delegate(ctx.run, agentName, String(call.arguments?.question ?? ""), ctx, (n) => { delegatedRunRef = { name: n }; });
+                out = r.summary ?? "(subagent finished without a summary)";
+              } catch (e) {
+                out = `spawn failed: ${e instanceof Error ? e.message : String(e)}`;
+              }
+              await ctx.transcript.record({ role: "tool-result", author: sys, content: out, meta: { tool: call.name, step, event: "subagent-spawned", agent: agentName, ...(delegatedRunRef ? { delegatedRunRef } : {}) } });
+              messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: out });
+              continue;
+            }
+            if (call.name === REQUEST_SKILL.name && this.d.skills && !bound.has(call.name)) {
+              const wanted = String(call.arguments?.name ?? "");
+              await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step } });
+              const body = await this.d.skills.request(ctx, wanted).catch((e) => `request failed: ${e instanceof Error ? e.message : String(e)}`);
+              await ctx.transcript.record({ role: "tool-result", author: sys, content: body, meta: { tool: call.name, step, event: "skill-requested", skill: wanted } });
+              messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: body });
+              continue;
+            }
             const result = await this.d.turns.invoke({ call, tool: final ? undefined : bound.get(call.name), transcript: ctx.transcript, agent: ctx.agent.metadata.name, step });
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: result });
           }
@@ -313,6 +343,8 @@ export class ToolLoopExecutor implements AgentExecutor {
       ...(workspaces.length ? [`Workspaces (pinned commits): ${workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10) ?? "?"}`).join(", ")}.`] : []),
       ...builtIn.map((name) => { const t = this.d.tools.get(name)!; return `- \`${name}\`: ${t.guidance ?? t.description}`; }),
       ...[...servers].map(([server, names]) => `- MCP server ${server} (external; see each tool's own description): ${names.map((n) => `\`${n}\``).join(", ")}`),
+      ...(this.d.delegator && !ctx.run.spec.parentRunRef ? ["- `spawn_subagent`: run a listed agent as a subagent on a question; you get its summary back. Example: { \"agent\": \"code-researcher\", \"question\": \"...\" }."] : []),
+      ...(this.d.skills ? ["- `request_skill`: load the full text of a skill listed in the context (only metadata is shown there). Example: { \"name\": \"knowledge-base\" }."] : []),
       "- `finish`: report your result. It is checked before the run ends; problems come back as the tool result so you can correct them.",
       `Step budget: ${maxSteps} model steps. You are warned ${WRAP_UP_WARNING} steps before the end; the last step only allows \`finish\`. Avoid open-ended investigation outside your task.`,
       ...(reads ? [
