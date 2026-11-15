@@ -218,6 +218,37 @@ test("run_check normalizes repository/workspace and canonical/bare check identit
     assert.equal(submissions[0].workspace.metadata.name, "ws");
     await assert.rejects(f.service.run(ctx, { workspace: "missing", check: "test", requestId: "other" }), /valid.*ws/i);
     await assert.rejects(f.service.run(ctx, { workspace: "repo", check: "foreign/test", requestId: "other" }), /repository|approved plan/);
+    await assert.rejects(f.service.run({ ...ctx, run: { ...run, spec: { ...run.spec, tools: [] } } },
+      { workspace: "repo", check: "test", requestId: "denied" }), /step's tool restrictions/);
+    await assert.rejects(f.service.run({ ...ctx, run: { ...run, spec: { ...run.spec,
+      recovery: { mode: "diagnosis" } as NonNullable<AgentRun["spec"]["recovery"]> } } },
+      { workspace: "repo", check: "test", requestId: "diagnostic" }), /scoped recovery authorization/);
+  } finally { f.db.close(); }
+});
+
+test("agent check logs page complete redacted content and reject foreign ownership", async () => {
+  const f = await fixture();
+  try {
+    const item = await f.store.updateStatus<WorkItem>({ ...f.item, status: { ...f.item.status!, stage: "implement" } });
+    const run = await f.store.create<AgentRun>({ apiVersion: API_VERSION, kind: "AgentRun",
+      metadata: { name: "developer", namespace: "default", ownerReferences: [ownerRef(item)] },
+      spec: { workItemRef: { name: "item" }, stage: "implement", step: "write", agentRef: { name: "developer" }, inputs: [], outputs: [], skillRefs: [] },
+      status: { phase: "Running" } });
+    const check = await f.scheduler.submit({ workItem: f.item, workspace: f.workspace, repository: f.repo, check: "test",
+      requestId: "log", requestedBy: "test", workflow: { stage: "implement", round: 1, purpose: "verification", planFingerprint: "p", attempt: 1 } });
+    await f.store.updateStatus<CheckRun>({ ...check, status: { phase: "Completed", logRef: { namespace: "default", id: "log" }, logsIncomplete: false } });
+    const service = new VerificationService({ namespace: "default", reader: f.store, writer: f.store, compiler: f.compiler,
+      snapshots: f.snapshots, scheduler: f.scheduler, events: f.events, clock: f.clock,
+      environments: {} as never, redactor: { redact: (text) => text.replaceAll("SECRET", "[redacted]") },
+      logs: { read: async (_ref, options) => options?.afterSeq ? [] : [{ seq: 1, at: "", role: "note",
+        author: { type: "system", id: "check" }, content: `${"x".repeat(5998)}SECRETend` }] } });
+    const ctx = { workItem: item, run } as ExecutionContext;
+    const first = await service.read(ctx, { checkRun: check.metadata.name });
+    assert.ok(!first.content.includes("SECRET"));
+    const second = await service.read(ctx, { checkRun: check.metadata.name, ...first.next! });
+    assert.ok((first.content + second.content).includes("[redacted]end"));
+    await assert.rejects(service.read({ ...ctx, workItem: { ...f.item, metadata: { ...f.item.metadata, uid: "other" } } },
+      { checkRun: check.metadata.name }), /not owned/);
   } finally { f.db.close(); }
 });
 

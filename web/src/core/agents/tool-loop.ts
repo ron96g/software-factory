@@ -1,4 +1,4 @@
-import type { SandboxProfile, ToolServer } from "../model/kinds.ts";
+import type { SandboxProfile, ToolServer, Workflow } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import {
   ISOLATION_RANK,
@@ -23,7 +23,12 @@ import {
   type ToolSession,
   type RecordedToolTurns,
   type AgentCheckRequests,
+  type AgentCheckLogReader,
+  type AgentBaselineRequests,
   type FinishValidator,
+  type AgentToolOffering,
+  type WorkspaceMutationGuard,
+  type WorkspaceJobCoordinator,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
@@ -73,10 +78,15 @@ export interface ToolLoopDeps {
   turns: RecordedToolTurns;
   maxSteps?: number;
   checks?: AgentCheckRequests;
+  checkLogs?: AgentCheckLogReader;
+  baseline?: AgentBaselineRequests;
   /** ADR-0057: checks the result when the agent calls `finish`, so it can correct it in the same conversation. */
   finish?: FinishValidator;
   /** In-loop corrections before the result goes to the post-run checks anyway (default 2). */
   maxFinishCorrections?: number;
+  offerings?: AgentToolOffering[];
+  mutations?: WorkspaceMutationGuard;
+  jobs?: WorkspaceJobCoordinator;
 }
 
 const MCP_SEPARATOR = "__";
@@ -108,7 +118,10 @@ export class ToolLoopExecutor implements AgentExecutor {
   }
 
   private neededCapabilities(ctx: ExecutionContext): Set<keyof ToolCapabilities> {
-    return new Set((ctx.agent.spec.tools ?? []).flatMap((t) => [...(this.d.tools.get(t)?.capabilities ?? [])]));
+    return new Set((ctx.agent.spec.tools ?? [])
+      .filter((name) => ctx.run.spec.tools === undefined || ctx.run.spec.tools.includes(name))
+      .filter((name) => ctx.run.spec.recovery?.mode !== "diagnosis" || this.d.tools.get(name)?.readOnly || name === "run_check")
+      .flatMap((t) => [...(this.d.tools.get(t)?.capabilities ?? [])]));
   }
 
   private needsSandbox(ctx: ExecutionContext): boolean {
@@ -187,6 +200,8 @@ export class ToolLoopExecutor implements AgentExecutor {
     diff: () => Promise<string>,
   ): Promise<AgentResult> {
     if (this.d.checks) all = { ...all, checks: { run: (input) => this.d.checks!.run(ctx, input) } };
+    if (this.d.checkLogs) all = { ...all, checkLogs: { read: (input) => this.d.checkLogs!.read(ctx, input) } };
+    if (this.d.baseline) all = { ...all, baseline: { run: (input) => this.d.baseline!.runBaseline(ctx, input) } };
     let prompt = initialPrompt;
     const model = ctx.model!;
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");
@@ -197,22 +212,39 @@ export class ToolLoopExecutor implements AgentExecutor {
       const bound = new Map<string, BoundTool>();
       const builtIn = new Set<string>();
       const unavailable: string[] = [];
-      for (const name of ctx.agent.spec.tools ?? []) {
-        const tool = this.d.tools.get(name)!;
+      const offered = (await Promise.all((this.d.offerings ?? []).map((offering) => offering.tools(ctx)))).flat()
+        .filter((name) => ctx.run.spec.tools === undefined || ctx.run.spec.tools.includes(name));
+      for (const name of new Set([...(ctx.agent.spec.tools ?? []), ...offered])) {
+        if (ctx.run.spec.tools !== undefined && !ctx.run.spec.tools.includes(name)) continue;
+        const tool = this.d.tools.get(name);
+        if (!tool?.bind) throw new Error(`harness offered an unregistered callable tool "${name}"`);
+        if (ctx.run.spec.recovery?.mode === "diagnosis" && !tool.readOnly && name !== "run_check" && name !== "run_baseline_check") continue;
         if ((tool.capabilities ?? []).some((c) => !all[c])) {
           unavailable.push(name); // e.g. search_code without a workspace: offered tools shrink, nothing fails
           continue;
         }
         // ISP: a tool receives only the capabilities it declares.
         const caps: ToolCapabilities = Object.fromEntries((tool.capabilities ?? []).map((c) => [c, all[c]]));
-        bound.set(name, tool.bind!(caps));
+        const instance = tool.bind(caps);
+        bound.set(name, !tool.readOnly && (tool.capabilities ?? []).some((cap) => cap === "write" || cap === "exec")
+          ? { ...instance, invoke: async (args) => {
+            const invoke = async () => { await this.d.mutations?.check(ctx); return instance.invoke(args); };
+            if (this.d.jobs) return this.d.jobs.mutate(ctx, invoke);
+            if (ctx.run.spec.recovery) throw new Error("recovery workspace mutation requires shared workspace serialization");
+            if (ctx.workItem?.spec?.workflowRef) {
+              const workflow = await resolveRef<Workflow>(this.d.reader, "Workflow", ctx.workItem.spec.workflowRef, nsOf(ctx.workItem));
+              if (!workflow || workflow.spec.recovery) throw new Error("workspace mutation requires shared workspace serialization for recovery workflows");
+            }
+            return invoke();
+          } } : instance);
         builtIn.add(name);
       }
       if (unavailable.length) {
         await ctx.transcript.record({ role: "note", author: sys, content: `tools not available in this run (missing capability): ${unavailable.join(", ")}` });
       }
       // ADR-0034: tools from the agent's MCP servers, offered next to the built-in ones for this run only.
-      const session = await this.openToolServers(ctx);
+      // Diagnostic runs cannot rely on external tool servers to enforce candidate immutability.
+      const session = ctx.run.spec.recovery?.mode === "diagnosis" ? undefined : await this.openToolServers(ctx);
       try {
         const shadowed: string[] = [];
         for (const t of session?.tools ?? []) {

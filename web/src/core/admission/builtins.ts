@@ -3,10 +3,20 @@ import { clone, nsOf } from "../model/meta.ts";
 import type { Source, WorkItem } from "../model/kinds.ts";
 import type { AdmissionContext, KindLookup, Mutator, Validator } from "../ports/index.ts";
 import { REF_FIELDS, resolveRef, walkRefs } from "../refs/refs.ts";
+import { recoveryPolicyProblems } from "../model/recovery-policy.ts";
+import type { Workflow } from "../model/kinds.ts";
 
 export const LABEL_SOURCE = "factory.ai-dlc.io/source";
 
 const NAME_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+export function recoveryPolicyValidator(): Validator {
+  return {
+    name: "recovery-policy",
+    appliesTo: (kind) => kind === "Workflow",
+    async validate(obj) { return recoveryPolicyProblems((obj as Workflow).spec); },
+  };
+}
 
 export function namespaceDefaulter(kinds: KindLookup): Mutator {
   return {

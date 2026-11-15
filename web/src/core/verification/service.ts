@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import type { AgentRun, Approval, Artifact, CheckRun, Repository, SandboxProfile, WorkItem, Workspace } from "../model/kinds.ts";
+import type { Agent, AgentRun, Approval, Artifact, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfile, WorkItem, Workspace } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { SandboxUnavailableError, StoreError, isStoreError, type AgentCheckRequests, type ApprovalGateEvaluator, type CheckRunScheduler,
+import { SandboxUnavailableError, StoreError, isStoreError, type AgentBaselineRequests, type AgentCheckLogReader, type AgentCheckRequests, type AgentToolOffering, type ApprovalGateEvaluator, type CheckRunScheduler,
   type Clock, type CompiledStage, type CompiledWorkflow, type EventRecorder, type ExecutionContext, type ExecutionEnvironmentSelector, type GateContext,
   type GateDecision, type GateEvaluator, type Principal, type Redactor, type ResourceReader, type ResourceWriter,
   type ValidationContract, type ValidationPlan, type VerificationActions, type VerificationApprovalGuard,
-  type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ProposedArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
+  type RecoveryCheckAuthorization, type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ProposedArtifactCheck, type TranscriptReader, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
 import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
 import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
-import { parseUnitManifest } from "../model/units.ts";
+import { parseUnitManifest, unitChecks } from "../model/units.ts";
 import { gapId, verificationPolicyGaps, type PolicyGap } from "../model/verification-policy.ts";
 
 /** Required plan checks without a configured command: they can only ever be Waived, so the plan reviewer must know. */
@@ -89,11 +89,13 @@ function unitExecutionPolicy(workflow: CompiledWorkflow, policy: NonNullable<Com
   return units;
 }
 
-export class VerificationService implements CandidateSnapshots, VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, StageEntryPolicy, StageResumptionPolicy, PlanReconfirmation, PublicationRecovery {
+export class VerificationService implements CandidateSnapshots, VerificationContracts, VerificationActions, VerificationApprovalGuard, VerificationPublicationGuard, AgentCheckRequests, AgentBaselineRequests, AgentCheckLogReader, AgentToolOffering, StageEntryPolicy, StageResumptionPolicy, PlanReconfirmation, PublicationRecovery {
   private readonly d: {
     namespace: string; reader: ResourceReader; writer: ResourceWriter; compiler: WorkflowCompiler;
     snapshots: WorkspaceSnapshotter; environments: ExecutionEnvironmentSelector; scheduler: CheckRunScheduler;
     events: EventRecorder; clock: Clock; redactor: Redactor;
+    recoveryChecks?: RecoveryCheckAuthorization;
+    logs?: TranscriptReader;
     planning?: PlanningReviewBinding;
     /** ADR-0048: unresolved AI plan review findings need an explicit human reason, never block the human. */
     planReview?: PlanningReviewOutcome;
@@ -551,8 +553,100 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     }
   }
 
+  async tools(ctx: ExecutionContext): Promise<string[]> {
+    if (!this.d.recoveryChecks || !ctx.workItem.spec.workflowRef || !ctx.run.spec.assignment ||
+        ctx.run.spec.assignment.kind !== "unit" || ctx.run.spec.replayOf || !eligible(ctx.run)) return [];
+    const wf = await this.d.compiler.compile(ctx.workItem.spec.workflowRef, nsOf(ctx.workItem));
+    if (!wf.recovery || ctx.run.spec.stage !== wf.verification?.implementationStage) return [];
+    const agent = await resolveRef<Agent>(this.d.reader, "Agent", ctx.run.spec.agentRef, nsOf(ctx.run));
+    if (!agent?.spec.sandboxRef || !(agent.spec.tools ?? []).some((tool) => tool === "run" || tool === "write_file")) return [];
+    return ["run_check", ...(ctx.run.spec.recovery?.mode === "diagnosis" ? ["run_baseline_check"] : []), ...(this.d.logs ? ["read_check_log"] : [])]
+      .filter((name) => ctx.run.spec.tools === undefined || ctx.run.spec.tools.includes(name));
+  }
+
+  async read(ctx: ExecutionContext, input: { checkRun: string; afterSeq?: number; offset?: number }) {
+    if (!this.d.logs || ctx.run.spec.replayOf || !eligible(ctx.run)) return invalid("check logs are unavailable to this run");
+    const namespace = nsOf(ctx.workItem);
+    const item = await this.d.reader.get<WorkItem>("WorkItem", namespace, ctx.workItem.metadata.name);
+    const caller = await this.d.reader.get<AgentRun>("AgentRun", namespace, ctx.run.metadata.name);
+    const job = await this.d.reader.get<CheckRun>("CheckRun", namespace, input.checkRun);
+    if (!item || item.metadata.uid !== ctx.workItem.metadata.uid || !caller || caller.metadata.uid !== ctx.run.metadata.uid ||
+        caller.status?.phase !== "Running" || caller.spec.replayOf || !eligible(caller) ||
+        caller.spec.tools !== undefined && !caller.spec.tools.includes("read_check_log") ||
+        caller.spec.workItemRef.name !== item.metadata.name ||
+        caller.spec.workItemRef.namespace && caller.spec.workItemRef.namespace !== namespace ||
+        item.status?.stage !== caller.spec.stage || !["Running", "Waiting"].includes(item.status?.phase ?? "") ||
+        !caller.metadata.ownerReferences?.some((o) => o.kind === "WorkItem" && o.uid === item.metadata.uid) ||
+        !job || job.spec.workItemUid !== item.metadata.uid ||
+        !job.metadata.ownerReferences?.some((o) => o.kind === "WorkItem" && o.uid === item.metadata.uid) ||
+        !job.status?.logRef || job.status.logRef.namespace !== namespace) return invalid("check log is unavailable or not owned by this work item");
+    const afterSeq = input.afterSeq ?? 0, offset = input.offset ?? 0;
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(offset) || offset < 0) return invalid("invalid check log cursor");
+    const [message] = await this.d.logs.read(job.status.logRef, { afterSeq, limit: 1 });
+    if (!message) return { content: "", next: null, logsIncomplete: !!job.status.logsIncomplete };
+    const redacted = this.d.redactor.redact(message.content);
+    if (offset > redacted.length) return invalid("check log offset exceeds the message length");
+    const content = redacted.slice(offset, offset + 6000);
+    const next = offset + 6000 < redacted.length ? { afterSeq, offset: offset + 6000 } : { afterSeq: message.seq, offset: 0 };
+    return { content, seq: message.seq, next, logsIncomplete: !!job.status.logsIncomplete };
+  }
+
+  private async recoveryCheck(ctx: ExecutionContext, input: { workspace: string; check: string; requestId: string }, baseline = false) {
+    if (!this.d.recoveryChecks || !ctx.workItem.spec.workflowRef) return invalid("scoped recovery authorization is unavailable");
+    const item = await this.d.reader.get<WorkItem>("WorkItem", nsOf(ctx.workItem), ctx.workItem.metadata.name);
+    if (!item || item.metadata.uid !== ctx.workItem.metadata.uid) return invalid("work item identity changed");
+    const caller = await this.d.reader.get<AgentRun>("AgentRun", nsOf(item), ctx.run.metadata.name);
+    if (!caller || caller.metadata.uid !== ctx.run.metadata.uid) return invalid("agent run identity changed");
+    const contract = await this.plan(item, true);
+    const assignment = caller.spec.assignment;
+    if (!assignment || assignment.kind !== "unit" || assignment.planFingerprint !== contract.fingerprint) return invalid("current approved Unit assignment is required");
+    const matches = ctx.workspaces.filter((w) => w.metadata.name === input.workspace || w.spec.repositoryRef.name === input.workspace);
+    if (matches.length !== 1) return invalid("unknown or ambiguous workspace");
+    const workspace = matches[0];
+    const repository = contract.repositories.find((r) => r.metadata.name === workspace.spec.repositoryRef.name);
+    if (!repository) return invalid("workspace repository is outside the approved plan");
+    const check = input.check.startsWith(`${repository.metadata.name}/`) ? input.check.slice(repository.metadata.name.length + 1) : input.check;
+    const diagnostic = caller.spec.recovery?.mode === "diagnosis";
+    if (baseline && (!diagnostic || !workspace.status?.baseCommit)) return invalid("baseline check requires a diagnostic run and pinned baseline");
+    const config = repository.spec.checks?.[check];
+    if (baseline && typeof config === "object" && config.moduleScoped) return invalid("candidate-scoped module selection cannot be applied to a baseline");
+    const purpose = baseline ? "baseline" : diagnostic ? "diagnostic" : "unit-readiness";
+    const wf = await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item));
+    const id = `${repository.metadata.name}/${check}`;
+    if (diagnostic ? !wf.recovery?.diagnosticChecks.includes(id) :
+      !contract.plan.units?.find((unit) => unit.id === assignment.unit) ||
+      !unitChecks(contract.plan.units.find((unit) => unit.id === assignment.unit)!).includes(id)) {
+      return invalid("check is outside this Unit's authorized scope");
+    }
+    const previous = (await this.d.reader.list<CheckRun>("CheckRun", owned(item))).filter((run) =>
+      run.spec.workItemUid === item.metadata.uid && run.spec.workflow?.purpose === purpose &&
+      run.spec.workflow.planFingerprint === contract.fingerprint && run.spec.workflow.unit === assignment.unit &&
+      run.spec.repositoryRef.name === repository.metadata.name && run.spec.check === check);
+    const existing = previous.find((run) => run.spec.workflow?.agentRunUid === caller.metadata.uid &&
+      run.spec.workflow?.agentRequestId === input.requestId);
+    const origin: CheckWorkflowOrigin = { stage: caller.spec.stage, round: item.status!.round!, purpose,
+      planFingerprint: contract.fingerprint, attempt: existing?.spec.workflow?.attempt ?? previous.length + 1,
+      unit: assignment.unit, ...(diagnostic ? { recoveryEpisode: caller.spec.recovery!.episode,
+        ...(baseline ? { baselineCommit: workspace.status!.baseCommit! } : {}) } : { unitRun: caller.metadata.name,
+        ...(caller.spec.recovery ? { recoveryEpisode: caller.spec.recovery.episode } : {}) }),
+      agentRunRef: { name: caller.metadata.name }, agentRunUid: caller.metadata.uid, agentRequestId: input.requestId };
+    await this.d.recoveryChecks.authorize({ item, origin, repository, workspace, check, caller, existing });
+    return this.d.scheduler.submit({ workItem: item, workspace, repository, check,
+      requestId: `${baseline ? "baseline" : "agent"}/${caller.metadata.uid}/${input.requestId}`, requestedBy: ctx.agent.metadata.name, workflow: origin });
+  }
+
+  async runBaseline(ctx: ExecutionContext, input: { workspace: string; check: string; requestId: string }) {
+    if (ctx.run.spec.replayOf || !eligible(ctx.run) || ctx.run.spec.recovery?.mode !== "diagnosis" ||
+        ctx.run.spec.tools !== undefined && !ctx.run.spec.tools.includes("run_baseline_check") ||
+        !input.requestId?.trim() || input.requestId.length > 140) return invalid("baseline request is not authorized by this diagnostic run");
+    return this.recoveryCheck(ctx, input, true);
+  }
+
   async run(ctx: ExecutionContext, input: { workspace: string; check: string; requestId: string }) {
     if (ctx.run.spec.replayOf || !eligible(ctx.run)) return invalid("replayed or superseded runs cannot request authoritative evidence");
+    if (ctx.run.spec.tools !== undefined && !ctx.run.spec.tools.includes("run_check")) return invalid("run_check is excluded by this step's tool restrictions");
+    if (!input.requestId?.trim() || input.requestId.length > 200) return invalid("a bounded check requestId is required");
+    if (ctx.run.spec.assignment?.kind === "unit" || ctx.run.spec.recovery) return this.recoveryCheck(ctx, input);
     const contract = await this.plan(ctx.workItem, true);
     if (ctx.run.spec.stage !== contract.policy.verifyStage) return invalid("run_check is available only in the verified verification stage");
     const matches = ctx.workspaces.filter((w) => w.metadata.name === input.workspace || w.spec.repositoryRef.name === input.workspace);

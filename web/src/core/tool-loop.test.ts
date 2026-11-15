@@ -50,7 +50,7 @@ test("S3: developer agent fixes code and runs tests in the sandbox via the tool 
     seed: { "src/sum.js": "export const sum = (a, b) => a - b;\n", "package.json": "{}" },
     handlers: [
       (cmd, files) =>
-        cmd === "npm test"
+        cmd === "set -o pipefail\nnpm test"
           ? files.get("src/sum.js")?.includes("a + b")
             ? { exitCode: 0, stdout: "1 passing" }
             : { exitCode: 1, stdout: "1 failing: expected 3, got -1" }

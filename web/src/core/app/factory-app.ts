@@ -586,6 +586,7 @@ export class FactoryApp
   async decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean): Promise<Approval> {
     const a = await this.d.reader.get<Approval>("Approval", this.ns, name);
     if (!a) throw new Error(`approval ${name} not found`);
+    if (a.spec.recoveryAllowance) throw new Error("Use the operator recovery allowance decision endpoint.");
     if (a.spec.decision) throw new Error("already decided");
     await this.assertCurrentBlocker(a.spec.workItemRef.name, name);
     for (const guard of this.d.approvalGuards ?? []) await guard.validate(a, decision);

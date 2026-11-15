@@ -43,6 +43,7 @@ import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
 import { CheckRunsPanel } from "@/ui/check-runs.tsx";
 import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
 import { UnitProgressPanel } from "@/ui/unit-progress.tsx";
+import { RecoveryPanel } from "@/ui/recovery-panel.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import PlanningWorkspace from "@/ui/planning-workspace.tsx";
 import { normalizeQuestions } from "@/core/questions.ts";
@@ -193,6 +194,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           {st.message}
         </Alert>
       )}
+      <RecoveryPanel key={`recovery-${wi.metadata.uid ?? wi.metadata.name}`} detail={d} />
       {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
       {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || !!openAppr.spec.verification.rebinds || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}

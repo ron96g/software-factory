@@ -1,4 +1,5 @@
-import type { CheckRun, ModuleCheckScope, Repository, Workspace } from "../model/kinds.ts";
+import type { CheckRun, ModuleCheckScope, Repository, WorkItem, Workspace } from "../model/kinds.ts";
+import type { ExecutionContext } from "./agents.ts";
 import type { Principal } from "./app.ts";
 import type { ExecResult } from "./sandbox.ts";
 import type { TranscriptMessage } from "./transcripts.ts";
@@ -29,4 +30,10 @@ export interface CheckRunQueries {
 
 export interface CheckRunCommands {
   submit(p: Principal, workItem: string, input: { workspace: string; check: string; requestId: string }): Promise<CheckRun>;
+}
+
+/** Serializes check publication with the entire duration of candidate mutations in this process. */
+export interface WorkspaceJobCoordinator {
+  mutate<T>(ctx: ExecutionContext, operation: () => Promise<T>): Promise<T>;
+  submit<T>(item: WorkItem, operation: () => Promise<T>): Promise<T>;
 }

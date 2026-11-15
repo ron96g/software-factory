@@ -21,6 +21,7 @@ export interface CompiledStage {
 
 export interface CompiledWorkflow {
   name: string;
+  recovery?: import("../model/recovery.ts").RecoveryPolicy;
   versions?: Record<string, string>;
   verification?: import("../model/kinds.ts").WorkflowSpec["verification"];
   planning?: import("../model/kinds.ts").WorkflowSpec["planning"];
@@ -51,6 +52,7 @@ export type GateDecision =
   | { action: "block"; questions: string[]; /** Supporting Markdown (e.g. an agent's last summary), kept out of the question text. */ details?: string }
   | { action: "attention"; reason: string }
   | { action: "fail"; reason: string }
+  | { action: "recovery"; trigger: import("../model/recovery.ts").RecoveryTrigger; planFingerprint: string; unit: string }
   /** Checks still running in the background; re-evaluate later (never block a reconcile). */
   | { action: "wait"; retryAfterMs: number };
 

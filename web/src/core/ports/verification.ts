@@ -12,6 +12,7 @@ export interface CheckRunScheduler {
 export interface CheckResultClassifier {
   readonly format: string;
   classify(result: ExecResult): CheckOutcome;
+  failureEvidence?(result: ExecResult): { tests: string[] } | undefined;
 }
 
 export interface ValidationPlan {
@@ -74,6 +75,15 @@ export interface StageResumptionPolicy {
 export interface AgentCheckRequests {
   /** Workspace name or unique repository alias; check name or repository/check identity. */
   run(ctx: ExecutionContext, input: { workspace: string; check: string; requestId: string }): Promise<CheckRun>;
+}
+
+export interface AgentBaselineRequests {
+  runBaseline(ctx: ExecutionContext, input: { workspace: string; check: string; requestId: string }): Promise<CheckRun>;
+}
+
+export interface AgentCheckLogReader {
+  read(ctx: ExecutionContext, input: { checkRun: string; afterSeq?: number; offset?: number }):
+    Promise<{ content: string; seq?: number; next: { afterSeq: number; offset: number } | null; logsIncomplete: boolean }>;
 }
 
 export interface VerificationActions {

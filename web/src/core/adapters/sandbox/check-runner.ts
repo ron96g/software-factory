@@ -1,6 +1,6 @@
 import type { CheckRun, Repository, SandboxProfile, Workspace } from "../../model/kinds.ts";
 import { API_VERSION, SYSTEM_NAMESPACE } from "../../model/resource.ts";
-import { ISOLATION_RANK, SandboxUnavailableError, type CheckExecutionRunner, type ExecutionEnvironmentSelector, type ResourceReader } from "../../ports/index.ts";
+import { ISOLATION_RANK, SandboxUnavailableError, canPrepareIsolated, type CheckExecutionRunner, type ExecutionEnvironmentSelector, type ResourceReader } from "../../ports/index.ts";
 import { resolveRef } from "../../refs/refs.ts";
 
 /** ADR-0047: checks keep complete redacted logs up to an operator limit; truncation stays visibly incomplete. */
@@ -32,7 +32,17 @@ export class SandboxCheckRunner implements CheckExecutionRunner {
     if (ISOLATION_RANK[health.isolation] < ISOLATION_RANK[profile.spec.isolation ?? "container"] && !health.waivesIsolation) {
       throw new SandboxUnavailableError(health.runtime, "runtime does not provide the profile's minimum isolation");
     }
-    const sandbox = await environment.prepare({ profile, repositories: [repository], workspaces: [workspace] });
+    const spec = { profile, repositories: [repository], workspaces: [workspace] };
+    const isolated = run.spec.workflow?.purpose === "diagnostic" || run.spec.workflow?.purpose === "baseline";
+    if (isolated && (!canPrepareIsolated(environment) || !environment.isolatesCandidate || !workspace.status?.baseCommit)) {
+      throw new SandboxUnavailableError(health.runtime, "diagnostic execution requires an isolated candidate snapshot");
+    }
+    if (run.spec.workflow?.purpose === "baseline" && run.spec.workflow.baselineCommit !== workspace.status?.baseCommit) {
+      throw new SandboxUnavailableError(health.runtime, "workspace baseline changed since submission");
+    }
+    const sandbox = isolated && canPrepareIsolated(environment)
+      ? await environment.prepareIsolated(spec, { commit: workspace.status!.baseCommit!, mode: run.spec.workflow?.purpose === "baseline" ? "baseline" : "candidate", snapshot: run.spec.snapshot })
+      : await environment.prepare(spec);
     try { return await sandbox.exec(`set -e -o pipefail\n${run.spec.command}`, { timeoutMs: run.spec.timeoutMs, maxOutputBytes: this.maxOutputBytes }); }
     finally { await sandbox.dispose(); }
   }

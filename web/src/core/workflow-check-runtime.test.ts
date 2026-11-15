@@ -4,12 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
-import { StoreError, type CheckExecutionRunner, type ExecResult, type ExecutionEnvironment, type ExecutionEnvironmentSelector } from "./ports/index.ts";
+import { StoreError, type CheckExecutionRunner, type ExecResult, type ExecutionEnvironment, type ExecutionEnvironmentSelector, type RecoveryCheckAuthorization } from "./ports/index.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { Registry } from "./registry/registry.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
+import { SerializedWorkspaceJobs } from "./checks/workspace-jobs.ts";
+import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { checkRunValidator } from "./checks/admission.ts";
 import { exitCodeClassifier, goTestJsonClassifier, registerCheckResultClassifiers } from "./checks/classifiers.ts";
@@ -26,7 +28,7 @@ const environments: ExecutionEnvironmentSelector = {
   refresh: async () => {},
 };
 
-async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin["purpose"]; format?: string } = {}) {
+async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin["purpose"]; format?: string; recoveryChecks?: RecoveryCheckAuthorization; isolated?: boolean } = {}) {
   const db = new DatabaseSync(":memory:");
   const clock = { now: () => new Date("2026-11-13T10:00:00.000Z") };
   const store = new SqliteStore(db, clock);
@@ -91,7 +93,12 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
   let fingerprint = "candidate-a";
   const snapshots = { fingerprint: async () => fingerprint };
   const redactor = { redact: (text: string) => text.replaceAll("SECRET", "[redacted]") };
-  const scheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor });
+  const selected = options.isolated ? new InMemorySandboxEnvironment() : undefined;
+  const selector: ExecutionEnvironmentSelector = selected ? {
+    select: async () => ({ environment: selected, health: await selected.health(), candidates: [await selected.health()] }), refresh: async () => {},
+  } : environments;
+  const scheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments: selector, redactor,
+    ...(options.recoveryChecks ? { jobs: new SerializedWorkspaceJobs(store), recoveryChecks: options.recoveryChecks } : {}) });
   const origin: CheckWorkflowOrigin = {
     stage, round: 3, purpose, planFingerprint: "plan-fingerprint", attempt: 1,
     ...(purpose === "preparation" ? {} : { agentRunRef: { name: caller.metadata.name },
@@ -110,6 +117,7 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
   const controller = (execution: CheckExecutionRunner = runner, contracts?: VerificationContracts) => createCheckRunController({
     reader: store, status: store, logs, runner: execution, snapshots, clock,
     events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message), classifiers, contracts,
+    recoveryChecks: options.recoveryChecks,
   });
   return {
     db, store, logs, scheduler, submit, item, workspace, repository, caller, origin,
@@ -145,7 +153,7 @@ test("unit readiness jobs pass admission and execute only for allowlisted checks
     const origin: CheckWorkflowOrigin = { stage: "implement", round: 3, purpose: "unit-readiness", planFingerprint: "plan-fingerprint", attempt: 1,
       unit: "U1", unitRun: f.caller.metadata.name };
     await assert.rejects(f.submit("test", "not-allowlisted", origin), /not authorized for unit-readiness/);
-    await assert.rejects(f.submit("focused", "agent-caller", { ...origin, agentRunRef: { name: f.caller.metadata.name }, agentRunUid: f.caller.metadata.uid! }), /Unit and its implementation run/);
+    await assert.rejects(f.submit("focused", "agent-caller", { ...origin, agentRunRef: { name: f.caller.metadata.name }, agentRunUid: f.caller.metadata.uid!, agentRequestId: "a" }), /active, current-round AgentRun/);
     await assert.rejects(f.submit("focused", "barrier-at-implement", { ...origin, unit: "*", unitRun: undefined }), /not authorized/);
     const run = await f.submit("focused", "unit", origin);
     assert.deepEqual(await checkRunValidator().validate(run, { operation: "CREATE", reader: f.store }), []);
@@ -153,6 +161,73 @@ test("unit readiness jobs pass admission and execute only for allowlisted checks
     await c.stop();
     assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.outcome, "Passed");
   } finally { await c.stop(); f.db.close(); }
+});
+
+test("agent readiness check is authorized on submission, admission and execution, and cannot spoof a different caller", async () => {
+  const seen: string[] = [];
+  const recoveryChecks: RecoveryCheckAuthorization = { authorize: async ({ caller, origin, existing }) => {
+    assert.equal(origin.unitRun, caller.metadata.name);
+    seen.push(existing ? "existing" : "new");
+  } };
+  const f = await fixture({ stage: "implement", purpose: "unit-readiness", recoveryChecks });
+  const c = f.controller();
+  try {
+    const origin: CheckWorkflowOrigin = { stage: "implement", round: 3, purpose: "unit-readiness", planFingerprint: "plan-fingerprint",
+      attempt: 1, unit: "U1", unitRun: f.caller.metadata.name, agentRunRef: { name: f.caller.metadata.name },
+      agentRunUid: f.caller.metadata.uid, agentRequestId: "stable" };
+    const run = await f.submit("focused", "unit-agent", origin);
+    assert.deepEqual(await checkRunValidator(undefined, recoveryChecks).validate(run, { operation: "CREATE", reader: f.store }), []);
+    assert.equal((await f.submit("focused", "unit-agent", origin)).metadata.uid, run.metadata.uid);
+    await assert.rejects(f.submit("focused", "spoof", { ...origin, agentRunUid: "another-uid" }), /active, current-round AgentRun/);
+    await c.reconcile(keyOf(run));
+    await c.stop();
+    assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.outcome, "Passed");
+    assert.deepEqual(seen.slice(0, 3), ["new", "new", "existing"]);
+    assert.ok(seen.length >= 4 && seen.slice(2).every((value) => value === "existing"));
+  } finally { await c.stop(); f.db.close(); }
+});
+
+test("recovery workflows reject even gate-submitted checks without the shared workspace coordinator", async () => {
+  const f = await fixture({ purpose: "preparation" });
+  try {
+    const workflow = (await f.store.get<Workflow>("Workflow", "default", "workflow"))!;
+    await f.store.update<Workflow>({ ...workflow, spec: { ...workflow.spec, recovery: { version: "v1", maxTotalAttempts: 4,
+      humanNeedReserve: 0, maxOperatorAllowance: 0, diagnosticChecks: [] } } });
+    await assert.rejects(f.submit(), /require shared workspace serialization/);
+    assert.equal((await f.store.list<CheckRun>("CheckRun", { namespace: "default" })).length, 0);
+  } finally { f.db.close(); }
+});
+
+test("isolated diagnostic checks have a distinct episode origin and cannot count as Unit readiness", async () => {
+  const recoveryChecks: RecoveryCheckAuthorization = { authorize: async () => {} };
+  const f = await fixture({ stage: "implement", recoveryChecks, isolated: true });
+  try {
+    const workflow = (await f.store.get<Workflow>("Workflow", "default", "workflow"))!;
+    await f.store.update<Workflow>({ ...workflow, spec: { ...workflow.spec, recovery: { version: "v1", maxTotalAttempts: 4,
+      humanNeedReserve: 0, maxOperatorAllowance: 0, diagnosticChecks: ["repo/focused"] } } });
+    const baseCommit = "a".repeat(40);
+    await f.store.updateStatus<Workspace>({ ...f.workspace, status: { ...f.workspace.status!, baseCommit } });
+    await f.store.updateStatus<AgentRun>({ ...f.caller, status: { phase: "Succeeded" } });
+    const caller = await f.store.create<AgentRun>({ ...f.caller, metadata: { ...f.caller.metadata, name: "item-recovery-e1-d1",
+      uid: undefined, resourceVersion: undefined, creationTimestamp: undefined }, spec: { ...f.caller.spec,
+      assignment: { kind: "unit", planFingerprint: "plan-fingerprint", unit: "U1" },
+      recovery: { episode: "e1", attempt: 1, mode: "diagnosis", planFingerprint: "plan-fingerprint", unit: "U1",
+        policyVersion: "v1", trigger: { kind: "AgentRun", name: "prior", uid: "prior-uid" } } }, status: { phase: "Running" } });
+    const origin: CheckWorkflowOrigin = { stage: "implement", round: 3, purpose: "diagnostic", planFingerprint: "plan-fingerprint",
+      attempt: 1, unit: "U1", recoveryEpisode: "e1", agentRunRef: { name: caller.metadata.name },
+      agentRunUid: caller.metadata.uid, agentRequestId: "diagnostic-1" };
+    const run = await f.submit("focused", "diagnostic", origin);
+    assert.equal(run.spec.workflow?.purpose, "diagnostic");
+    assert.notEqual(run.spec.workflow?.purpose, "unit-readiness");
+    assert.deepEqual(await checkRunValidator(undefined, recoveryChecks).validate(run, { operation: "CREATE", reader: f.store }), []);
+    await f.store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed", outcome: "Passed", finalSnapshot: run.spec.snapshot, logsIncomplete: false } });
+    const baseline = { ...origin, purpose: "baseline" as const, baselineCommit: baseCommit, agentRequestId: "baseline-1" };
+    const baseRun = await f.submit("focused", "baseline", baseline);
+    assert.equal(baseRun.spec.workflow?.purpose, "baseline");
+    assert.equal(baseRun.spec.workflow?.baselineCommit, baseCommit);
+    assert.equal((await f.submit("focused", "baseline", baseline)).metadata.uid, baseRun.metadata.uid);
+    assert.deepEqual(await checkRunValidator(undefined, recoveryChecks).validate(baseRun, { operation: "CREATE", reader: f.store }), []);
+  } finally { f.db.close(); }
 });
 
 test("additional configured checks can run but stale or unapproved plan evidence cannot execute", async () => {
@@ -185,6 +260,15 @@ test("workflow scheduling pins named config and is idempotent across snapshot dr
     assert.equal(retry.metadata.uid, pending.metadata.uid);
     assert.equal(retry.spec.snapshot, "candidate-a");
     await assert.rejects(f.submit("unknown"), StoreError);
+  } finally { f.db.close(); }
+});
+
+test("polling a submitted check still requires the current caller", async () => {
+  const f = await fixture();
+  try {
+    await f.submit();
+    await f.store.updateStatus<AgentRun>({ ...f.caller, status: { phase: "Succeeded" } });
+    await assert.rejects(f.submit(), /active, current-round AgentRun/);
   } finally { f.db.close(); }
 });
 
@@ -298,6 +382,8 @@ test("classification distinguishes assertion, preflight setup, generic, truncate
     { Action: "fail", Package: "example/pkg" },
   ].map((event) => JSON.stringify(event)).join("\n");
   assert.equal(goTestJsonClassifier.classify({ exitCode: 1, stdout: perTestFailure, stderr: "", truncated: false, durationMs: 1 }), "AssertionFailed");
+  assert.deepEqual(goTestJsonClassifier.failureEvidence!({ exitCode: 1, stdout: perTestFailure, stderr: "", truncated: false, durationMs: 1 }),
+    { tests: ["example/pkg::TestBroken"] });
   assert.equal(goTestJsonClassifier.classify({ exitCode: 1, stdout: '{"Action":"fail","Package":"example/pkg"}', stderr: "", truncated: false, durationMs: 1 }), "UnknownFailure");
   assert.equal(goTestJsonClassifier.classify({ exitCode: 0, stdout: "", stderr: "", truncated: false, durationMs: 1 }), "NotVerified");
   assert.equal(goTestJsonClassifier.classify({ exitCode: 1, stdout: `${perTestFailure}\n{truncated`, stderr: "", truncated: false, durationMs: 1 }), "NotVerified");
@@ -324,8 +410,25 @@ test("classification distinguishes assertion, preflight setup, generic, truncate
     const run = await assertion.submit();
     await assertionController.reconcile(keyOf(run));
     await assertionController.stop();
-    assert.equal((await assertion.store.get<CheckRun>("CheckRun", "default", run.metadata.name))?.status?.outcome, "AssertionFailed");
+    const status = (await assertion.store.get<CheckRun>("CheckRun", "default", run.metadata.name))?.status;
+    assert.equal(status?.outcome, "AssertionFailed");
+    assert.deepEqual(status?.failureEvidence, { tests: ["example/pkg::TestBroken"] });
   } finally { await assertionController.stop(); assertion.db.close(); }
+
+  for (const variant of ["mutated", "secret"] as const) {
+    const unsafe = await fixture();
+    const unsafeController = unsafe.controller({ execute: async () => {
+      if (variant === "mutated") unsafe.snapshot("changed-during-check");
+      return { exitCode: 1, stdout: variant === "secret" ? perTestFailure.replaceAll("TestBroken", "TestSECRET") : perTestFailure,
+        stderr: "", truncated: false, durationMs: 2, termination: { kind: "exit" } };
+    } });
+    try {
+      const run = await unsafe.submit();
+      await unsafeController.reconcile(keyOf(run));
+      await unsafeController.stop();
+      assert.equal((await unsafe.store.get<CheckRun>("CheckRun", "default", run.metadata.name))?.status?.failureEvidence, undefined);
+    } finally { await unsafeController.stop(); unsafe.db.close(); }
+  }
 
   const unknown = await fixture();
   const unknownController = unknown.controller();

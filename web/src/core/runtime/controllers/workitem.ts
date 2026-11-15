@@ -31,10 +31,14 @@ import {
   type RunFailurePolicy,
   type ArtifactCheck,
   type Lookup,
+  type RecoveryNeedHandler,
   OUTPUT_REJECTED,
 } from "../../ports/index.ts";
 import { routeToDecision } from "../../model/routes.ts";
 import { resolveRef } from "../../refs/refs.ts";
+import { createHash } from "node:crypto";
+import type { RecoveryEpisode, RecoveryReport } from "../../model/recovery.ts";
+import type { RecoveryAllowanceReader, RecoveryRouter } from "../../ports/recovery.ts";
 
 const TERMINAL = new Set(["Done", "Closed", "Failed"]);
 import { normalizeQuestions, type AgentQuestion } from "../../questions.ts";
@@ -66,6 +70,9 @@ export interface WorkItemControllerDeps {
   runFailures?: RunFailurePolicy;
   /** ADR-0049: artifact type → structure check, run when the producing step succeeds. */
   artifactChecks?: Lookup<ArtifactCheck>;
+  recovery?: RecoveryRouter;
+  recoveryNeeds?: Lookup<RecoveryNeedHandler>;
+  recoveryAllowances?: RecoveryAllowanceReader;
 }
 
 /** Bounded same-step retries for malformed output before the existing gate handling takes over. */
@@ -305,8 +312,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     switch (decision.action) {
       case "advance": {
         const next = wf.next(stage.name);
-        if (!next) return write(wi, { phase: "Done", blockedBy: undefined }, "Completed", "workflow finished");
-        return write(wi, enterStage(wf, next, round), "StageStarted", `${next.name} (${next.lifecyclePhase})`);
+        const recovery = wi.status?.recovery?.map((e) => e.disposition === "repairing" ? { ...e, disposition: "resolved" as const } : e);
+        if (!next) return write(wi, { phase: "Done", blockedBy: undefined, recovery }, "Completed", "workflow finished");
+        return write(wi, { ...enterStage(wf, next, round), recovery }, "StageStarted", `${next.name} (${next.lifecyclePhase})`);
       }
       case "goto": {
         const target = wf.stage(decision.stage);
@@ -314,7 +322,8 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         const retries = decision.retryOf
           ? { ...wi.status?.retries, [decision.retryOf]: (wi.status?.retries?.[decision.retryOf] ?? 0) + 1 }
           : wi.status?.retries;
-        return write(wi, { ...enterStage(wf, target, round), retries }, "StageStarted", `${target.name} (back from ${stage.name}${decision.retryOf ? `, retry ${retries![decision.retryOf]}` : ""})`);
+        return write(wi, { ...enterStage(wf, target, round), retries,
+          recovery: wi.status?.recovery?.map((e) => e.disposition === "repairing" ? { ...e, disposition: "resolved" as const } : e) }, "StageStarted", `${target.name} (back from ${stage.name}${decision.retryOf ? `, retry ${retries![decision.retryOf]}` : ""})`);
       }
       case "wait":
         return { requeueAfterMs: decision.retryAfterMs };
@@ -327,6 +336,23 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       case "fail":
         await d.events.warning(wi, "GateFailed", decision.reason);
         return write(wi, { phase: "Failed", message: decision.reason });
+      case "recovery": {
+        const policy = wf.recovery;
+        if (!policy || !d.recovery || !wi.metadata.uid) return write(wi, { phase: "Failed", message: "Recovery policy or engine unavailable." });
+        const trigger = await d.reader.get<AgentRun | CheckRun>(decision.trigger.kind, nsOf(wi), decision.trigger.name);
+        if (!trigger || trigger.metadata.uid !== decision.trigger.uid) return write(wi, { phase: "Failed", message: "Recovery trigger is unavailable or stale." });
+        const id = createHash("sha256").update(JSON.stringify([wi.metadata.uid, decision.planFingerprint, decision.unit, policy.version, decision.trigger])).digest("hex").slice(0, 24);
+        const episodes = wi.status?.recovery ?? [];
+        const previous = episodes.find((e) => e.id === id);
+        if (previous) return write(wi, { phase: "Failed", message: `Recovery episode ${id} already consumed this trigger.` });
+        const episode: RecoveryEpisode = { id, workItemUid: wi.metadata.uid, planFingerprint: decision.planFingerprint,
+          unit: decision.unit, stage: stage.name, policyVersion: policy.version, maxTotalAttempts: policy.maxTotalAttempts,
+          operatorAllowance: 0, trigger: decision.trigger, diagnosticAttempts: 0, codeAttempts: 0, executionAttempts: 0,
+          failureSignature: d.recovery.signature(trigger), disposition: "diagnosing" };
+        return write(wi, { phase: "Running", blockedBy: undefined, recovery: [...episodes.map((e) =>
+          e.disposition === "repairing" && e.planFingerprint === episode.planFingerprint && e.unit === episode.unit ? { ...e, disposition: "resolved" as const } : e), episode] },
+          "RecoveryStarted", `${decision.unit}: diagnosing ${trigger.kind}/${trigger.metadata.name}`);
+      }
       case "await-approval": {
         const name = `${wi.metadata.name}-${stage.name}-r${wi.status!.round}`;
         const a: Approval = {
@@ -361,6 +387,150 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
   /** Restarts are spec-driven and handled once per `spec.restart.id`; a restart may revive Done/Failed/Closed items. */
   const restartPending = (wi: WorkItem) => !!wi.spec.restart && wi.spec.restart.id !== wi.status?.restartHandled;
 
+  async function diagnose(wi: WorkItem, wf: CompiledWorkflow, stage: CompiledStage, episode: RecoveryEpisode) {
+      const policy = wf.recovery!;
+      const router = d.recovery!;
+      const episodes = wi.status?.recovery ?? [];
+      const scope = episodes.filter((e) => e.workItemUid === wi.metadata.uid && e.planFingerprint === episode.planFingerprint && e.unit === episode.unit);
+      const checkHistory = await d.reader.list<CheckRun>("CheckRun", { namespace: nsOf(wi),
+        ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) } });
+      const used = scope.reduce((n, e) => n + e.diagnosticAttempts + e.codeAttempts + e.executionAttempts, 0) +
+        checkHistory.filter((c) => c.spec.workItemUid === wi.metadata.uid && ["diagnostic", "baseline"].includes(c.spec.workflow?.purpose ?? "") &&
+          c.spec.workflow?.planFingerprint === episode.planFingerprint && c.spec.workflow?.unit === episode.unit).length;
+      const allowance = scope.reduce((n, e) => n + e.operatorAllowance, 0);
+      const allocations = scope.reduce((sum, e) => ({
+        diagnosis: sum.diagnosis + (e.operatorAllocations?.diagnosis ?? 0),
+        repair: sum.repair + (e.operatorAllocations?.repair ?? 0),
+        execution: sum.execution + (e.operatorAllocations?.execution ?? 0),
+      }), { diagnosis: 0, repair: 0, execution: 0 });
+      const limit = episode.maxTotalAttempts + allowance - (scope.some((e) => e.humanNeedConsumed) ? 0 : policy.humanNeedReserve);
+      const updateEpisode = (patch: Partial<RecoveryEpisode>) => episodes.map((e) => e.id === episode.id ? { ...e, ...patch } : e);
+      const stop = async (reason: string, report?: RecoveryEpisode["latestReport"]) => {
+        const latest = report ?? episode.latestReport;
+        const detail = `${reason} ${latest ? `Last eligible report: ${latest.name}.` : "No valid recovery report was produced; original trigger evidence is retained."}`;
+        await d.events.warning(wi, "RecoveryExhausted", detail);
+        return write(wi, { phase: "Failed", message: detail, recovery: updateEpisode({ ...(report ? { latestReport: report } : {}), disposition: "failed" }) });
+      };
+      const retryDiagnosis = async (reason: string, report?: RecoveryEpisode["latestReport"]) => {
+        await d.events.warning(wi, "RecoveryDiagnosisRejected", reason);
+        const ceiling = (policy.maxDiagnosisAttempts ?? 2) + allocations.diagnosis + (scope.some((e) => e.humanNeedConsumed) ? 1 : 0);
+        if (episode.diagnosticAttempts >= ceiling || used >= limit) return stop(reason, report);
+        return write(wi, { phase: "Running", message: reason, recovery: updateEpisode({
+          ...(report ? { latestReport: report } : {}), diagnosticAttempts: episode.diagnosticAttempts + 1 }) },
+          "RecoveryDiagnosing", `${episode.unit}: retrying diagnosis after rejected output or interruption.`);
+      };
+      if (episode.policyVersion !== policy.version || episode.maxTotalAttempts !== policy.maxTotalAttempts) return stop("Recovery policy changed; fresh authorization is required.");
+      if (episode.diagnosticAttempts === 0) {
+        if (used >= limit) return stop("Recovery hard attempt limit reached; inspect the retained evidence.");
+        return write(wi, { recovery: updateEpisode({ diagnosticAttempts: 1 }) }, "RecoveryDiagnosing", `${episode.unit}: diagnostic attempt 1`);
+      }
+      const name = `${wi.metadata.name.slice(0, 130)}-recovery-${episode.id}-d${episode.diagnosticAttempts}`;
+      const run = await d.reader.get<AgentRun>("AgentRun", nsOf(wi), name);
+      if (!run) {
+        const active = await d.reader.list<CheckRun>("CheckRun", { namespace: nsOf(wi), ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) } });
+        if (active.some((c) => c.spec.workItemUid === wi.metadata.uid && (!c.status || c.status.phase === "Running"))) return { requeueAfterMs: 1000 };
+        const step = stage.steps[0];
+        if (!step) return stop("The implementation stage has no diagnostic agent.");
+        const allowed = ["read_file", "list_files", "search_code", "run_check", "run_baseline_check", "read_check_log"];
+        const tools = step.tools === undefined ? allowed : allowed.filter((tool) => step.tools!.includes(tool));
+        const assignment = { kind: "unit" as const, planFingerprint: episode.planFingerprint, unit: episode.unit };
+        await createChild<AgentRun>({ apiVersion: API_VERSION, kind: "AgentRun",
+          metadata: { name, namespace: nsOf(wi), ownerReferences: [ownerRef(wi)], labels: { "factory.ai-dlc.io/workitem": wi.metadata.name, "factory.ai-dlc.io/stage": stage.name } },
+          spec: { workItemRef: { name: wi.metadata.name }, agentRef: step.agentRef, skillRefs: [], stage: stage.name,
+            step: `diagnosis-${episode.id}`, inputs: (step.inputs ?? []).map((i) => i.artifactRef), outputs: [{ name: "recovery-report" }],
+            tools, assignment, recovery: { episode: episode.id, attempt: episode.diagnosticAttempts, mode: "diagnosis",
+              planFingerprint: episode.planFingerprint, unit: episode.unit, policyVersion: episode.policyVersion, trigger: episode.trigger } } });
+        return;
+      }
+      if (!run.status || run.status.phase === "Pending" || run.status.phase === "Running") return;
+      if (run.status.phase !== "Succeeded") return retryDiagnosis(`Diagnostic attempt ${name} failed: ${run.status.message ?? "no report"}`);
+      const refs = run.status.outputs ?? [];
+      const artifacts = await Promise.all(refs.map((ref) => d.reader.get<Artifact>("Artifact", nsOf(wi), ref.name)));
+      const reportArtifact = artifacts.find((a) => a?.spec.artifactTypeRef.name === "recovery-report");
+      if (!reportArtifact?.metadata.resourceVersion) return retryDiagnosis(`Diagnostic attempt ${name} produced no durable recovery report.`);
+      const problem = await d.artifactChecks?.get("recovery-report")?.check(wi, reportArtifact);
+      if (!d.artifactChecks?.get("recovery-report") || problem) return retryDiagnosis(`Invalid recovery report: ${problem ?? "validation unavailable"}`);
+      const report = JSON.parse(reportArtifact.spec.content) as RecoveryReport;
+      const latestReport = { name: reportArtifact.metadata.name, resourceVersion: reportArtifact.metadata.resourceVersion };
+      const route = await router.route({ item: wi, episode, policy, run, report });
+      if (route.action === "human-need") {
+        const handler = d.recoveryNeeds?.get(route.need.kind);
+        const trigger = await d.reader.get<AgentRun | CheckRun>(episode.trigger.kind, nsOf(wi), episode.trigger.name);
+        if (!handler || !trigger || !policy.humanNeedReserve || scope.some((e) => e.humanNeedConsumed || e.humanNeed)) {
+          return write(wi, { phase: "Failed", message: "The proposed human need is not independently verified or its reserve was used.",
+            recovery: updateEpisode({ latestReport, disposition: "failed" }) });
+        }
+        const state = await handler.inspect({ item: wi, trigger, need: route.need });
+        if (state === "invalid") return write(wi, { phase: "Failed", message: "The proposed human need is not independently verified.",
+          recovery: updateEpisode({ latestReport, disposition: "failed" }) });
+        if (state === "satisfied") return retryDiagnosis("The runtime is available again; retrying with the remaining ordinary budget.", latestReport);
+        const waits = episode.runtimeWaits ?? 0;
+        const waitLimit = wf.unitExecution?.maxExecutionAttempts ?? 0;
+        if (waits < waitLimit) {
+          const delay = Math.min(60_000, Math.max(1000, wf.verification?.retryDelayMs ?? 1000) * 2 ** waits);
+          const retryAt = new Date(d.clock.now().getTime() + delay).toISOString();
+          return write(wi, { phase: "Waiting", message: `Waiting for ${route.need.runtime} before requesting human action.`,
+            recovery: updateEpisode({ latestReport, disposition: "waiting", runtimeWaits: waits + 1, retryAt }) },
+            "RecoveryWaiting", `Runtime unavailable; retry at ${retryAt}.`);
+        }
+        const name = `${wi.metadata.name.slice(0, 130)}-recovery-${episode.id}`;
+        const clarification: Clarification = { apiVersion: API_VERSION, kind: "Clarification",
+          metadata: { name, namespace: nsOf(wi), ownerReferences: [ownerRef(wi)] },
+          spec: { workItemRef: { name: wi.metadata.name }, stage: stage.name,
+            questions: [route.need.need], options: [route.need.options], askedBy: { agentRunRef: { name: run.metadata.name } },
+            details: `Restore runtime ${route.need.runtime}, or stop. Evidence: ${latestReport.name}@${latestReport.resourceVersion}.` },
+          status: { phase: "Open" } };
+        await createChild(clarification);
+        return write(wi, { phase: "Blocked", blockedBy: { kind: "Clarification", name }, recovery: updateEpisode({
+          latestReport, humanNeed: { ...route.need, clarification: name }, disposition: "blocked" }) },
+          "RecoveryHumanNeed", route.need.need);
+      }
+      if (route.action === "diagnose") {
+        if (episode.diagnosticAttempts >= (policy.maxDiagnosisAttempts ?? 2) + allocations.diagnosis +
+            (scope.some((e) => e.humanNeedConsumed) ? 1 : 0) || used >= limit) {
+          await write(wi, { recovery: updateEpisode({ latestReport }) });
+          const fresh = await d.reader.get<WorkItem>("WorkItem", nsOf(wi), wi.metadata.name);
+          if (!fresh) return;
+          return write(fresh, { phase: "Failed", message: "Recovery diagnosis budget exhausted.", recovery: fresh.status!.recovery!.map((e) => e.id === episode.id ? { ...e, disposition: "failed" as const } : e) });
+        }
+        return write(wi, { recovery: updateEpisode({ latestReport, diagnosticAttempts: episode.diagnosticAttempts + 1 }) },
+          "RecoveryDiagnosing", `${episode.unit}: diagnostic attempt ${episode.diagnosticAttempts + 1}`);
+      }
+      if (route.action === "repair" || route.action === "execution-recovery") {
+        const priorRepairs = scope.filter((e) => e.repairSignature === episode.failureSignature && e.latestReport);
+        const failed = episode.trigger.kind === "CheckRun" ? await d.reader.get<CheckRun>("CheckRun", nsOf(wi), episode.trigger.name) : undefined;
+        const references = report.evidence.filter((e) => e.kind === "CheckRun");
+        const evidence = await Promise.all(references.map((ref) => d.reader.get<CheckRun>("CheckRun", nsOf(wi), ref.name)));
+        const observations = [...new Set(evidence.filter((check): check is CheckRun => !!check && !!failed &&
+          check.spec.repositoryRef.name === failed.spec.repositoryRef.name && check.spec.check === failed.spec.check &&
+          check.spec.workflow?.purpose !== "baseline" && check.status?.phase === "Completed" && check.status.outcome === "AssertionFailed")
+          .map((check) => router.signature(check)))].sort();
+        const seen = new Set(priorRepairs.flatMap((e) => e.repairEvidence ?? []));
+        const prior = route.action === "repair" && priorRepairs.length > 0 &&
+          (priorRepairs.some((e) => !e.repairEvidence) || !observations.some((observation) => !seen.has(observation)));
+        const codeUsed = scope.reduce((n, e) => n + e.codeAttempts, 0);
+        const execUsed = scope.reduce((n, e) => n + e.executionAttempts, 0);
+        const baseCeiling = route.action === "repair" ? wf.unitExecution?.maxCodeAttempts : wf.unitExecution?.maxExecutionAttempts;
+        const ceiling = baseCeiling === undefined ? undefined : baseCeiling +
+          (route.action === "repair" ? allocations.repair : allocations.execution);
+        if (prior && episode.diagnosticAttempts < (policy.maxDiagnosisAttempts ?? 2) + allocations.diagnosis +
+            (scope.some((e) => e.humanNeedConsumed) ? 1 : 0) && used < limit) {
+          return write(wi, { recovery: updateEpisode({ latestReport, diagnosticAttempts: episode.diagnosticAttempts + 1 }) },
+            "RecoveryDiagnosing", `${episode.unit}: unchanged failure needs new evidence before another repair.`);
+        }
+        if (prior || used >= limit || ceiling === undefined || (route.action === "repair" ? codeUsed : execUsed) >= ceiling) {
+          return write(wi, { phase: "Failed", message: prior ? "The failure is unchanged after a repair; inspect the report." : "Recovery attempt budget exhausted.",
+            recovery: updateEpisode({ latestReport, disposition: "failed" }) });
+        }
+        const patch = route.action === "repair" ? { codeAttempts: episode.codeAttempts + 1 } : { executionAttempts: episode.executionAttempts + 1 };
+        return write(wi, { ...enterStage(wf, stage, (wi.status?.round ?? 0) + 1), recovery: updateEpisode({
+          ...patch, latestReport, nextAttemptMode: route.action,
+          ...(route.action === "repair" ? { repairSignature: episode.failureSignature, repairEvidence: observations } : {}),
+          disposition: "repairing" }) }, "RecoveryRepairing", `${episode.unit}: ${route.action}`);
+      }
+      return write(wi, { phase: "Failed", message: route.action === "stop" ? route.reason : "Unknown recovery route.",
+        recovery: updateEpisode({ latestReport, disposition: "failed" }) });
+    }
   /**
    * Re-enters `restart.stage` (default: first) with a fresh round. Artifacts from that stage onward are labelled
    * superseded so agents don't read stale (e.g. simulated) output; history stays visible. Each step is idempotent.
@@ -412,24 +582,89 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun", "OutboxMessage"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () =>
-      (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w)).map(keyOf),
+      (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w) ||
+        (w.status?.phase === "Failed" && !!w.status.recovery?.some((e) => e.disposition === "failed"))).map(keyOf),
     resyncMs: 60_000,
 
     async reconcile(key) {
       const { namespace, name } = parseKey(key);
       const wi = await d.reader.get<WorkItem>("WorkItem", namespace, name);
-      if (!wi || (TERMINAL.has(wi.status?.phase ?? "") && !restartPending(wi))) return;
+      if (!wi) return;
       try {
+        if (wi.status?.phase === "Failed" && d.recoveryAllowances) {
+          const found = await d.recoveryAllowances.approved(wi);
+          const approval = found?.approval;
+          if (approval?.spec.recoveryAllowance) {
+            const allowance = approval.spec.recoveryAllowance;
+            const episode = wi.status.recovery?.find((e) => e.id === allowance.episode);
+            let staleReason = found?.staleReason;
+            if (!episode) staleReason ??= "The recovery episode no longer exists.";
+            if (!staleReason && episode && allowance.target !== "diagnosis") {
+              const artifact = await d.reader.get<Artifact>("Artifact", namespace, allowance.report.name);
+              const producerName = artifact?.spec.producedBy?.agentRunRef.name;
+              const producer = producerName && await d.reader.get<AgentRun>("AgentRun", namespace, producerName);
+              if (!artifact || !producer || !d.recovery) staleReason = "The original report producer is unavailable.";
+              else {
+                let report: RecoveryReport | undefined;
+                try { report = JSON.parse(artifact.spec.content) as RecoveryReport; }
+                catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+                if (!report || !wi.spec.workflowRef) staleReason = "The original recovery report is invalid.";
+                else {
+                  const workflow = await d.compiler.compile(wi.spec.workflowRef, namespace);
+                  const activeEpisode = { ...episode, disposition: "diagnosing" as const };
+                  const activeItem = { ...wi, status: { ...wi.status, recovery: wi.status.recovery!.map((e) => e.id === episode.id ? activeEpisode : e) } };
+                  if (!workflow.recovery || (await d.recovery.route({ item: activeItem, episode: activeEpisode,
+                    policy: workflow.recovery, run: producer, report })).action !== allowance.target) {
+                    staleReason = "The approved report does not authorize the requested recovery action.";
+                  }
+                }
+              }
+            }
+            if (staleReason || !episode) {
+              await d.events.warning(wi, "RecoveryAllowanceStale", `${approval.metadata.name}: ${staleReason}`);
+              return write(wi, { staleRecoveryAllowances: [...(wi.status.staleRecoveryAllowances ?? []), approval.metadata.name] });
+            }
+            const recovery = wi.status.recovery!.map((e) => e.id !== episode.id ? e : {
+              ...e, operatorAllowance: e.operatorAllowance + allowance.count,
+              operatorAllocations: {
+                diagnosis: (e.operatorAllocations?.diagnosis ?? 0) + (allowance.target === "diagnosis" ? allowance.count : 0),
+                repair: (e.operatorAllocations?.repair ?? 0) + (allowance.target === "repair" ? allowance.count : 0),
+                execution: (e.operatorAllocations?.execution ?? 0) + (allowance.target === "execution-recovery" ? allowance.count : 0),
+              },
+              consumedAllowances: [...(e.consumedAllowances ?? []), approval.metadata.name],
+              disposition: allowance.target === "diagnosis" ? "diagnosing" as const : "repairing" as const,
+              diagnosticAttempts: e.diagnosticAttempts + (allowance.target === "diagnosis" ? 1 : 0),
+              codeAttempts: e.codeAttempts + (allowance.target === "repair" ? 1 : 0),
+              executionAttempts: e.executionAttempts + (allowance.target === "execution-recovery" ? 1 : 0),
+              ...(allowance.target === "diagnosis" ? {} : { nextAttemptMode: allowance.target }),
+            });
+            if (!wi.spec.workflowRef) return;
+            const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
+            const stage = wf.stage(episode.stage);
+            if (!stage || !wf.recovery || wf.recovery.version !== episode.policyVersion) return;
+            return write(wi, { ...enterStage(wf, stage, (wi.status.round ?? 0) + 1), recovery },
+              "RecoveryAllowanceConsumed", `Operator ${approval.spec.decidedBy} allocated ${allowance.count} attempt(s) for ${allowance.target}.`);
+          }
+        }
+        if (TERMINAL.has(wi.status?.phase ?? "") && !restartPending(wi)) return;
         if (wi.spec.retrospectiveOutcome && wi.spec.retrospectiveOutcome.disposition !== "open") {
           return write(wi, { phase: "Closed", blockedBy: undefined }, "Closed", `Retrospective ${wi.spec.retrospectiveOutcome.disposition} by ${wi.spec.retrospectiveOutcome.by}`);
         }
         if (!wi.spec.workflowRef) return write(wi, { phase: "Failed", message: "no workflowRef" }, "Failed", "no workflowRef");
         const wf = await d.compiler.compile(wi.spec.workflowRef, namespace);
+        if (wf.recovery && !d.recovery) {
+          const message = "Technical recovery is not available: durable recovery controller is not wired.";
+          return write(wi, { phase: "Failed", message }, "RecoveryUnavailable", message);
+        }
         const intent = await d.intentPolicy?.intent(wi);
         if (intent) {
           if (wi.status?.phase === intent.phase && !restartPending(wi)) return;
           return write(wi, { phase: intent.phase, blockedBy: undefined, message: intent.reason,
             restartHandled: wi.spec.restart?.id }, "Closed", intent.reason);
+        }
+        if (restartPending(wi) && wf.recovery && wi.status?.recovery?.some((e) => e.disposition !== "resolved")) {
+          return write(wi, { phase: "Failed", restartHandled: wi.spec.restart!.id,
+            message: "Restart cannot reset or bypass an active recovery episode; inspect the retained report." });
         }
         if (restartPending(wi)) return restartItem(wi, wf, wi.spec.restart!);
 
@@ -441,6 +676,15 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         const st = wi.status;
         const stage = wf.stage(st.stage ?? "");
         if (!stage) return write(wi, { phase: "Failed", message: `unknown stage ${st.stage}` });
+        const waitingRecovery = st.recovery?.findLast((e) => e.disposition === "waiting");
+        if (waitingRecovery) {
+          const delay = Math.max(0, Date.parse(waitingRecovery.retryAt ?? "") - d.clock.now().getTime());
+          if (delay > 0) return { requeueAfterMs: delay };
+          return write(wi, { phase: "Running", recovery: st.recovery!.map((e) => e.id === waitingRecovery.id
+            ? { ...e, disposition: "diagnosing" as const, retryAt: undefined } : e) });
+        }
+        const diagnosing = st.recovery?.findLast((e) => e.disposition === "diagnosing");
+        if (diagnosing && wf.recovery) return diagnose(wi, wf, stage, diagnosing);
 
         if (st.phase === "Blocked" && !st.blockedBy) {
           // Attention at a gate (e.g. malformed plan evidence) is level-triggered: re-check it on resync so a fixed
@@ -454,6 +698,35 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
         }
         if (st.phase === "Blocked") {
           const c = await d.reader.get<Clarification>("Clarification", namespace, st.blockedBy?.name ?? "");
+          const episode = st.recovery?.findLast((e) => e.disposition === "blocked" && e.humanNeed?.clarification === c?.metadata.name);
+          if (episode && c?.spec.answers?.length) {
+            const need = episode.humanNeed!;
+            const handler = d.recoveryNeeds?.get(need.kind);
+            const trigger = await d.reader.get<AgentRun | CheckRun>(episode.trigger.kind, namespace, episode.trigger.name);
+            if (!handler || !trigger) return write(wi, { phase: "Failed", message: "Recovery need cannot be revalidated." });
+            const resolution = handler.resolve({ need, answer: c.spec.answers[0] });
+            if (resolution === "invalid") return write(wi, { phase: "Failed", blockedBy: undefined, message: "Recovery answer is not a valid offered option.",
+              recovery: st.recovery!.map((e) => e.id === episode.id ? { ...e, disposition: "failed" as const } : e) });
+            if (resolution === "stop") return write(wi, { phase: "Failed", blockedBy: undefined, message: "Recovery stopped by the operator.",
+              recovery: st.recovery!.map((e) => e.id === episode.id ? { ...e, disposition: "failed" as const } : e) });
+            const state = await handler.inspect({ item: wi, trigger, need });
+            if (state !== "satisfied") return { requeueAfterMs: 5000 };
+            const scope = st.recovery!.filter((e) => e.planFingerprint === episode.planFingerprint && e.unit === episode.unit);
+            const checks = await d.reader.list<CheckRun>("CheckRun", { namespace,
+              ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace } });
+            const used = scope.reduce((n, e) => n + e.diagnosticAttempts + e.codeAttempts + e.executionAttempts, 0) +
+              checks.filter((check) => check.spec.workItemUid === wi.metadata.uid && ["diagnostic", "baseline"].includes(check.spec.workflow?.purpose ?? "") &&
+                check.spec.workflow?.planFingerprint === episode.planFingerprint && check.spec.workflow?.unit === episode.unit).length;
+            const allowance = scope.reduce((n, e) => n + e.operatorAllowance, 0);
+            if (scope.some((e) => e.humanNeedConsumed) || used >= episode.maxTotalAttempts + allowance || !c.metadata.resourceVersion) {
+              return write(wi, { phase: "Failed", blockedBy: undefined, message: "Recovery human-need reserve is exhausted.",
+                recovery: st.recovery!.map((e) => e.id === episode.id ? { ...e, disposition: "failed" as const } : e) });
+            }
+            return write(wi, { phase: "Running", blockedBy: undefined, recovery: st.recovery!.map((e) => e.id === episode.id ? {
+              ...e, disposition: "diagnosing" as const, diagnosticAttempts: e.diagnosticAttempts + 1,
+              humanNeedConsumed: { need: `${need.kind}:${need.runtime}`, answerVersion: c.metadata.resourceVersion! },
+            } : e) }, "RecoveryResumed", `Runtime ${need.runtime} was restored; reserved attempt consumed.`);
+          }
           if (c && !c.spec.answers?.length) {
             const reconfirm = c.spec.askedBy?.gate ? await d.planReconfirmation?.request(wi, stage) : undefined;
             if (reconfirm) return apply(wi, wf, stage, reconfirm);
@@ -525,6 +798,12 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             if (ws !== "ready") return write(wi, { phase: "Failed", message: ws }, "Failed", ws);
             const last = stepIdx === stage.steps.length - 1;
             const assignment = await d.assignments?.assign(wi, stage, stepIdx);
+            const episode = wi.status?.recovery?.findLast((e) => e.disposition === "repairing" && e.stage === stage.name &&
+              e.planFingerprint === assignment?.planFingerprint && assignment.kind === "unit" && e.unit === assignment.unit);
+            if (wf.recovery && assignment?.kind === "unit" && !episode &&
+                wi.status?.recovery?.some((e) => e.workItemUid === wi.metadata.uid && e.planFingerprint === assignment.planFingerprint && e.unit === assignment.unit)) {
+              return write(wi, { phase: "Failed", message: `Unit ${assignment.unit} has prior recovery history; restart cannot grant a new attempt.` });
+            }
             await createChild({
               apiVersion: API_VERSION,
               kind: "AgentRun",
@@ -560,6 +839,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
                       ? ["approve", stage.loop.when.outcome]
                       : undefined,
                 ...(assignment ? { assignment } : {}),
+                ...(episode ? { recovery: { episode: episode.id, attempt: episode.codeAttempts + episode.executionAttempts,
+                  mode: episode.nextAttemptMode ?? (episode.codeAttempts ? "repair" : "execution-recovery"), planFingerprint: episode.planFingerprint,
+                  unit: episode.unit, policyVersion: episode.policyVersion, trigger: episode.trigger } } : {}),
               },
             });
             return;

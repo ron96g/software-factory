@@ -13,6 +13,15 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
       const wf = await resolveRef<Workflow>(d.reader, "Workflow", ctx.workItem.spec.workflowRef!, nsOf(ctx.workItem));
       if (!wf?.spec.verification) return [];
       const compiled = await d.compiler.compile(ctx.workItem.spec.workflowRef!, nsOf(ctx.workItem));
+      const assignment = ctx.run.spec.assignment;
+      const validation = ctx.inputs.find((artifact) => artifact.spec.artifactTypeRef.name === "validation-plan");
+      let unitChecks: string[] = [];
+      if (assignment?.kind === "unit" && validation) {
+        try {
+          const parsed = JSON.parse(validation.spec.content) as { units?: { id: string; obligations?: { checks?: string[] }[] }[] };
+          unitChecks = [...new Set(parsed.units?.find((unit) => unit.id === assignment.unit)?.obligations?.flatMap((obligation) => obligation.checks ?? []) ?? [])];
+        } catch { /* Invalid evidence is handled by verification admission. */ }
+      }
       const sections = [{
         title: "Verification policy (operator-controlled)",
         source: "verification-contract",
@@ -22,12 +31,14 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
             checks: repo.spec.checks, moduleScope: repo.spec.moduleScope, verification: repo.spec.verification })),
           workspaces: ctx.workspaces.map((workspace) => ({ workspace: workspace.metadata.name, repositoryAlias: workspace.spec.repositoryRef.name,
             checkSyntax: `${workspace.spec.repositoryRef.name}/<configured-check>` })),
+          ...(assignment?.kind === "unit" ? { assignedUnit: assignment.unit, assignedReadinessChecks: unitChecks,
+            diagnosticChecks: compiled.recovery?.diagnosticChecks ?? [] } : {}),
           planFormat: { criteria: [{ id: "AC-1", description: "Exact acceptance criterion from the specification", checks: ["repository/check"] }],
             checks: ["repository/check"], preflight: ["repository/preflight"],
             ...(compiled.unitExecution ? { units: [{ id: "U1", title: "Stable Unit from units-of-work", dependsOn: [], criteria: ["AC-1"],
               obligations: [{ id: "U1-O1", description: "Concrete deliverable", checks: ["repository/<readiness check>"] }] }] } : {}) },
           ...(compiled.unitExecution ? { unitInstructions: "Unit execution is enabled (ADR-0047): units[] is required. Every criterion needs a delivering Unit; obligations name readiness checks from repository readinessChecks that are also in checks[]; dependencies are acyclic and use units-of-work IDs. Units are implemented one at a time and review starts only once all are ready." } : {}),
-          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. moduleScoped checks deterministically select changed modules plus transitive dependents from the pinned workspace baseline, including committed and dirty changes; shared/unknown changes require full validation. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence. run_check accepts workspace or repositoryAlias above, and a bare check name or matching repository/check. Reuse requestId to inspect the same job; pending is not Passed.",
+          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. moduleScoped checks deterministically select changed modules plus transitive dependents from the pinned workspace baseline, including committed and dirty changes; shared/unknown changes require full validation. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence.",
         }, null, 2),
       }];
       const gaps = ctx.repositories.flatMap(verificationPolicyGaps);

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SANDBOX_TOOLS, readRange } from "./sandbox-tools.ts";
 import { MAX_RESULT, parseMarker } from "./truncation.ts";
+import { HostEnvironment } from "../adapters/sandbox/host.ts";
+import type { SandboxSpec } from "../ports/sandbox.ts";
 
 const big = Array.from({ length: 2000 }, (_, i) => `line ${i + 1} ${"x".repeat(20)}`).join("\n");
 
@@ -32,4 +34,17 @@ test("read_file rejects invalid numbers; other tools emit marker", async () => {
   const lf = await SANDBOX_TOOLS.find((t) => t.name === "list_files")!.bind!(caps).invoke({});
   assert.ok(lf.length <= MAX_RESULT);
   assert.equal(parseMarker(lf)?.tool, "list_files");
+});
+
+test("exploratory shell pipelines preserve failures unless explicitly ignored", async () => {
+  const environment = new HostEnvironment();
+  const spec = { profile: { spec: {} }, repositories: [],
+    workspaces: [{ metadata: { name: "test" }, status: { phase: "Ready", path: process.cwd(), baseCommit: "base" } }] } as unknown as SandboxSpec;
+  const sandbox = await environment.prepare(spec);
+  try {
+    const run = SANDBOX_TOOLS.find((tool) => tool.name === "run")!.bind!({ exec: sandbox });
+    const failing = `${JSON.stringify(process.execPath)} -e 'require("node:test")("failing test", () => { throw Error("failed") })' | tail -n 1`;
+    assert.match(await run.invoke({ command: failing }), /^exit 1 .*\[termination: exit\]/);
+    assert.match(await run.invoke({ command: `${failing} || true` }), /^exit 0 .*\[termination: exit\]/);
+  } finally { await sandbox.dispose(); }
 });

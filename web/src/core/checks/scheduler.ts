@@ -3,10 +3,10 @@ import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfil
 import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
-import { SandboxUnavailableError, StoreError, isStoreError, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, StoreError, isStoreError, canPrepareIsolated, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceJobCoordinator, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
-import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validUnitFields } from "./origin.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 
 type Request = Parameters<CheckRunScheduler["submit"]>[0];
 
@@ -17,6 +17,8 @@ export interface CheckRunSchedulerDeps {
   environments: ExecutionEnvironmentSelector;
   redactor: Redactor;
   scopes?: ModuleScopePlanner;
+  jobs?: WorkspaceJobCoordinator;
+  recoveryChecks?: RecoveryCheckAuthorization;
 }
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -80,6 +82,12 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
   }
 
   async submit(request: Request): Promise<CheckRun> {
+    return this.d.jobs
+      ? this.d.jobs.submit(request.workItem, () => this.submitLocked(request))
+      : this.submitLocked(request);
+  }
+
+  private async submitLocked(request: Request): Promise<CheckRun> {
     const { workItem: suppliedItem, workspace: suppliedWorkspace, repository: suppliedRepository } = request;
     if (!request.requestId?.trim() || request.requestId.length > 200 || !request.requestedBy?.trim() ||
         !request.check?.trim()) {
@@ -113,15 +121,21 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       const workflow = item.spec.workflowRef
         ? await resolveRef<Workflow>(this.d.reader, "Workflow", item.spec.workflowRef, namespace)
         : null;
+      if (workflow?.spec.recovery && !this.d.jobs) {
+        throw new StoreError("recovery workflow checks require shared workspace serialization", "Invalid");
+      }
       if (!originAuthorized(workflow, origin)) throw new StoreError("workflow check origin is not authorized by the current verification policy", "Invalid");
 
+      const agents = await this.d.reader.list<AgentRun>("AgentRun", {
+        namespace, ownedBy: { kind: "WorkItem", name: item.metadata.name, namespace },
+      });
+      this.validateActiveAgents(item, origin, agents);
       const existing = await this.d.reader.get<CheckRun>("CheckRun", namespace, name);
       if (existing) {
         if (existing.spec.requestFingerprint !== requestFingerprint || existing.spec.workItemUid !== item.metadata.uid ||
             !isOwnedBy(item, existing)) {
           throw new StoreError("check request ID was already used with different input or origin", "Conflict");
         }
-        return existing;
       }
 
       const workspace = await this.d.reader.get<Workspace>("Workspace", namespace, suppliedWorkspace.metadata.name);
@@ -137,10 +151,17 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
         throw new StoreError("repository changed or does not match the workspace", "Conflict");
       }
       if (!repository.metadata.resourceVersion) throw new StoreError("repository has no resourceVersion", "Invalid");
-      const policyChecks = originChecks(repository, origin);
+      const policyChecks = originChecks(repository, origin, workflow);
       if (!policyChecks?.includes(request.check)) {
         throw new StoreError(`check "${request.check}" is not authorized for ${origin.purpose}`, "Invalid");
       }
+      if (origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness" && origin.agentRunRef) {
+        if (!this.d.recoveryChecks || !this.d.jobs) throw new StoreError("scoped recovery authorization and workspace serialization are required", "Invalid");
+        const caller = agents.find((agent) => agent.metadata.name === origin.agentRunRef?.name);
+        if (!caller) throw new StoreError("recovery check caller not found", "Invalid");
+        await this.d.recoveryChecks.authorize({ item, origin, repository, workspace, check: request.check, caller, existing: existing ?? undefined });
+      }
+      if (existing) return existing;
       const config = await resolveCheckConfig(repository, request.check, workspace, this.d.scopes);
       if (this.d.redactor.redact(config.command) !== config.command) throw new StoreError("check command contains a factory secret", "Invalid");
 
@@ -152,11 +173,14 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       if (!selected.health.available) {
         throw new SandboxUnavailableError(selected.health.runtime, selected.health.message ?? "execution runtime unavailable");
       }
+      if ((origin.purpose === "diagnostic" || origin.purpose === "baseline") &&
+          (!canPrepareIsolated(selected.environment) || !selected.environment.isolatesCandidate)) {
+        throw new StoreError("diagnostic checks require an isolated snapshot-capable execution environment", "Invalid");
+      }
+      if (origin.purpose === "baseline" && workspace.status.baseCommit !== origin.baselineCommit) {
+        throw new StoreError("baseline commit is not the current workspace baseline", "Conflict");
+      }
 
-      const agents = await this.d.reader.list<AgentRun>("AgentRun", {
-        namespace, ownedBy: { kind: "WorkItem", name: item.metadata.name, namespace },
-      });
-      this.validateActiveAgents(item, origin, agents);
       const activeChecks = await this.d.reader.list<CheckRun>("CheckRun", {
         namespace, ownedBy: { kind: "WorkItem", name: item.metadata.name, namespace },
       });
@@ -218,7 +242,6 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       throw new StoreError("workflow agentRunRef must be in the work item's namespace", "Invalid");
     }
     const caller = active.find((run) => run.metadata.name === origin.agentRunRef!.name);
-    const expectedPrefix = `${item.metadata.name}-${origin.stage}-`;
     const isCurrentCaller = caller &&
       nsOf(caller) === namespace &&
       caller.status?.phase === "Running" &&
@@ -230,8 +253,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       caller.metadata.labels?.[LABEL_SUPERSEDED] === undefined &&
       caller.metadata.labels?.["factory.ai-dlc.io/stage"] === origin.stage &&
       caller.metadata.labels?.["factory.ai-dlc.io/workitem"] === item.metadata.name &&
-      caller.metadata.name.startsWith(expectedPrefix) &&
-      caller.metadata.name.endsWith(`-r${origin.round}`) &&
+      validCallerName(item, origin, caller) &&
       caller.metadata.ownerReferences?.some((owner) =>
         owner.kind === "WorkItem" && owner.name === item.metadata.name && owner.uid === item.metadata.uid);
     if (!isCurrentCaller) throw new StoreError("workflow caller is not an active, current-round AgentRun", "Invalid");

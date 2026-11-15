@@ -85,6 +85,17 @@ export interface ExecutionEnvironment extends SandboxHealth {
   prepare(spec: SandboxSpec): Promise<Sandbox>;
 }
 
+/** Separate disposable checkout; never changes the WorkItem's candidate workspace. */
+export interface IsolatedSnapshotEnvironment {
+  /** True only where commands cannot reach or change the candidate workspace. */
+  readonly isolatesCandidate: boolean;
+  prepareIsolated(spec: SandboxSpec, input: { commit: string; mode: "baseline" | "candidate"; snapshot?: string }): Promise<Sandbox>;
+}
+
+export function canPrepareIsolated(environment: ExecutionEnvironment): environment is ExecutionEnvironment & IsolatedSnapshotEnvironment {
+  return typeof (environment as Partial<IsolatedSnapshotEnvironment>).prepareIsolated === "function";
+}
+
 /** Picks the runtime (explicit or auto-detected). Cached after the first call; `refresh` re-probes. */
 export interface ExecutionEnvironmentSelector {
   select(): Promise<{ environment: ExecutionEnvironment; health: SandboxHealthInfo; candidates: SandboxHealthInfo[] }>;

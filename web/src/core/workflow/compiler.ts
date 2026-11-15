@@ -2,6 +2,7 @@ import type { Workflow } from "../model/kinds.ts";
 import type { Ref } from "../model/resource.ts";
 import type { CompiledStage, CompiledWorkflow, ResourceReader, WorkflowCompiler } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { recoveryPolicyProblems } from "../model/recovery-policy.ts";
 
 /**
  * Flattens phases → stages and inlines `workflowRef` sub-workflows.
@@ -17,6 +18,10 @@ export class DefaultWorkflowCompiler implements WorkflowCompiler {
     const versions: Record<string, string> = {};
     const stages = await this.stagesOf(ref, namespace, undefined, [], versions);
     const root = await resolveRef<Workflow>(this.reader, "Workflow", ref, namespace);
+    if (root) {
+      const problems = recoveryPolicyProblems(root.spec);
+      if (problems.length) throw new Error(`workflow ${ref.name}: ${problems.join("; ")}`);
+    }
     const names = new Set<string>();
     for (const s of stages) {
       if (names.has(s.name)) throw new Error(`workflow ${ref.name}: duplicate stage name "${s.name}"`);
@@ -24,6 +29,7 @@ export class DefaultWorkflowCompiler implements WorkflowCompiler {
     }
     return {
       name: ref.name,
+      recovery: root?.spec.recovery && { ...root.spec.recovery, maxDiagnosisAttempts: root.spec.recovery.maxDiagnosisAttempts ?? 2 },
       versions,
       verification: root?.spec.verification,
       planning: root?.spec.planning,

@@ -77,6 +77,16 @@ export interface ContextProvider {
   provide(ctx: ExecutionContext): Promise<ContextSection[]>;
 }
 
+/** Additional operator-authorized tools offered by the harness, still bounded by explicit step restrictions. */
+export interface AgentToolOffering {
+  tools(ctx: ExecutionContext): Promise<string[]>;
+}
+
+/** Prevents a shell/file mutation from overlapping an authoritative workspace job. */
+export interface WorkspaceMutationGuard {
+  check(ctx: ExecutionContext): Promise<void>;
+}
+
 export interface Prompt {
   system: string;
   user: string;

@@ -57,7 +57,34 @@ const tool = (info: Omit<AgentTool, "bind">, bind: (caps: ToolCapabilities) => B
  * `write`/`exec`/`artifacts` require a sandbox (ADR-0019).
  */
 export const SANDBOX_TOOLS: AgentTool[] = [
-  tool({ name: "run_check", readOnly: false, capabilities: ["checks"], description: "Submit or inspect an approved named check" }, (caps) => {
+  tool({ name: "run_baseline_check", readOnly: false, capabilities: ["baseline"], description: "Run an authorized check on the isolated pinned baseline",
+    guidance: "Compare a named allowed check with the pinned baseline, never by resetting the candidate. Reuse requestId to poll the durable check." }, (caps) => {
+    const baseline = need(caps.baseline, "baseline");
+    return {
+      schema: { name: "run_baseline_check", description: "Run an approved named check on a disposable pinned baseline snapshot.",
+        parameters: { type: "object", properties: { workspace: { type: "string" }, check: { type: "string" }, requestId: { type: "string" } },
+          required: ["workspace", "check", "requestId"] } },
+      invoke: async (a) => JSON.stringify(await baseline.run({ workspace: str(a.workspace, "workspace"),
+        check: str(a.check, "check"), requestId: str(a.requestId, "requestId") })),
+    };
+  }),
+  tool({ name: "read_check_log", readOnly: true, capabilities: ["checkLogs"], description: "Read a work item check's redacted log",
+    guidance: "Page a CheckRun's persisted log using { \"checkRun\": \"check-...\", \"afterSeq\": 0 }; repeat with the returned next cursor." }, (caps) => {
+    const logs = need(caps.checkLogs, "checkLogs");
+    return {
+      schema: { name: "read_check_log", description: "Read a page of a CheckRun's redacted log owned by this work item.",
+        parameters: { type: "object", properties: { checkRun: { type: "string" }, afterSeq: { type: "integer", minimum: 0 }, offset: { type: "integer", minimum: 0 } }, required: ["checkRun"] } },
+      invoke: async (a) => {
+        const afterSeq = a.afterSeq === undefined ? 0 : a.afterSeq;
+        const offset = a.offset === undefined ? 0 : a.offset;
+        if (typeof afterSeq !== "number" || !Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
+        if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) throw new Error("offset must be a non-negative integer");
+        return JSON.stringify(await logs.read({ checkRun: str(a.checkRun, "checkRun"), afterSeq, offset }));
+      },
+    };
+  }),
+  tool({ name: "run_check", readOnly: false, capabilities: ["checks"], description: "Submit or inspect an approved named check",
+    guidance: "Run an allowed named check, not an invented shell command. Use workspace aliases and check names from Verification policy. Example: { \"workspace\": \"software-factory\", \"check\": \"unit-tests\", \"requestId\": \"u1-tests-1\" }. Reuse requestId to poll; Pending/Running is not Passed. Do not write files or run shell commands until the job finishes." }, (caps) => {
     const checks = need(caps.checks, "checks");
     return {
       schema: { name: "run_check", description: "Submit a durable named check from the human-approved validation plan. Workspace identifiers and aliases are listed in Verification policy context. Reuse requestId to inspect the same job. Pending/Running is not a pass. The workflow gate waits for authoritative evidence.",
@@ -179,8 +206,8 @@ export const SANDBOX_TOOLS: AgentTool[] = [
         parameters: { type: "object", properties: { command: { type: "string" }, timeoutSeconds: { type: "number" } }, required: ["command"] },
       },
       invoke: async (a) => {
-        const r = await exec.exec(str(a.command, "command"), { timeoutMs: typeof a.timeoutSeconds === "number" ? a.timeoutSeconds * 1000 : 120_000 });
-        return clip(`exit ${r.exitCode} (${r.durationMs} ms)${r.truncated ? " [output truncated]" : ""}\n--- stdout\n${r.stdout}\n--- stderr\n${r.stderr}`, "run", "rerun with output filtered, e.g. | tail or grep");
+        const r = await exec.exec(`set -o pipefail\n${str(a.command, "command")}`, { timeoutMs: typeof a.timeoutSeconds === "number" ? a.timeoutSeconds * 1000 : 120_000 });
+        return clip(`exit ${r.exitCode} (${r.durationMs} ms)${r.termination ? ` [termination: ${r.termination.kind}${r.termination.signal ? `, signal: ${r.termination.signal}` : ""}]` : ""}${r.truncated ? " [output truncated]" : ""}\n--- stdout\n${r.stdout}\n--- stderr\n${r.stderr}`, "run", "inspect a focused reproduction; do not hide exit codes behind output filters");
       },
     };
   }),

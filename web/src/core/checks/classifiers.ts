@@ -31,6 +31,12 @@ interface GoTestEvent {
 const goActions = new Set(["start", "run", "pause", "cont", "pass", "bench", "fail", "skip", "output"]);
 const testKey = (event: GoTestEvent) => `${event.Package}\0${event.Test}`;
 
+function exactTests(names: string[]): { tests: string[] } | undefined {
+  const tests = [...new Set(names.map((name) => name.trim()))].sort();
+  return tests.length && tests.length <= 50 && tests.every((name) => name.length > 0 && name.length <= 256 && !/[\x00-\x1f\x7f]/.test(name))
+    ? { tests } : undefined;
+}
+
 export const goTestJsonClassifier: CheckResultClassifier = {
   format: "go-test-json",
   classify(result) {
@@ -70,9 +76,46 @@ export const goTestJsonClassifier: CheckResultClassifier = {
     if (packageFailure || result.exitCode !== 0) return "UnknownFailure";
     return "NotVerified";
   },
+  failureEvidence(result) {
+    if (this.classify(result) !== "AssertionFailed") return undefined;
+    const events: GoTestEvent[] = result.stdout.split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
+    const started = new Set(events.filter((event) => event.Action === "run" && event.Test && event.Package).map(testKey));
+    return exactTests(events.filter((event) => event.Action === "fail" && event.Test && event.Package && started.has(testKey(event)))
+      .map((event) => `${event.Package}::${event.Test}`));
+  },
+};
+
+/** Node's TAP diagnostics distinguish assertion errors from module loading and infrastructure failures. */
+export const nodeTestTapClassifier: CheckResultClassifier = {
+  format: "node-test-tap",
+  classify(result) {
+    const terminated = terminationOutcome(result);
+    if (terminated) return terminated;
+    if (result.truncated || !/^TAP version 13\r?$/m.test(result.stdout)) return "NotVerified";
+    const count = (name: string) => {
+      const matches = [...result.stdout.matchAll(new RegExp(`^# ${name} (\\d+)\\r?$`, "gm"))];
+      return matches.length === 1 ? Number(matches[0][1]) : undefined;
+    };
+    const tests = count("tests"), passed = count("pass"), failed = count("fail"), cancelled = count("cancelled");
+    if (tests === undefined || passed === undefined || failed === undefined || cancelled === undefined ||
+        !/^1\.\.\d+\r?$/m.test(result.stdout) || tests < 1 || passed + failed > tests) return "NotVerified";
+    if (result.exitCode === 0) return failed === 0 && cancelled === 0 && passed > 0 ? "Passed" : "NotVerified";
+    if (!failed || cancelled || result.stderr.trim()) return "UnknownFailure";
+    const failures = [...result.stdout.matchAll(/^not ok \d+ - .*?\r?\n([\s\S]*?^  \.\.\.\r?$)/gm)];
+    if (!failures.length || failures.some((match) =>
+      !/^  failureType: 'testCodeFailure'\r?$/m.test(match[1]) ||
+      !/^  code: 'ERR_ASSERTION'\r?$/m.test(match[1]) ||
+      !/^  name: 'AssertionError'\r?$/m.test(match[1]))) return "UnknownFailure";
+    return "AssertionFailed";
+  },
+  failureEvidence(result) {
+    if (this.classify(result) !== "AssertionFailed") return undefined;
+    return exactTests([...result.stdout.matchAll(/^not ok \d+ - (.*?)\r?\n([\s\S]*?^  \.\.\.\r?$)/gm)].map((match) => match[1]));
+  },
 };
 
 export function registerCheckResultClassifiers(registrar: Registrar<CheckResultClassifier>): void {
   registrar.register(exitCodeClassifier.format, exitCodeClassifier);
   registrar.register(goTestJsonClassifier.format, goTestJsonClassifier);
+  registrar.register(nodeTestTapClassifier.format, nodeTestTapClassifier);
 }

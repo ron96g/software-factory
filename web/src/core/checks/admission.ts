@@ -2,10 +2,10 @@ import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfil
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
-import type { ModuleScopePlanner, ResourceReader, Validator } from "../ports/index.ts";
+import type { ModuleScopePlanner, RecoveryCheckAuthorization, ResourceReader, Validator } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
-import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validUnitFields } from "./origin.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
   const owners = candidate.metadata.ownerReferences ?? [];
@@ -37,7 +37,8 @@ function validWorkflowOrigin(origin: CheckWorkflowOrigin | undefined): origin is
     (origin.agentRunRef !== undefined || origin.agentRunUid === undefined && origin.agentRequestId === undefined);
 }
 
-async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository: Repository | null, reader: ResourceReader): Promise<string[]> {
+async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository: Repository | null, workspace: Workspace | null,
+  reader: ResourceReader, recoveryChecks?: RecoveryCheckAuthorization): Promise<string[]> {
   const origin = run.spec.workflow;
   if (!origin) return [];
   if (!validWorkflowOrigin(origin)) return ["workflow origin is malformed"];
@@ -53,7 +54,7 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
   if (!originAuthorized(workflow, origin)) {
     return ["workflow origin is not authorized by the current verification policy"];
   }
-  const allowedChecks = originChecks(repository, origin);
+  const allowedChecks = originChecks(repository, origin, workflow);
   if (!allowedChecks?.includes(run.spec.check)) return [`check "${run.spec.check}" is not authorized for ${origin.purpose}`];
 
   const namespace = nsOf(item);
@@ -64,7 +65,6 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
   if (!origin.agentRunRef) return active.length ? ["work item has active agent runs"] : [];
   if (origin.agentRunRef.namespace && origin.agentRunRef.namespace !== namespace) return ["workflow caller is outside the work item namespace"];
   const caller = active.find((agent) => agent.metadata.name === origin.agentRunRef!.name);
-  const expectedPrefix = `${item.metadata.name}-${origin.stage}-`;
   const validCaller = caller &&
     caller.status?.phase === "Running" &&
     caller.metadata.uid === origin.agentRunUid &&
@@ -75,15 +75,19 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
     caller.metadata.labels?.[LABEL_SUPERSEDED] === undefined &&
     caller.metadata.labels?.["factory.ai-dlc.io/stage"] === origin.stage &&
     caller.metadata.labels?.["factory.ai-dlc.io/workitem"] === item.metadata.name &&
-    caller.metadata.name.startsWith(expectedPrefix) &&
-    caller.metadata.name.endsWith(`-r${origin.round}`) &&
+    validCallerName(item, origin, caller) &&
     isOwnedBy(item, caller);
   if (!validCaller) return ["workflow caller is not an active, current-round AgentRun"];
   if (active.some((agent) => agent.metadata.name !== caller!.metadata.name)) return ["another agent run is active for this work item"];
+  if (origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness") {
+    if (!recoveryChecks || !workspace) return ["scoped recovery authorization is unavailable"];
+    try { await recoveryChecks.authorize({ item, origin, repository, workspace, check: run.spec.check, caller: caller! }); }
+    catch (error) { return [error instanceof Error ? error.message : "recovery check authorization failed"]; }
+  }
   return [];
 }
 
-export function checkRunValidator(scopes?: ModuleScopePlanner): Validator {
+export function checkRunValidator(scopes?: ModuleScopePlanner, recoveryChecks?: RecoveryCheckAuthorization): Validator {
   return {
     name: "checkrun",
     appliesTo: (kind) => kind === "CheckRun",
@@ -152,7 +156,7 @@ export function checkRunValidator(scopes?: ModuleScopePlanner): Validator {
         }
       }
 
-      errors.push(...await validateWorkflowOrigin(run, item, repository, ctx.reader));
+      errors.push(...await validateWorkflowOrigin(run, item, repository, workspace, ctx.reader, recoveryChecks));
       const activeChecks = await ctx.reader.list<CheckRun>("CheckRun", {
         namespace, ownedBy: { kind: "WorkItem", name: item.metadata.name, namespace },
       });

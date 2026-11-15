@@ -120,6 +120,8 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Unit manifest** (ADR-0047) | The approval-bound `units[]` of the validation plan: stable Unit IDs, dependencies, delivered criteria and obligations mapped to allowlisted readiness checks. |
 | **Unit assignment** (ADR-0047) | The Unit (or cross-Unit repair) an implementation AgentRun is responsible for, fixed when the run is created. |
 | **unit-result** (ADR-0047) | The developer's JSON report for its assignment: outcome and per-obligation status with workspace file evidence. A claim, not proof. |
+| **Recovery episode** (proposed ADR-0059) | Controller-owned, durable technical recovery bound to an approved plan, Unit/stage and triggering evidence, with bounded diagnostic/execution/code attempts. Restart or snapshot churn does not replenish it. |
+| **recovery-report** (proposed ADR-0059) | Schema-backed diagnostic artifact separating observed failures, hypotheses, attempted actions, remaining work and specific human-only needs. A proposal, not check evidence or approval. |
 | **Unit readiness** (ADR-0047) | A Unit has a complete, real result and all its readiness checks pass for its recorded snapshot. The barrier requires fresh evidence for the final candidate; readiness is not independent review or final verification. |
 | **Pre-review completeness barrier** (ADR-0047) | A server-side, non-overridable check that every approved Unit is ready and every readiness check passes on the current candidate before preparation, code review, candidate approval and verification. |
 | **code-review-report** | The AI code review's findings. Blocking ones trigger the review→fix loop and are input for the developer. |

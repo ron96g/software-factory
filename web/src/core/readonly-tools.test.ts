@@ -25,6 +25,7 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     const system = String(body.messages[0].content ?? "");
     const agent = /^# (\w[\w ]*?) Agent/m.exec(system)?.[1] ?? "?";
     if (body.tools) {
+      if (agent === "Reviewer") await new Promise((r) => setTimeout(r, 60));
       toolSets[agent] = body.tools.map((t) => t.function.name);
       if (agent === "Code Researcher") {
         const done = body.messages.filter((m) => m.role === "tool").length;
@@ -48,7 +49,8 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     let d = null;
     for (let i = 0; i < 400; i++) {
       d = await f.app.getWorkItem(p, wi.metadata.name);
-      if (d?.workItem.status?.stage === "spec-review") break;
+      if (d?.workItem.status?.stage === "spec-review" && d.workItem.status.phase === "AwaitingApproval" &&
+          d.approvals.some((approval) => !approval.spec.decision)) break;
       if (d?.workItem.status?.phase === "Failed") assert.fail(d.workItem.status.message);
       await new Promise((r) => setTimeout(r, 20));
     }

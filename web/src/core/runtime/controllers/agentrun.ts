@@ -1,4 +1,4 @@
-import type { AgentRun, Artifact, ArtifactType, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
+import type { AgentRun, Artifact, ArtifactType, CheckRun, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
 import { resolveRef } from "../../refs/refs.ts";
 import { LABEL_WORKITEM } from "../event-recorder.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
@@ -51,6 +51,21 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
   const inFlight = new Set<string>();
   const jobs = new Set<Promise<void>>();
   const seenSinceStart = new Set<string>();
+  let stopping = false;
+
+  async function waitForChecks(run: AgentRun): Promise<boolean> {
+    if (!run.spec.assignment) return true;
+    const namespace = run.metadata.namespace ?? "default";
+    const owner = ownerOf(run, "WorkItem");
+    while (!stopping) {
+      const checks = await d.reader.list<CheckRun>("CheckRun", { namespace,
+        ownedBy: { kind: "WorkItem", name: run.spec.workItemRef.name, namespace } });
+      if (!checks.some((check) => check.spec.workItemUid === owner?.uid && check.spec.workflow?.agentRunUid === run.metadata.uid &&
+          (!check.status || check.status.phase === "Running"))) return true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    }
+    return false;
+  }
 
   async function execute(key: string, run: AgentRun) {
     const ns = run.metadata.namespace ?? "default";
@@ -68,6 +83,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
       }
       const ctx = await d.contexts.create(current);
       const result = await d.executor.execute({ ...ctx, transcript: recorder });
+      if (!await waitForChecks(current)) return;
       const feedback = d.feedback?.prepare(ctx, result);
 
       const outputs: { name: string }[] = [];
@@ -185,6 +201,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
     } catch (e) {
       const message = d.redactor.redact(e instanceof Error ? e.message : String(e)).trim(); // ADR-0015
       const latest = await d.reader.get<AgentRun>("AgentRun", ns, run.metadata.name);
+      if (latest && !await waitForChecks(latest)) return;
       if (latest?.status?.phase === "Succeeded") {
         // Retrying audit publication must not rerun an already completed business agent.
         throw e;
@@ -215,7 +232,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
   return {
     name: "agentrun",
     primaryKind: "AgentRun",
-    stop: async () => { await Promise.all([...jobs]); },
+    stop: async () => { stopping = true; await Promise.all([...jobs]); },
     watches: ["AgentRun"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>

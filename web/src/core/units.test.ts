@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentRun, Approval, Artifact, CheckOutcome, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
+import type { Agent, AgentRun, Approval, Artifact, CheckOutcome, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
+import { LABEL_SUPERSEDED } from "./model/kinds.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
 import { parseUnitManifest } from "./model/units.ts";
-import type { CheckRunScheduler, GateEvaluator } from "./ports/index.ts";
+import type { CheckRunScheduler, ExecutionContext, GateEvaluator } from "./ports/index.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
@@ -17,6 +18,8 @@ import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { Registry } from "./registry/registry.ts";
 import { originAuthorized, validUnitFields } from "./checks/origin.ts";
 import { runScrubbed } from "./adapters/sandbox/process.ts";
+import { CompletedUnitAttempts } from "./units/history.ts";
+import { unitContext } from "./units/context.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 32);
 const CRITERIA = [{ id: "AC-1", description: "Loader", checks: ["repo/build", "repo/test"] }, { id: "AC-2", description: "Reload", checks: ["repo/build", "repo/test"] }];
@@ -195,6 +198,54 @@ test("unit readiness origins are bound to a Unit and authorized only at implemen
   assert.equal(validUnitFields(origin({ purpose: "verification", unit: "U1", unitRun: "run" })), false);
   assert.equal(originAuthorized(workflow, origin({ stage: "verify", unit: "U1", unitRun: "run" })), false);
   assert.equal(originAuthorized({ spec: { verification: workflow.spec.verification } } as Workflow, origin({ unit: "U1", unitRun: "run" })), false);
+});
+
+test("AC-39-2: retry context retains its completed predecessor, not the new running attempt", async () => {
+  const f = await fixture();
+  try {
+    await f.approvePlan();
+    await f.reconcile();
+    const first = await f.develop("partial", "U0", ["src/loader.ts"]);
+    await f.reconcile();
+    await f.reconcile();
+    await f.reconcile();
+    const current = (await f.runs()).find((run) => run.spec.stage === "implement" && !run.status)!;
+    assert.ok(current && current.spec.assignment);
+    const reader = new CompletedUnitAttempts(f.store);
+    const predecessors = await reader.completed(await f.current(), current.spec.assignment!, current.metadata.name);
+    assert.deepEqual(predecessors.map((attempt) => attempt.run), [first.metadata.name]);
+    assert.equal(predecessors[0].outcome, "partial");
+    assert.match(predecessors[0].result!.content, /"status":"partial"/);
+    const provider = unitContext({ ledger: f.units, compiler: new DefaultWorkflowCompiler(f.store), redactor: { redact: (s) => s }, attempts: reader });
+    const agent: Agent = { apiVersion: API_VERSION, kind: "Agent", metadata: { name: "developer", namespace: "factory-system" }, spec: { role: "developer" }, body: "" };
+    const context: ExecutionContext = {
+      run: current, workItem: await f.current(),
+      agent,
+      skills: [], inputs: [], clarifications: [], approvals: [], repositories: [], workspaces: [], sections: [],
+      transcript: { ref: { id: current.metadata.name, namespace: "default" }, record: async () => { throw new Error("context provider must not execute agents"); } },
+    };
+    const [section] = await provider.provide(context);
+    const body = JSON.parse(section.content);
+    assert.equal(body.previousAttempt.run, first.metadata.name);
+    assert.equal(body.currentAttempt.run, current.metadata.name);
+    assert.equal(body.attemptHistory.length, 1);
+    const [diagnosis] = await provider.provide({ ...context, run: { ...current, spec: {
+      ...current.spec, recovery: { episode: "episode", attempt: 1, mode: "diagnosis", planFingerprint: current.spec.assignment!.planFingerprint,
+        unit: "U0", policyVersion: "1", trigger: { kind: "AgentRun", name: first.metadata.name, uid: first.metadata.uid! } },
+    } } });
+    assert.match(diagnosis.content, /Do not implement/);
+    assert.doesNotMatch(diagnosis.content, /Implement Unit|Finish with outcome/);
+    const replay = await f.store.create<AgentRun>({ ...first, metadata: { name: "replay-r99", namespace: "default",
+      ownerReferences: [ownerRef(await f.current())], labels: { "factory.ai-dlc.io/replay": "true" } }, spec: { ...first.spec, replayOf: { name: first.metadata.name } } });
+    assert.ok(!((await reader.completed(await f.current(), current.spec.assignment!, current.metadata.name)).some((attempt) => attempt.run === replay.metadata.name)));
+    for (const [name, labels, owner] of [
+      ["superseded-r98", { [LABEL_SUPERSEDED]: "true" }, ownerRef(await f.current())],
+      ["foreign-r97", {}, { ...ownerRef(await f.current()), uid: "recreated-owner" }],
+    ] as const) {
+      await f.store.create<AgentRun>({ ...first, metadata: { name, namespace: "default", labels, ownerReferences: [owner] } });
+    }
+    assert.deepEqual((await reader.completed(await f.current(), current.spec.assignment!, current.metadata.name)).map((attempt) => attempt.run), [first.metadata.name]);
+  } finally { f.db.close(); }
 });
 
 test("units are implemented one at a time and review cannot start while an approved Unit is missing", async () => {

@@ -71,3 +71,20 @@ export interface UnitProgressQueries {
 export interface UnitLedgerReader {
   view(item: WorkItem): Promise<UnitProgressView>;
 }
+
+export interface CompletedUnitAttempt {
+  run: string;
+  uid: string;
+  resourceVersion: string;
+  outcome?: string;
+  summary?: string;
+  result?: { name: string; resourceVersion: string; content: string };
+  report?: { name: string; resourceVersion: string; content: string };
+  checks: { name: string; resourceVersion: string; check: string; outcome?: string;
+    snapshot: string; logRef?: import("./transcripts.ts").TranscriptRef }[];
+}
+
+/** Completed, eligible predecessors only; the currently running attempt is never its own history. */
+export interface UnitAttemptReader {
+  completed(item: WorkItem, assignment: UnitAssignment, currentRun: string): Promise<CompletedUnitAttempt[]>;
+}

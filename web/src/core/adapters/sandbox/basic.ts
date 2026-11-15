@@ -1,4 +1,4 @@
-import type { ExecResult, ExecutionEnvironment, Sandbox, SandboxHealthInfo, SandboxSpec } from "../../ports/index.ts";
+import type { ExecResult, ExecutionEnvironment, IsolatedSnapshotEnvironment, Sandbox, SandboxHealthInfo, SandboxSpec } from "../../ports/index.ts";
 import { SandboxUnavailableError } from "../../ports/index.ts";
 
 /** ADR-0019: no runtime. Never executes anything; sandbox-requiring stages fall back with a visible reason. */
@@ -22,8 +22,9 @@ type CommandHandler = (cmd: string, files: Map<string, string>) => Partial<ExecR
  * In-memory sandbox for tests and the contract suite. Commands are answered by registered handlers;
  * it never touches the host.
  */
-export class InMemorySandboxEnvironment implements ExecutionEnvironment {
+export class InMemorySandboxEnvironment implements ExecutionEnvironment, IsolatedSnapshotEnvironment {
   readonly runtime = "in-memory";
+  readonly isolatesCandidate = true;
   readonly sandboxes: InMemorySandbox[] = [];
   private readonly seed: Record<string, string>;
   private readonly handlers: CommandHandler[];
@@ -38,6 +39,9 @@ export class InMemorySandboxEnvironment implements ExecutionEnvironment {
     const s = new InMemorySandbox(`mem-${spec.run?.metadata.name ?? spec.workspaces[0]?.metadata.name ?? "check"}`, { ...this.seed }, this.handlers);
     this.sandboxes.push(s);
     return s;
+  }
+  async prepareIsolated(spec: SandboxSpec, _input: { commit: string; mode: "baseline" | "candidate" }): Promise<Sandbox> {
+    return this.prepare(spec);
   }
 }
 

@@ -210,6 +210,23 @@ use and cited-code counts for observability only.
 The tool guide also states the run's step budget. Near the end the harness tells the agent to wrap up, and the last
 step only offers `finish`, so a run out of budget reports what it completed instead of failing (ADR-0058).
 
+### In progress: autonomous technical recovery (proposed ADR-0059)
+
+Opted-in workflows retain completed-attempt diagnoses and use bounded, schema-backed `recovery-report`
+artifacts before repeating a failed implementation. Controller-owned recovery episodes bind the approved plan,
+Unit/stage, triggering evidence and remaining budgets; restart and changed candidate snapshots do not erase them.
+The harness offers only policy-authorized readiness checks, without adding tools to Agent definitions, through
+the same durable scheduler and workspace serialization as the Unit gate. Explicit tool restrictions remain ceilings.
+
+The implementation routes routine failures through autonomous diagnosis and bounded repair. Registered validation
+checks a specific human-only runtime need before creating a Clarification and again before consuming its reserve.
+Other exhausted recovery stops visibly with retained evidence. The item page separates diagnosis, repair, waiting,
+failure and genuine human action, and shows consumed allowances and the exact report.
+Existing human approvals, completeness barriers, verification and publication guards remain unchanged.
+Production enablement is incomplete: diagnostics require a candidate-isolating runtime not provided by the
+unsandboxed host adapter, and extra operator allocations require trusted identity not supplied by the anonymous
+HTTP adapter. No existing workflow or item is opted in, migrated, answered or restarted automatically.
+
 ## Proposed: owner-led peer feedback (ADR-0056)
 
 This is a proposal, not shipped behavior. A collaboration-enabled WorkItem would have one accountable human owner.

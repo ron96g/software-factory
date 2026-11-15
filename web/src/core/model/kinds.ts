@@ -103,6 +103,8 @@ export interface StageSpec {
 }
 
 export interface WorkflowSpec {
+  /** Opt-in technical recovery, independent of the approved verification budgets. */
+  recovery?: import("./recovery.ts").RecoveryPolicy;
   planning?: { reviewStage: string; planFormat?: import("./planning.ts").PlanFormat } & (
     | { plannerStage: string; revisionStage?: never; synthesisStage?: never }
     | { plannerStage?: never; revisionStage: string; synthesisStage: string }
@@ -276,6 +278,8 @@ export interface WorkItemSpec {
 export const LABEL_SUPERSEDED = "factory.ai-dlc.io/superseded";
 
 export interface WorkItemStatus {
+  recovery?: import("./recovery.ts").RecoveryEpisode[];
+  staleRecoveryAllowances?: string[];
   phase: WorkItemPhase;
   /** AI-DLC phase of the current stage (inception / construction / operations). */
   lifecyclePhase?: string;
@@ -300,6 +304,7 @@ export type WorkItem = Resource<WorkItemSpec, WorkItemStatus>;
 export type RunPhase = "Pending" | "Running" | "Succeeded" | "Failed";
 
 export interface AgentRunSpec {
+  recovery?: import("./recovery.ts").RecoveryAssignment;
   workItemRef: Ref;
   agentRef: Ref;
   skillRefs: Ref[];
@@ -410,7 +415,7 @@ export type CheckOutcome = "Passed" | "AssertionFailed" | "SetupFailed" | "Unkno
 export interface CheckWorkflowOrigin {
   stage: string;
   round: number;
-  purpose: "preflight" | "preparation" | "verification" | "unit-readiness";
+  purpose: "preflight" | "preparation" | "verification" | "unit-readiness" | "diagnostic" | "baseline";
   planFingerprint: string;
   attempt: number;
   /** ADR-0047 (`unit-readiness` only): Unit ID, or `*` for the aggregate pre-review barrier. */
@@ -421,6 +426,9 @@ export interface CheckWorkflowOrigin {
   agentRunRef?: Ref;
   agentRequestId?: string;
   agentRunUid?: string;
+  /** Diagnostic evidence is scoped to an episode and never counts as readiness or verification. */
+  recoveryEpisode?: string;
+  baselineCommit?: string;
 }
 
 export interface ModuleCheckScope {
@@ -458,6 +466,7 @@ export interface CheckRunStatus {
   outcome?: CheckOutcome;
   /** Command classification before candidate/origin freshness invalidates authoritative evidence. */
   executionOutcome?: CheckOutcome;
+  failureEvidence?: { tests: string[] };
   message?: string;
   exitCode?: number;
   signal?: string;
@@ -616,6 +625,7 @@ export interface TicketPublication {
 }
 
 export interface ApprovalSpec {
+  recoveryAllowance?: import("./recovery.ts").RecoveryAllowance;
   workItemRef: Ref;
   stage: string;
   approvers: { role: string }[];

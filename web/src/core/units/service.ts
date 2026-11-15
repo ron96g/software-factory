@@ -62,6 +62,7 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
   private async attempts(item: WorkItem, contract: ValidationContract) {
     const runs = await this.d.reader.list<AgentRun>("AgentRun", owned(item));
     return runs.filter((r) => eligible(r) && !r.spec.replayOf && r.spec.stage === contract.policy.implementationStage &&
+      r.spec.recovery?.mode !== "diagnosis" &&
       r.spec.assignment?.planFingerprint === contract.fingerprint && r.metadata.ownerReferences?.some((o) => o.uid === item.metadata.uid))
       .sort((a, b) => roundOf(a.metadata.name) - roundOf(b.metadata.name));
   }
@@ -149,6 +150,13 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     return { action: "goto", stage, retryOf: key };
   }
 
+  private async recovery(item: WorkItem, contract: ValidationContract, trigger: AgentRun | CheckRun, unit: string): Promise<GateDecision | undefined> {
+    if (!item.spec.workflowRef || !(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).recovery) return undefined;
+    if (!trigger.metadata.uid) return { action: "fail", reason: "Recovery trigger has no durable identity." };
+    return { action: "recovery", trigger: { kind: trigger.kind as "AgentRun" | "CheckRun", name: trigger.metadata.name, uid: trigger.metadata.uid },
+      planFingerprint: contract.fingerprint, unit };
+  }
+
   private async submit(item: WorkItem, contract: ValidationContract, state: CandidateState, id: string, origin: { stage: string; unit: string; unitRun?: string },
     attempt: number): Promise<GateDecision> {
     const [repository, check] = id.split("/");
@@ -184,13 +192,26 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
       r.spec.workspaceUid === workspace?.metadata.uid && r.spec.snapshot === snapshot);
     if (attempts.some(active)) return { action: "wait", retryAfterMs: 1000 };
     if (attempts.some(passed)) return undefined;
+    const recoveryEnabled = !!item.spec.workflowRef && !!(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).recovery;
+    if (recoveryEnabled) {
+      const history = (await this.checkRuns(item, contract)).filter((r) => r.spec.repositoryRef.name === repository && r.spec.check === check &&
+        r.spec.workflow?.unit === origin.unit);
+      if (history.some(active)) return { action: "wait", retryAfterMs: 1000 };
+      const last = attempts.at(-1);
+      if (last && !passed(last)) return (await this.recovery(item, contract, last, origin.unit))!;
+      if (history.length >= policy.maxExecutionAttempts && history.length) return (await this.recovery(item, contract, history.at(-1)!, origin.unit))!;
+    }
     const current = attempts.filter((r) => r.spec.workflow?.round === item.status?.round);
     const last = current.at(-1);
     if (last?.status?.outcome === "AssertionFailed") {
+      const recovery = await this.recovery(item, contract, last, origin.unit);
+      if (recovery) return recovery;
       return this.retry(item, codeKey, policy.maxCodeAttempts, contract.policy.implementationStage,
         `${id} still fails for ${origin.unit === BARRIER_UNIT ? "the complete candidate" : `Unit ${origin.unit}`} after the code-fix budget. Inspect CheckRun ${last.metadata.name}; answer to allow one more bounded attempt or revise the plan.`);
     }
     if (last && current.length >= policy.maxExecutionAttempts) {
+      const recovery = await this.recovery(item, contract, last, origin.unit);
+      if (recovery) return recovery;
       return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${current.length} readiness execution attempt(s). No code fix was charged. Inspect CheckRun ${last.metadata.name}, fix prerequisites or budget, then answer to retry.`] };
     }
     const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
@@ -231,6 +252,8 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
       if (!checks.length) {
         const reasons = await this.result(run, unit, artifacts, state.workspaces);
         if (reasons.length) {
+          const recovery = await this.recovery(item, contract, run, unit.id);
+          if (recovery) return recovery;
           const decision = this.retry(item, `unit:${unit.id}`, policy.maxCodeAttempts, contract.policy.implementationStage,
             `Unit ${unit.id} (${unit.title}) is still incomplete after ${policy.maxCodeAttempts + 1} attempt(s): ${reasons.join("; ")}. ` +
             "Answer with guidance for one more attempt, or restart from the plan if the Unit is wrong.");
@@ -273,6 +296,8 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
       return { action: "block", questions: [`Interrupted attempt ${run.metadata.name} cannot be retried: ${e.message}`] };
     }
     const label = run.spec.assignment.kind === "unit" ? run.spec.assignment.unit : "repair";
+    const recovery = await this.recovery(item, contract, run, label);
+    if (recovery) return recovery;
     return this.retry(item, `unit-exec:${label}`, contract.unitPolicy!.maxExecutionAttempts, contract.policy.implementationStage,
       `Implementation attempt ${run.metadata.name} (${label}) was interrupted ${contract.unitPolicy!.maxExecutionAttempts} time(s). Inspect the workspace, then answer to retry.`);
   }

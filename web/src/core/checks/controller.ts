@@ -3,10 +3,10 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
-import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validUnitFields } from "./origin.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 
 export interface CheckControllerDeps {
   reader: ResourceReader;
@@ -21,6 +21,7 @@ export interface CheckControllerDeps {
   classifiers?: Lookup<CheckResultClassifier>;
   contracts?: VerificationContracts;
   scopes?: ModuleScopePlanner;
+  recoveryChecks?: RecoveryCheckAuthorization;
 }
 
 type CheckContext = { item: WorkItem; workspace: Workspace; repository: Repository };
@@ -60,8 +61,8 @@ function validWorkflowOrigin(origin: CheckWorkflowOrigin | undefined): origin is
     (origin.agentRunRef !== undefined || origin.agentRunUid === undefined && origin.agentRequestId === undefined);
 }
 
-function configuredForOrigin(repository: Repository, origin: CheckWorkflowOrigin, check: string): boolean {
-  return !!originChecks(repository, origin)?.includes(check);
+function configuredForOrigin(repository: Repository, origin: CheckWorkflowOrigin, check: string, workflow: Workflow | null): boolean {
+  return !!originChecks(repository, origin, workflow)?.includes(check);
 }
 
 export function createCheckRunController(d: CheckControllerDeps): Controller & InitialKeys & { stop(): Promise<void> } {
@@ -89,13 +90,14 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
 
     if (restartPending(item)) return { reason: "work item has an unhandled restart" };
     const workflowOrigin = run.spec.workflow;
+    let workflow: Workflow | null = null;
     if (workflowOrigin) {
       if (!validWorkflowOrigin(workflowOrigin) ||
           !["Running", "Waiting"].includes(item.status?.phase ?? "") ||
           item.status?.stage !== workflowOrigin.stage || item.status?.round !== workflowOrigin.round) {
         return { reason: "workflow check is stale or does not match the current item stage and round" };
       }
-      const workflow = item.spec.workflowRef
+      workflow = item.spec.workflowRef
         ? await resolveRef<Workflow>(d.reader, "Workflow", item.spec.workflowRef, namespace)
         : null;
       if (!originAuthorized(workflow, workflowOrigin)) {
@@ -128,14 +130,23 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       return { reason: "repository command, budget, scope or result format differs from the submitted check" };
     }
     if (d.redactor.redact(config.command) !== config.command) return { reason: "configured command contains a factory secret" };
-    if (workflowOrigin && !configuredForOrigin(repository, workflowOrigin, run.spec.check)) {
+    if (workflowOrigin && !configuredForOrigin(repository, workflowOrigin, run.spec.check, workflow)) {
       return { reason: `check "${run.spec.check}" is not authorized for ${workflowOrigin.purpose}` };
+    }
+    if (workflowOrigin && (workflowOrigin.purpose === "diagnostic" || workflowOrigin.purpose === "baseline" ||
+        workflowOrigin.purpose === "unit-readiness" && workflowOrigin.agentRunRef)) {
+      if (!d.recoveryChecks || !workflowOrigin.agentRunRef) return { reason: "scoped recovery authorization is unavailable" };
+      const caller = await d.reader.get<AgentRun>("AgentRun", namespace, workflowOrigin.agentRunRef.name);
+      if (!caller) return { reason: "recovery check caller not found" };
+      try { await d.recoveryChecks.authorize({ item, origin: workflowOrigin, repository, workspace, check: run.spec.check, caller, existing: run }); }
+      catch (error) { return { reason: error instanceof Error ? error.message : "recovery check authorization failed" }; }
     }
     if (workflowOrigin && d.contracts) {
       try {
         const contract = await d.contracts.plan(item, true);
         const checks = workflowOrigin.purpose === "preflight" ? contract.plan.preflight : contract.plan.checks;
-        if (contract.fingerprint !== workflowOrigin.planFingerprint || !checks.includes(`${repository.metadata.name}/${run.spec.check}`)) {
+        if (contract.fingerprint !== workflowOrigin.planFingerprint ||
+            workflowOrigin.purpose !== "diagnostic" && workflowOrigin.purpose !== "baseline" && !checks.includes(`${repository.metadata.name}/${run.spec.check}`)) {
           return { reason: "check is outside the current human-approved verification plan" };
         }
       } catch (error) {
@@ -168,8 +179,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     caller.metadata.labels?.[LABEL_SUPERSEDED] !== undefined ||
         caller.metadata.labels?.["factory.ai-dlc.io/stage"] !== origin.stage ||
         caller.metadata.labels?.["factory.ai-dlc.io/workitem"] !== item.metadata.name ||
-        !caller.metadata.name.startsWith(`${item.metadata.name}-${origin.stage}-`) ||
-        !caller.metadata.name.endsWith(`-r${origin.round}`) ||
+        !validCallerName(item, origin, caller) ||
         !isOwnedBy(item, caller)) {
       return "workflow caller is not an active, current-round AgentRun";
     }
@@ -263,6 +273,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     let message = "";
     let outputLogged = false;
     let finalSnapshot: string | undefined;
+    let failureEvidence: { tests: string[] } | undefined;
     try {
       result = await d.runner.execute(run, workspace, repository);
       await d.logs.append(run.status!.logRef!, {
@@ -288,7 +299,13 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         else if (result.termination?.kind === "signal") outcome = "Cancelled";
         else if (result.termination?.kind === "spawn-error") outcome = "Unavailable";
         else if (run.spec.workflow?.purpose === "preflight" && result.exitCode !== 0) outcome = "SetupFailed";
-        else outcome = selectedClassifier.classify(result);
+        else {
+          outcome = selectedClassifier.classify(result);
+          if (outcome === "AssertionFailed" && finalSnapshot === run.spec.snapshot) {
+            const evidence = selectedClassifier.failureEvidence?.(result);
+            if (evidence && evidence.tests.every((name) => d.redactor.redact(name) === name)) failureEvidence = evidence;
+          }
+        }
         message = `${run.spec.check}: ${outcome} (exit ${result.exitCode} in ${result.durationMs} ms)`;
       }
       executionOutcome = outcome;
@@ -296,12 +313,13 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         outcome = "NotVerified";
         message += "; check changed the candidate workspace";
       }
-      if (executionOutcome === "Passed") {
+      if (executionOutcome === "Passed" || failureEvidence) {
         const after = await loadContext(run);
         const afterAgentError = after.context ? await validateAgents(after.context.item, run.spec.workflow) : after.reason;
         if (afterAgentError) {
           outcome = "NotVerified";
           executionOutcome = undefined;
+          failureEvidence = undefined;
           message += `; workflow origin changed during execution: ${afterAgentError}`;
         }
       }
@@ -325,6 +343,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         phase: "Completed",
         outcome,
         executionOutcome,
+        failureEvidence,
         message: d.redactor.redact(message),
         finishedAt: now.toISOString(),
         exitCode: result?.exitCode,

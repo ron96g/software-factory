@@ -13,7 +13,7 @@ import { SqliteStore } from "./store/sqlite-store.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
 import { CompositeStore, DefinitionStore, ScopeRouter } from "./store/composite-store.ts";
 import { AdmissionChain, AdmittedStore } from "./admission/chain.ts";
-import { nameValidator, namespaceDefaulter, refValidator, requiredFieldsValidator, sourceDefaultsMutator } from "./admission/builtins.ts";
+import { nameValidator, namespaceDefaulter, recoveryPolicyValidator, refValidator, requiredFieldsValidator, sourceDefaultsMutator } from "./admission/builtins.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from "./transcripts/recorder.ts";
@@ -100,6 +100,15 @@ import { planningContext } from "./planning/context.ts";
 import { planningReview } from "./planning/review.ts";
 import { UnitExecutionService } from "./units/service.ts";
 import { unitContext } from "./units/context.ts";
+import { CompletedUnitAttempts } from "./units/history.ts";
+import { ValidatedRecoveryRouter } from "./recovery/router.ts";
+import { recoveryContext } from "./recovery/context.ts";
+import { RecoveryAllowances } from "./recovery/allowances.ts";
+import { DefaultRecoveryCheckAuthorization } from "./recovery/check-authorization.ts";
+import { runtimeRecoveryNeed } from "./recovery/runtime-need.ts";
+import { SerializedWorkspaceJobs } from "./checks/workspace-jobs.ts";
+import { ActiveCheckFinishValidator } from "./checks/finish-guard.ts";
+import type { RecoveryCheckAuthorization, RecoveryNeedHandler } from "./ports/index.ts";
 import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
 import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
 import { persistedArtifactCheck, RegistryFinishValidator, schemaArtifactCheck } from "./artifacts/output-checks.ts";
@@ -151,12 +160,15 @@ export async function createFactory(o: FactoryOptions) {
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
   const scopes = new GitModuleScopePlanner();
+  let recoveryChecks!: RecoveryCheckAuthorization;
+  const recoveryCheckPort: RecoveryCheckAuthorization = { authorize: (input) => recoveryChecks.authorize(input) };
   admission.addMutator(namespaceDefaulter(kinds));
   admission.addMutator(sourceDefaultsMutator());
   admission.addValidator(nameValidator());
+  admission.addValidator(recoveryPolicyValidator());
   admission.addValidator(refValidator());
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
-  admission.addValidator(checkRunValidator(scopes));
+  admission.addValidator(checkRunValidator(scopes, recoveryCheckPort));
   admission.addValidator(retrospectiveValidator());
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
@@ -239,7 +251,8 @@ export async function createFactory(o: FactoryOptions) {
   const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
-  const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes });
+  const jobs = new SerializedWorkspaceJobs(store);
+  const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes, jobs, recoveryChecks: recoveryCheckPort });
   const schemas = new DefinitionArtifactSchemas(store);
   const schemaValidator = new AjvSchemaValidator();
   const artifactTypes = await store.list<ArtifactType>("ArtifactType");
@@ -252,14 +265,22 @@ export async function createFactory(o: FactoryOptions) {
     schemas, schemaValidator, readers: workspaceReaders });
   // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
   const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
-    snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning,
+    snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning, recoveryChecks: recoveryCheckPort, logs: transcripts,
     completeness: { beforeCandidate: (...a) => units.beforeCandidate(...a), assertComplete: (...a) => units.assertComplete(...a) } });
+  const recoveryRouter = new ValidatedRecoveryRouter({ reader: store, schemas, validator: schemaValidator, contracts: verification,
+    candidates: verification, readers: workspaceReaders });
+  recoveryChecks = new DefaultRecoveryCheckAuthorization({ reader: store, compiler, contracts: verification, environments });
+  const recoveryAllowances = new RecoveryAllowances({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, contracts: verification,
+    schemas, validator: schemaValidator });
+  const recoveryNeeds = new Registry<RecoveryNeedHandler>();
+  const runtimeNeed = runtimeRecoveryNeed(environments);
+  recoveryNeeds.register(runtimeNeed.type, runtimeNeed);
   const units = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
     scheduler: checkScheduler, readers: workspaceReaders, events, clock, redactor });
   // ADR-0055/0057: one check per artifact type, applied when the agent calls `finish` and again after the run.
   const proposedChecks = new Registry<ProposedArtifactCheck>();
   const artifactChecks = new Registry<ArtifactCheck>();
-  const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck].map((check) => [check.artifactType, check]));
+  const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck].map((check) => [check.artifactType, check]));
   for (const type of new Set([...artifactTypes.filter((type) => type.spec.schema).map((type) => type.metadata.name), ...domainChecks.keys()])) {
     const check = schemaArtifactCheck(type, schemas, schemaValidator, domainChecks.get(type));
     proposedChecks.register(type, check);
@@ -271,7 +292,8 @@ export async function createFactory(o: FactoryOptions) {
       retrospectiveContext(store, redactor), artifactSchemaContext(schemas),
       planningContext({ reader: store, compiler, redactor }),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
-      unitContext({ ledger: units, compiler, redactor }),
+      unitContext({ ledger: units, compiler, redactor, attempts: new CompletedUnitAttempts(store) }),
+      recoveryContext({ reader: store, redactor }),
       outputFeedbackContext({ reader: store, redactor }), baseConflictProvider(), citedCodeContext(workspaceReaders)],
     models,
     recorders,
@@ -281,6 +303,8 @@ export async function createFactory(o: FactoryOptions) {
   const prompts = new DefaultPromptBuilder();
   const recordedTurns = new DefaultRecordedToolTurns();
   const toolProvider = new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor });
+  const outputFinish = new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders });
+  const checkFinish = new ActiveCheckFinishValidator(store);
   const realExecutors = [
     new ToolLoopExecutor({
       reader: store,
@@ -292,7 +316,11 @@ export async function createFactory(o: FactoryOptions) {
       toolProvider,
       turns: recordedTurns,
       checks: verification,
-      finish: new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders }),
+      baseline: verification,
+      offerings: [verification],
+      checkLogs: verification,
+      jobs,
+      finish: { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] },
     }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
@@ -357,11 +385,12 @@ export async function createFactory(o: FactoryOptions) {
     transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
     runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, clock, events, redactor, classifiers, scopes,
-    contracts: verification, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
+    contracts: verification, recoveryChecks: recoveryCheckPort, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
   manager.register(checkRunController);
   manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
     stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification, planReconfirmation: verification, publicationRecovery: verification,
-    questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks }));
+    questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks,
+    recovery: recoveryRouter, recoveryNeeds, recoveryAllowances }));
   manager.register(
     createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor,
       integrator: baseSync }),
@@ -435,6 +464,7 @@ export async function createFactory(o: FactoryOptions) {
     verification,
     planning,
     units,
+    recoveryAllowances,
     /** Streamable HTTP MCP endpoint handler (Request → Response). */
     mcp,
     /** The exposed tool catalog (also used by tests). */

@@ -201,6 +201,9 @@ export interface CodeSearcher {
  */
 export interface ToolCapabilities {
   checks?: { run(input: { workspace: string; check: string; requestId: string }): Promise<import("../model/kinds.ts").CheckRun> };
+  checkLogs?: { read(input: { checkRun: string; afterSeq?: number; offset?: number }):
+    Promise<{ content: string; seq?: number; next: { afterSeq: number; offset: number } | null; logsIncomplete: boolean }> };
+  baseline?: { run(input: { workspace: string; check: string; requestId: string }): Promise<import("../model/kinds.ts").CheckRun> };
   read?: FileReader;
   search?: CodeSearcher;
   /** ADR-0030: approved knowledge + docs, already scoped to the run's repositories/workflow. Read-only. */

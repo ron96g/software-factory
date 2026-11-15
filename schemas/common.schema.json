@@ -3,6 +3,35 @@
   "$id": "common.schema.json",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "spec"],
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "Workflow" } }, "required": ["kind"] },
+      "then": {
+        "properties": {
+          "spec": {
+            "properties": {
+              "recovery": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["version", "maxTotalAttempts", "humanNeedReserve", "maxOperatorAllowance", "diagnosticChecks"],
+                "properties": {
+                  "version": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" },
+                  "maxDiagnosisAttempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+                  "maxTotalAttempts": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "humanNeedReserve": { "type": "integer", "minimum": 0, "maximum": 1 },
+                  "maxOperatorAllowance": { "type": "integer", "minimum": 0, "maximum": 100 },
+                  "diagnosticChecks": {
+                    "type": "array", "uniqueItems": true,
+                    "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "apiVersion": { "const": "factory.ai-dlc.io/v1alpha1" },
     "kind": { "enum": ["Agent", "Skill", "Workflow", "ArtifactType", "Source", "Repository", "ModelProvider", "SandboxProfile", "KnowledgeSource", "ToolServer", "WorkItem", "CheckRun", "RetrospectiveFeedback"] },
