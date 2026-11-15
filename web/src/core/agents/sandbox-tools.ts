@@ -1,6 +1,7 @@
 import type { AgentTool, BoundTool, ToolCapabilities } from "../ports/index.ts";
 
 import { MAX_RESULT, clipResult as clip, formatMarker } from "./truncation.ts";
+import { parseCitation } from "../code/citations.ts";
 
 const lineArg = (v: unknown, name: string): number | undefined => {
   if (v === undefined || v === null) return undefined;
@@ -66,24 +67,35 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       invoke: async (a) => JSON.stringify(await checks.run({ workspace: str(a.workspace, "workspace"), check: str(a.check, "check"), requestId: str(a.requestId, "requestId") })),
     };
   }),
-  tool({ name: "search_code", readOnly: true, capabilities: ["search"], description: "Search the workspace code" }, (caps) => {
+  tool({ name: "search_code", readOnly: true, capabilities: ["search"], description: "Search the workspace code",
+    guidance: "Find where something is defined or used before you rely on it. Example: { \"query\": \"currentPlanningRuns\", \"context\": 3 }. Hits are repo:path:line; open them with read_file." }, (caps) => {
     const search = need(caps.search, "search");
     return {
       schema: {
         name: "search_code",
         description: "Search the workspace for a literal string (case-insensitive). Returns repo:path:line matches.",
-        parameters: { type: "object", properties: { query: { type: "string" }, glob: { type: "string" } }, required: ["query"] },
+        parameters: { type: "object", properties: {
+          query: { type: "string" }, glob: { type: "string" },
+          context: { type: "integer", minimum: 0, maximum: 5, description: "Surrounding lines per hit (0-5)" },
+        }, required: ["query"] },
       },
       invoke: async (a) => {
-        const hits = await search.searchCode(str(a.query, "query"), { glob: typeof a.glob === "string" ? a.glob : undefined, maxHits: 41 });
+        const context = typeof a.context === "number" ? Math.max(0, Math.min(5, Math.floor(a.context))) : 0;
+        const hits = await search.searchCode(str(a.query, "query"), { glob: typeof a.glob === "string" ? a.glob : undefined, maxHits: 41, context });
         const shown = hits.slice(0, 40);
-        const text = shown.map((h) => `${h.repository}:${h.path}:${h.line}: ${h.text}`).join("\n") || "(no matches)";
+        const text = shown.map((h) => {
+          const head = `${h.repository}:${h.path}:${h.line}: ${h.text}`;
+          if (!h.context?.length) return head;
+          const lines = [...h.context, [h.line, h.text] as [number, string]].sort((x, y) => x[0] - y[0]);
+          return `${head}\n${lines.map(([n, t]) => `${n === h.line ? ">" : " "}${String(n).padStart(5)}| ${t}`).join("\n")}`;
+        }).join(context ? "\n\n" : "\n") || "(no matches)";
         const capped = hits.length > 40 ? `${text}\n${formatMarker("search_code", "1+", "narrow_query_or_glob")}` : text;
         return clip(capped, "search_code", "narrow query or glob");
       },
     };
   }),
-  tool({ name: "search_knowledge", readOnly: true, capabilities: ["knowledge"], description: "Search the knowledge base" }, (caps) => {
+  tool({ name: "search_knowledge", readOnly: true, capabilities: ["knowledge"], description: "Search the knowledge base",
+    guidance: "Look up approved team knowledge and docs (runbooks, conventions). Example: { \"query\": \"service desk reply\" }. Prefer the code when they disagree." }, (caps) => {
     const knowledge = need(caps.knowledge, "knowledge");
     return {
       schema: {
@@ -99,7 +111,8 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       },
     };
   }),
-  tool({ name: "list_files", readOnly: true, capabilities: ["read"], description: "List workspace files" }, (caps) => {
+  tool({ name: "list_files", readOnly: true, capabilities: ["read"], description: "List workspace files",
+    guidance: "Find files by name pattern when you don't know where something lives. Example: { \"glob\": \"web/src/core/planning/*.ts\" }." }, (caps) => {
     const files = need(caps.read, "read");
     return {
       schema: {
@@ -110,15 +123,32 @@ export const SANDBOX_TOOLS: AgentTool[] = [
       invoke: async (a) => clip((await files.listFiles(typeof a.glob === "string" ? a.glob : undefined)).join("\n") || "(no files)", "list_files", "use a narrower glob"),
     };
   }),
-  tool({ name: "read_file", readOnly: true, capabilities: ["read"], description: "Read a workspace file" }, (caps) => {
+  tool({ name: "read_file", readOnly: true, capabilities: ["read"], description: "Read a workspace file",
+    guidance: "Check the code behind a claim or citation. Pass the citation itself, e.g. { \"ref\": \"web/src/core/x.ts:12-19\" }, or a path with startLine/endLine. Lines are numbered, so cite them exactly as repo:path:line." }, (caps) => {
     const files = need(caps.read, "read");
     return {
       schema: {
         name: "read_file",
         description: "Read a file from the workspace (path relative to the workspace root). Returns line-numbered text with a header; optional startLine/endLine (1-based, inclusive) page through large files. Output over the cap ends with a [[truncated ...]] marker naming the next startLine. Files over 200,000 chars may be incomplete.",
-        parameters: { type: "object", properties: { path: { type: "string" }, startLine: { type: "number" }, endLine: { type: "number" } }, required: ["path"] },
+        parameters: { type: "object", properties: {
+          path: { type: "string" }, startLine: { type: "number" }, endLine: { type: "number" },
+          ref: { type: "string", description: "A citation such as path:12, path:12-19 or repo:path:12-19 (instead of path and lines)" },
+        } },
       },
       invoke: async (a) => {
+        if (typeof a.ref === "string" && a.ref) {
+          const c = parseCitation(a.ref);
+          if (!c) throw new Error(`ref must look like path:12, path:12-19 or repo:path:12-19, got "${a.ref}"`);
+          // With several workspaces the reader expects <repo>/<path>; with one, the plain path.
+          let text: string | undefined;
+          let failure: unknown;
+          for (const candidate of c.repository ? [`${c.repository}/${c.path}`, c.path] : [c.path]) {
+            try { text = await files.readFile(candidate); break; }
+            catch (e) { failure ??= e; }
+          }
+          if (text === undefined) throw failure;
+          return readRange(text, c.startLine, c.endLine);
+        }
         const start = lineArg(a.startLine, "startLine");
         const end = lineArg(a.endLine, "endLine");
         return readRange(await files.readFile(str(a.path, "path")), start, end);

@@ -30,6 +30,8 @@ export interface ContextSection {
   source: string;
   /** Optional evidence revision pinned in run provenance for later review freshness checks. */
   revision?: string;
+  /** Optional counts recorded in run provenance, e.g. resolved citations (ADR-0057). Never gate criteria. */
+  counts?: Record<string, number>;
 }
 
 export interface ExecutionContext {
@@ -113,6 +115,15 @@ export interface AgentResult {
   knowledge?: ProposedKnowledge[];
   /** Executor-specific provenance (model used, prompt hash); merged by the AgentRun controller. */
   provenance?: Partial<RunProvenance>;
+}
+
+/**
+ * ADR-0057: validates a proposed result when the agent calls `finish`, before the run ends, so it can correct its
+ * output in the same conversation. Side-effect free; post-run output checks still apply afterwards.
+ */
+export interface FinishValidator {
+  /** Actionable problems, empty when the result is acceptable. */
+  validate(ctx: ExecutionContext, result: AgentResult): Promise<string[]>;
 }
 
 export interface AgentExecutor {

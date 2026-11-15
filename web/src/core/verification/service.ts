@@ -7,7 +7,7 @@ import { SandboxUnavailableError, StoreError, isStoreError, type AgentCheckReque
   type Clock, type CompiledStage, type CompiledWorkflow, type EventRecorder, type ExecutionContext, type ExecutionEnvironmentSelector, type GateContext,
   type GateDecision, type GateEvaluator, type Principal, type Redactor, type ResourceReader, type ResourceWriter,
   type ValidationContract, type ValidationPlan, type VerificationActions, type VerificationApprovalGuard,
-  type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
+  type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ProposedArtifactCheck, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
 import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
 import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
 import { parseUnitManifest } from "../model/units.ts";
@@ -140,7 +140,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         producer?.status?.provenance?.inputs[specification.metadata.name] !== specification.metadata.resourceVersion)) {
       return invalid("validation-plan must be produced from the current specification revision");
     }
-    const { plan, repositories } = await this.contents(item, artifact, policy, unitPolicy);
+    const { plan, repositories } = await this.contents(item, artifact.spec.content, policy, unitPolicy);
     const workflowVersions = compiled.versions ?? {};
     const planningBinding = await this.d.planning?.binding(item);
     const fingerprint = digest([item.metadata.uid, specification.metadata.uid, specification.metadata.resourceVersion, artifact.metadata.uid, artifact.metadata.resourceVersion, plan,
@@ -210,10 +210,10 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
   }
 
   /** Content and policy validation of one validation-plan artifact (no approval or planning-revision binding). */
-  private async contents(item: WorkItem, artifact: Artifact, policy: NonNullable<CompiledWorkflow["verification"]>,
+  private async contents(item: WorkItem, content: string, policy: NonNullable<CompiledWorkflow["verification"]>,
     unitPolicy: CompiledWorkflow["unitExecution"]): Promise<{ plan: ValidationPlan; repositories: Repository[] }> {
     let raw: unknown;
-    try { raw = JSON.parse(artifact.spec.content); }
+    try { raw = JSON.parse(content); }
     catch (e) { if (!(e instanceof SyntaxError)) throw e; return invalid("validation-plan must contain a JSON object, not Markdown"); }
     if (!raw || typeof raw !== "object" || !("checks" in raw) || !strings(raw.checks) ||
         !("preflight" in raw) || !strings(raw.preflight) || !("criteria" in raw) || !Array.isArray(raw.criteria) || !raw.criteria.length) {
@@ -271,15 +271,15 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
   }
 
   /** ADR-0049: structure check right after the validation-plan step, so malformed plans are fixed by their author. */
-  readonly artifactCheck: ArtifactCheck = {
+  readonly artifactCheck: ProposedArtifactCheck = {
     artifactType: "validation-plan",
-    check: async (item, artifact) => {
+    check: async ({ item, content }) => {
       if (!item.spec.workflowRef) return undefined;
       const compiled = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
       if (!compiled.verification) return undefined;
       try {
         const policy = verificationPolicy(compiled);
-        await this.contents(item, artifact, policy, unitExecutionPolicy(compiled, policy));
+        await this.contents(item, content, policy, unitExecutionPolicy(compiled, policy));
         return undefined;
       } catch (e) {
         if (!isStoreError(e, "Invalid")) throw e;

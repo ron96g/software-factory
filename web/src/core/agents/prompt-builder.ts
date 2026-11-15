@@ -10,13 +10,14 @@ const OUTPUT_CONTRACT = (ctx: ExecutionContext) => {
 Respond with ONE JSON object and nothing else:
 {
   "summary": "one or two sentences describing what you did and why",
-  "artifacts": [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}],
+  "artifacts": [${outputs.map((o) => `{ "type": "${o}", "content": "<artifact content string>" }`).join(", ")}],
   "classification": { "type": "feature|bug|incident|chore|question", "priority": "P0-P3", "labels": [], "confidence": 0.0 } | null,
   "outcome": ${outcomes?.length ? outcomes.map((o) => `"${o}"`).join(" | ") : "null"},
   "questions": ["…"]${proposesKnowledge(ctx) ? `,  // only if you cannot proceed responsibly without a human answer; otherwise []
   "knowledge": [{ "title": "…", "content": "<markdown>", "tags": ["…"] }]   // optional, see the knowledge-base skill` : "   // only if you cannot proceed responsibly without a human answer; otherwise []"}
 }
 Rules: artifacts must contain exactly the listed types${outputs.length ? "" : " (none for this step)"}.
+Follow each supplied ArtifactType JSON Schema; encode JSON artifact content as a string, without Markdown fences.
 All diagrams in artifacts must be Mermaid code blocks. Cite code as repo:path:line. Never invent facts about the code.`;
 };
 
@@ -28,9 +29,10 @@ Ground your work in the actual code: search and read the relevant files before d
 repo:path:line. If you have write/run tools, work in small steps and verify changes by running the relevant tests.
 When you are done, call the \`finish\` tool exactly once with:
 - summary: what you changed and why
-- artifacts: [${outputs.map((o) => `{ "type": "${o}", "content": "<markdown>" }`).join(", ")}]${outputs.includes("source-code") ? " (the diff is attached automatically)" : ""}
+- artifacts: [${outputs.map((o) => `{ "type": "${o}", "content": "<artifact content string>" }`).join(", ")}]${outputs.includes("source-code") ? " (the diff is attached automatically)" : ""}
 - outcome: ${ctx.run.spec.outcomes?.length ? ctx.run.spec.outcomes.join(" | ") : "omit"}
 - questions: only if you cannot proceed responsibly without a human answer.${proposesKnowledge(ctx) ? "\n- knowledge: optional reusable knowledge to propose (see the knowledge-base skill); humans approve it first." : ""}
+Follow each supplied ArtifactType JSON Schema; encode JSON artifact content as a string, without Markdown fences.
 All diagrams must be Mermaid. Never print secrets.`;
 };
 

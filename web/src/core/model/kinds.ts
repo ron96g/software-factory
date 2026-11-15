@@ -49,6 +49,7 @@ export interface ArtifactTypeSpec {
   format: string;
   collection?: boolean;
   description?: string;
+  schema?: { version: string; jsonSchema: Record<string, unknown> };
 }
 export type ArtifactType = Resource<ArtifactTypeSpec>;
 
@@ -484,6 +485,10 @@ export interface RunProvenance {
   executionEnvironment?: string;
   /** Code state the agent saw: repository → commit (ADR-0021). */
   workspaces?: Record<string, string>;
+  /** ADR-0057: how the agent used its tools. Observability only, never gate criteria. */
+  toolUse?: { steps: number; calls: Record<string, number>; finishCorrections: number };
+  /** ADR-0057: counts reported by context providers, by source (e.g. cited-code resolved/unresolved). */
+  contextCounts?: Record<string, Record<string, number>>;
 }
 
 /** ADR-0030: where a knowledge entry or source applies. Empty = everywhere. */

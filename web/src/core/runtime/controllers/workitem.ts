@@ -588,8 +588,14 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             return;
           }
           const problems: string[] = [];
-          for (const ref of (run as AgentRun).status?.outputs ?? []) {
-            const artifact = await d.reader.get<Artifact>("Artifact", namespace, ref.name);
+          const outputArtifacts = await Promise.all(((run as AgentRun).status?.outputs ?? []).map((ref) =>
+            d.reader.get<Artifact>("Artifact", namespace, ref.name)));
+          for (const expected of (run as AgentRun).spec.outputs) {
+            if (d.artifactChecks?.get(expected.name) && !outputArtifacts.some((artifact) => artifact?.spec.artifactTypeRef.name === expected.name)) {
+              problems.push(`Missing required output: ${expected.name}`);
+            }
+          }
+          for (const artifact of outputArtifacts) {
             const check = artifact && d.artifactChecks?.get(artifact.spec.artifactTypeRef.name);
             const problem = check && await check.check(wi, artifact);
             if (problem) problems.push(`${artifact.spec.artifactTypeRef.name}: ${problem}`);
@@ -600,6 +606,10 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             await d.events.warning(wi, OUTPUT_REJECTED, `${stage.name}/${step.name} r${st.round}: ${problems.join("; ")}`);
             return write(wi, { round: st.round! + 1, step: stepIdx, retries: { ...st.retries, [outputKey]: (st.retries?.[outputKey] ?? 0) + 1 },
               ...(st.phase === "Waiting" ? { phase: "Running" as const, message: undefined } : {}) });
+          }
+          if (problems.length) {
+            return apply(wi, wf, stage, { action: "fail",
+              reason: `Invalid output from ${stage.name}/${step.name} after ${MAX_OUTPUT_RETRIES} retries: ${problems.join("; ")}. Request a revision to retry.` });
           }
           const r = rs.result ?? {};
           const patch: Partial<WorkItemStatus> = {

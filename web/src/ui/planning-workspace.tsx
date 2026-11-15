@@ -6,9 +6,11 @@ import { useEffect, useRef, useState } from "react";
 import type { WorkItem } from "@/core/model/kinds.ts";
 import type { WorkItemDetail } from "@/core/ports/app.ts";
 import type { PlanFormat, PlanningRevisionInput, PlanningSections, PlanningWorkspace as Workspace } from "@/core/ports/planning.ts";
+import type { CodeLocation, ReviewEvidence } from "@/core/model/planning-review.ts";
 import { parsePlanningRevision } from "@/planning-request.ts";
 import { api, ApiError } from "./api.ts";
 import { MarkdownView } from "./markdown.tsx";
+import { EvidenceArtifacts } from "./evidence-artifacts.tsx";
 
 const fullSections = ["outcome", "scope", "approach", "delivery", "acceptance", "risks"] as const;
 const sectionsOf = (format: PlanFormat): readonly (keyof PlanningSections)[] => format === "decision-sheet" ? ["risks"] : fullSections;
@@ -21,6 +23,11 @@ const labelsOf = (format: PlanFormat): Record<keyof PlanningSections, string> =>
 });
 const sourceLabels: Record<string, string> = {
   spec: "What will be built (specification)", "units-of-work": "Units of Work", "validation-plan": "How it is proven (validation plan)",
+  "research-notes": "Research and options (research notes)",
+};
+const readinessLabels = {
+  working: "Agents working", "needs-agent-repair": "Needs agent repair", "needs-answers": "Needs your answers",
+  ready: "Ready for review", "ready-with-findings": "Ready with disputed findings",
 };
 const pick = (source: Partial<PlanningSections>, keys: readonly (keyof PlanningSections)[]): PlanningSections => {
   const result: PlanningSections = { risks: "" };
@@ -75,6 +82,12 @@ function SourceView({ source }: { source: Workspace["sources"][number] }) {
   const json = source.format === "json" || /^\s*[[{]/.test(source.content);
   return <MarkdownView>{json ? `\`\`\`json\n${source.content}\n\`\`\`` : source.content}</MarkdownView>;
 }
+
+
+const codeLabel = (c: CodeLocation) => `${c.repository}:${c.path}:${c.startLine}${c.endLine !== c.startLine ? `-${c.endLine}` : ""}`;
+/** Version 2 evidence is `{ artifact }` or `{ code }`; earlier reviews used `{ name, resourceVersion }` and stay readable. */
+const evidenceLabel = (entry: ReviewEvidence | { name: string; resourceVersion: string }) =>
+  "code" in entry ? codeLabel(entry.code) : "artifact" in entry ? `${entry.artifact.name} @ ${entry.artifact.resourceVersion}` : `${entry.name} @ ${entry.resourceVersion}`;
 
 export default function PlanningWorkspace({ workspace, error, reload, detail, onOpenRun, summary }: {
   workspace: Workspace | null;
@@ -254,8 +267,8 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
             Use one-planner workflow
           </Button>}
           <Tooltip label={`Revision ${workspace.revision}`}>
-            <Badge color={workspace.disposition ? "gray" : workspace.ready ? "teal" : "yellow"}>
-              {workspace.disposition ?? (workspace.ready ? "Ready for review" : workspace.canRevise ? "Input needed" : "Agents working")}
+            <Badge color={workspace.disposition ? "gray" : workspace.readiness === "ready" ? "teal" : "yellow"}>
+              {workspace.disposition ?? (workspace.readiness ? readinessLabels[workspace.readiness] : workspace.ready ? "Ready for review" : "Agents working")}
             </Badge>
           </Tooltip>
         </Group>
@@ -277,6 +290,49 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       </Accordion>}
       {blockedMessage && !workspace.issues.some((issue) => issue.includes(blockedMessage))
         && <Alert color="yellow" title="Planning needs attention">{blockedMessage}</Alert>}
+      {workspace.readiness === "needs-agent-repair" && workspace.canRevise && <Alert color="yellow" title="The proposal needs agent repair">
+        Missing or invalid planning evidence is not a request for you to approve it. Request a fresh planning revision,
+        optionally supplying feedback below.
+        <Button mt="sm" variant="light" disabled={disabled || !!edit} onClick={() => void submit({
+          action: "revise", revision: workspace.revision, requestId: crypto.randomUUID(),
+        }, true)}>Retry planning</Button>
+      </Alert>}
+      {workspace.review && <Stack gap="sm">
+        <Title order={4}>Independent planning review</Title>
+        <MarkdownView>{workspace.review.summary}</MarkdownView>
+        {workspace.review.findings.map((finding) => <Card key={finding.id} withBorder p="sm">
+          <Stack gap="xs">
+            <Group gap="xs"><Badge color={finding.kind === "human-decision" ? "red" : finding.kind === "advisory" ? "gray" : "yellow"}>
+              {finding.kind.replaceAll("-", " ")}
+            </Badge><Text size="xs" ff="monospace">{finding.id}</Text></Group>
+            <MarkdownView>{finding.summary}</MarkdownView>
+            {finding.kind === "research-gap" && <div><Text size="sm" fw={600}>Claim to research</Text><MarkdownView>{finding.claim}</MarkdownView></div>}
+            {finding.kind === "research-gap" && finding.investigation && <div>
+              <Text size="sm" fw={600}>Investigated</Text>
+              {[...(finding.investigation.checked ?? []).map(codeLabel), ...(finding.investigation.searches ?? []).map((q) => `search "${q}"`)].map((entry) =>
+                <Text key={entry} size="xs" ff="monospace">{entry}</Text>)}
+              <MarkdownView>{finding.investigation.unresolvedBecause}</MarkdownView>
+            </div>}
+            {finding.kind === "plan-defect" && <div><Text size="sm" fw={600}>Requested correction</Text><MarkdownView>{finding.requestedChange}</MarkdownView></div>}
+            {finding.kind === "human-decision" && <Text size="sm">Answer decision {finding.decisionId} below.</Text>}
+            <Text size="xs" c="dimmed">Reviewed evidence: {finding.evidence.map(evidenceLabel).join(", ")}</Text>
+          </Stack>
+        </Card>)}
+        {!!workspace.review.verified?.length && <Card withBorder p="sm">
+          <Stack gap="xs">
+            <Group gap="xs"><Badge color="teal">checked in code</Badge><Text size="xs" c="dimmed">Claims the reviewer confirmed; not findings.</Text></Group>
+            {workspace.review.verified.map((claim) => <div key={claim.id}>
+              <MarkdownView>{claim.claim}</MarkdownView>
+              <Text size="xs" ff="monospace" c="dimmed">{claim.evidence.map(codeLabel).join(", ")}</Text>
+            </div>)}
+          </Stack>
+        </Card>}
+        {workspace.readiness === "ready-with-findings" && <Alert color="yellow">
+          {workspace.reviewFindings
+            ? "The bounded AI repair loop has stopped with unresolved findings. Request another revision, or explicitly accept the remaining concerns with a reason when approving."
+            : "The review includes advisory concerns. Read them before deciding whether to approve or request a revision."}
+        </Alert>}
+      </Stack>}
 
       {workspace.format === "decision-sheet" && workspace.sources.length > 0 && <Accordion variant="contained" multiple defaultValue={["spec"]}>
         {workspace.sources.map((source) => <Accordion.Item key={source.artifact} value={source.type}>
@@ -413,6 +469,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
           {detail.evidence.items.map((entry, index) => <div key={index}>
             <Text size="sm" fw={600}>{entry.label} ({entry.severity})</Text>
             <MarkdownView>{entry.detail}</MarkdownView>
+            <EvidenceArtifacts refs={entry.artifacts} artifacts={detail.artifacts} />
             {entry.runName && <Button variant="subtle" size="xs" onClick={() => onOpenRun(entry.runName!)}>Open evidence run</Button>}
           </div>)}
           {approval?.spec.criteria?.length ? <List size="sm">{approval.spec.criteria.map((criterion, index) => <List.Item key={index}>{criterion}</List.Item>)}</List> : null}

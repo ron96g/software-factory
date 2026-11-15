@@ -112,7 +112,9 @@ keeps code review closed until every Unit is ready on the current candidate (see
 The implementation plan is a JSON Artifact with readable Markdown sections and structured human decisions;
 the existing policy-controlled validation plan remains the verification contract. In `factory-plan` it is a focused
 **decision sheet** (ADR-0051): only risks/assumptions and human decisions. The workspace shows the specification,
-Units and validation plan it is based on as source artifacts instead of restating them. The architect's `design`
+Units, validation plan and research notes (with the options considered) it is based on as source artifacts instead of
+restating them. Each gate evidence entry also lists the artifacts its run read and produced, readable in place, so a
+summary that refers to them can be checked before approving. The architect's `design`
 stage adds a logical design to the domain model, and a tech lead approves it at a separate `human-approval` gate
 before code is written; rejection reruns the design with the reason. Developers follow the approved plan and design
 and report necessary deviations with reasons.
@@ -152,6 +154,85 @@ current planner run; the independent reviewer must consume those exact revisions
 planning intent. An asynchronous revision cannot auto-approve, and direct restarts cannot bypass this binding.
 Active agents/checks or publication effects prevent amendments; human reject/defer intent is applied to status only
 by the WorkItem controller. Legacy workflows and ADR-0032 context behavior remain unchanged.
+
+### Typed planning review (ADR-0055)
+
+ArtifactType may declare an optional versioned JSON Schema (`spec.schema.version` and `jsonSchema`).
+Local strict draft-2020-12 validation precedes registered domain checks. Schemas are recorded in output-producing
+agent context; malformed output retries only its producing step and fails visibly when its budget is exhausted.
+
+`factory-plan` uses the JSON `planning-review` artifact. Findings distinguish research gaps, plan defects,
+human decisions and advisory concerns. Exact reviewed input references and decision links are checked in code.
+New human decisions appear in the existing answer surface; they cannot be hidden solely in a report or bypassed
+through approval comments. Routing must agree with the finding-derived verdict. The workspace renders findings
+from this artifact and reports working, needs agent repair, needs answers, ready, or ready with disputed findings.
+Valid AI concerns remain human-overridable with a reason; invalid contracts and missing answers do not.
+
+Approval binds the current review schema digest and requires its recorded producer context. Existing Markdown
+reports remain readable, but existing `factory-plan` proposals require a fresh revision before approval.
+Other workflows retain their previous reports. This does not auto-restart or mutate live items.
+Schemas and citations establish structure and identity, not factual truth. Cross-revision finding-resolution
+accounting and broader decision lineage remain follow-ups.
+
+### Accessible tools and grounded reviews (ADR-0057)
+
+The harness, not agent definitions, makes tools usable. Before the first model step, the `cited-code` context
+provider resolves every `repo:path:line` citation in a run's inputs, item context and answers against the run's
+pinned workspaces, through the same confined read-only reader as `read_file`. Agents get line-numbered excerpts
+and a list of unresolved citations; repositories outside the run's workspaces are reported, never probed.
+The tool loop renders a "Tools for this run" section from the tools it actually bound: trusted registry guidance
+for built-in tools, names only for MCP tools. `read_file` accepts ranges or a citation and returns numbered lines;
+`search_code` can add context lines.
+
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant Loop as Tool loop
+  participant Check as FinishValidator
+  participant Ctl as WorkItem controller
+  Agent->>Loop: finish(result)
+  Loop->>Check: schema + domain checks (same per-type checks)
+  alt problems and corrections left
+    Check-->>Loop: actionable errors
+    Loop-->>Agent: errors as the finish tool result
+  else valid or corrections used up
+    Loop-->>Ctl: run Succeeded with result
+    Ctl->>Ctl: post-run checks (rerun only the producer on failure)
+  end
+```
+
+One `ProposedArtifactCheck` per artifact type serves both paths. After the run, it is adapted to `ArtifactCheck`
+and reopens the run's workspaces only at the commits recorded in provenance. `planning-review` version 2 accepts
+artifact or code evidence; code locations must exist in those workspaces. Research gaps list what was
+investigated, and claims confirmed in code are listed as verified, not raised as findings. Provenance records tool
+use and cited-code counts for observability only.
+
+## Proposed: owner-led peer feedback (ADR-0056)
+
+This is a proposal, not shipped behavior. A collaboration-enabled WorkItem would have one accountable human owner.
+Authorized peers could discuss pinned plan/design revisions in WorkItem-owned `FeedbackThread` resources; the
+owner could reply and accept or reject suggestions with a rationale. Ownership would not grant gate-approver roles
+or access to another namespace. Trusted OIDC identity and server-side authorization are prerequisites.
+
+```mermaid
+flowchart LR
+  Peer["Authorized peer"] --> Thread["Revision-bound feedback thread"]
+  Owner["WorkItem owner"] --> Decision{"Discuss and decide"}
+  Thread --> Decision
+  Decision -- reject --> History["Discussion history only"]
+  Decision -- accept exact instructions --> Queue["Durable revision intent"]
+  Queue --> Safe["Existing safe human stop"]
+  Safe --> Run["Plan or design AgentRun<br/>pinned accepted input"]
+  Run --> Evidence["Regenerated artifacts and required reviews"]
+  Evidence --> Gate["Existing human approval gates"]
+```
+
+Open/rejected discussion would not become workflow agent input. Accepted instructions would be queued until a safe
+revision boundary, recorded in the next relevant run, and linked to its result. Acceptance would not alter in-flight
+runs, satisfy required decisions, approve the regenerated evidence or bypass verification/publication safeguards.
+Stale targets would require explicit owner review and re-anchoring. Feedback after construction starts would need a
+supported amendment/restart or independent follow-up. See [ADR-0056](adr/0056-owner-led-peer-feedback.md) for the
+proposed resource, concurrency, provenance and acceptance contracts.
 
 ## Unit execution (ADR-0047)
 

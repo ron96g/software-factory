@@ -1,6 +1,7 @@
 # ADR-0050: One planner run, one review, and revocable human answers
 
 - **Status:** Accepted (implementation-plan format and design gate amended by ADR-0051)
+- **Amended by:** ADR-0055 (schema-backed planning-review output in factory-plan)
 - **Date:** 2026-11-14
 - **Deciders:** project owner
 - **Would supersede:** the planning chain of ADR-0045/0046 for new planned items (`factory-planned` stays for

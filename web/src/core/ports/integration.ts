@@ -82,6 +82,8 @@ export interface CodeHit {
   line: number;
   text: string;
   term: string;
+  /** Surrounding lines when requested: `[lineNumber, text]` pairs in file order, excluding the hit itself. */
+  context?: [number, string][];
 }
 
 export interface CodeSearchQuery {
@@ -183,11 +185,14 @@ export interface AgentToolInfo {
   readonly description: string;
   /** Capabilities the tool is bound to. Nothing else is passed to `bind` (ISP). */
   readonly capabilities?: readonly (keyof ToolCapabilities)[];
+  /** ADR-0057: trusted, static harness text: when the tool helps and one example call. Rendered in the tool guide. */
+  readonly guidance?: string;
 }
 
 /** Code search over the item's workspaces; hits cite `repo:path:line`. */
 export interface CodeSearcher {
-  searchCode(query: string, options?: { glob?: string; maxHits?: number }): Promise<CodeHit[]>;
+  /** `context` adds up to that many surrounding lines to each hit (ADR-0057). */
+  searchCode(query: string, options?: { glob?: string; maxHits?: number; context?: number }): Promise<CodeHit[]>;
 }
 
 /**
