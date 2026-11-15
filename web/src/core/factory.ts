@@ -1,6 +1,7 @@
 /**
  * Composition root (AGENTS.md rule 3). The ONLY file that knows concrete implementations.
  */
+import { repoContextProvider } from "./agents/repo-context.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -244,7 +245,7 @@ export async function createFactory(o: FactoryOptions) {
     scheduler: checkScheduler, readers: new LocalWorkspaceReaders(new RipgrepCodeSearch()), events, clock, redactor });
   const contexts = new DefaultContextFactory({
     reader: store,
-    providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
+    providers: [repoContextProvider(workspaces, redactor), codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),
       retrospectiveContext(store, redactor),
       planningContext({ reader: store, compiler, redactor }),
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
