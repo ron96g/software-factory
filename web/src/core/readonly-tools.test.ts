@@ -62,6 +62,7 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     assert.ok(d!.artifacts.some((a) => a.spec.artifactTypeRef.name === "research-notes" && /meta\.ts/.test(a.spec.content)));
 
     // analysis agents only ever get read-only tools (+ finish); search_knowledge only where the agent declares it
+    for (let i = 0; i < 200 && !toolSets["Reviewer"]; i++) await new Promise((r) => setTimeout(r, 20)); // reviewer runs concurrently with the stage change
     for (const [agent, tools] of Object.entries(toolSets)) {
       assert.deepEqual(tools.filter((x) => x !== "search_knowledge").sort(), ["finish", "list_files", "read_file", "search_code"], agent);
     }

@@ -4,7 +4,7 @@ import type { Repository } from "../model/kinds.ts";
 import type { CodeSearch, ContextProvider, ContextSection, ExecutionContext, WorkspaceProvider } from "../ports/index.ts";
 
 /** ADR-0021: the item's Ready workspace for this repository, else the repository checkout. */
-async function rootFor(ctx: ExecutionContext, repo: Repository, workspaces: WorkspaceProvider): Promise<string> {
+export async function rootFor(ctx: ExecutionContext, repo: Repository, workspaces: WorkspaceProvider): Promise<string> {
   const ws = ctx.workspaces.find((w) => w.spec.repositoryRef.name === repo.metadata.name && w.status?.path);
   return ws ? ws.status!.path! : workspaces.checkout(repo);
 }

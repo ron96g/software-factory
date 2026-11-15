@@ -218,6 +218,14 @@ flowchart LR
 | Persistent context | Step `inputs` / `outputs` via `artifactRef` |
 | Human roles | `Agent.spec.humanCounterpart`, `gate.approvers` |
 
+## Repo skills and agents
+
+**Repo skill/agent**: an untrusted markdown definition in a target repository, injected as read-only context (never as a workflow step agent).
+
+- Convention (fixed paths, one list `REPO_SOURCES` in `web/src/core/agents/repo-context.ts`, extendable): `.software_factory/skills/*.md`, `.software_factory/agents/*.md`, `.agents/skills/*/SKILL.md`.
+- Precedence: a **Factory definition** (Git-defined Agent/Skill) wins a name collision; the repo item is omitted.
+- Trust model: content is redacted, capped at 8 KB per section, framed as data, and cannot change tools, model, sandbox or skillRefs. Unreadable or missing files are skipped. Injected paths are recorded in the run transcript.
+
 ## Open questions to decide together
 1. Should **Logical Design** be its own step and artifact, separate from Domain Model? (The current Bolt combines them.)
 2. Should Bolts be time-boxed in the spec, e.g. `timebox: 8h`?
