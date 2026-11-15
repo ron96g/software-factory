@@ -110,7 +110,7 @@ export interface AgentResult {
   /** Decision-gate outcome, e.g. "accept" | "needs-info". */
   outcome?: string;
   /** Non-empty → the work item gets blocked with a Clarification. */
-  questions?: string[];
+  questions?: (string | { id?: string; text: string; blocker?: boolean; options?: string[] })[];
   /** ADR-0030: knowledge worth keeping; becomes `Proposed` KnowledgeEntries (never used before a human approves). */
   knowledge?: ProposedKnowledge[];
   /** Executor-specific provenance (model used, prompt hash); merged by the AgentRun controller. */

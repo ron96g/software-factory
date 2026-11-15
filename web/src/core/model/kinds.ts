@@ -559,7 +559,7 @@ export interface AgentResultSummary {
   summary?: string;
   outcome?: string;
   classification?: Classification;
-  questions?: string[];
+  questions?: (string | { id?: string; text: string; blocker?: boolean; options?: string[] })[];
 }
 
 export interface ArtifactSpec {
@@ -575,6 +575,8 @@ export interface ClarificationSpec {
   workItemRef: Ref;
   stage: string;
   questions: string[];
+  /** Answer options per question (parallel to questions; empty = free-form). */
+  options?: string[][];
   /** Who stopped the item: the agent run that asked, or the gate that needs a human decision. */
   askedBy?: { agentRunRef?: Ref; gate?: string };
   /** Supporting Markdown shown beside the questions (not part of them). */

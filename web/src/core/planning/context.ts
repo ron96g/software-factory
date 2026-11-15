@@ -1,3 +1,4 @@
+import { normalizeQuestions } from "../questions.ts";
 import type { AgentRun } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import type { ContextProvider, Redactor, ResourceReader, WorkflowCompiler } from "../ports/index.ts";
@@ -19,7 +20,7 @@ export function planningContext(d: { reader: ResourceReader; compiler: WorkflowC
           humanIntent: ctx.workItem.spec.planning,
           withdrawnAnswers: ctx.workItem.spec.planning?.withdrawn ?? [],
           upstreamQuestions: currentPlanningRuns(ctx.workItem, runs)
-            .flatMap((run) => (run.status?.result?.questions ?? []).map((question) => ({ agent: run.spec.agentRef.name, stage: run.spec.stage, question }))),
+            .flatMap((run) => normalizeQuestions(run.status?.result?.questions).map((q) => ({ agent: run.spec.agentRef.name, stage: run.spec.stage, id: q.id, question: q.text, blocker: q.blocker, options: q.options }))),
         }, null, 2)),
       }];
     },

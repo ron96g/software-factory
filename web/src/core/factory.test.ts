@@ -371,6 +371,34 @@ test("additional context: every agent prompt carries it, so agents don't ask for
   }, fetchImpl);
 });
 
+const triageWith = (questions: unknown[]) => (async (_url: string, init: RequestInit) => {
+  const sys: string = JSON.parse(String(init.body)).messages[0].content;
+  const result = sys.includes("Triager Agent")
+    ? { summary: "triaged", outcome: "accept", questions, classification: { type: "bug", priority: "P2" } }
+    : { summary: "done", artifacts: [], questions: [] };
+  return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }), { status: 200 });
+}) as typeof fetch;
+
+test("AC-1: non-blocker triager questions create no Clarification and the item proceeds", async () => {
+  await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
+    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "factory-loop" });
+    const d = await waitFor(async () => {
+      const x = await f.app.getWorkItem(p, wi.metadata.name);
+      return x?.workItem.status?.stage === "spec" || x?.workItem.status?.phase === "AwaitingApproval" ? x : undefined;
+    }, "past triage");
+    assert.equal(d.clarifications.length, 0);
+  }, triageWith(["Which scope?", { text: "Which env?" }]));
+});
+
+test("AC-2: blocker triager questions create a Clarification with default options", async () => {
+  await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
+    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "factory-loop" });
+    const d = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
+    assert.deepEqual(d.clarifications[0].spec.questions, ["Which db?"]);
+    assert.ok(d.clarifications[0].spec.options?.[0]?.length);
+  }, triageWith([{ text: "Which db?", blocker: true }]));
+});
+
 test("AC-3: truncation marker is stable and actionable", async () => {
   const { clipResult, parseMarker, MAX_RESULT } = await import("./agents/truncation.ts");
   const out = clipResult("a".repeat(MAX_RESULT * 2), "list_files", "narrow_glob");
