@@ -486,7 +486,7 @@ export interface RunProvenance {
   /** Code state the agent saw: repository → commit (ADR-0021). */
   workspaces?: Record<string, string>;
   /** ADR-0057: how the agent used its tools. Observability only, never gate criteria. */
-  toolUse?: { steps: number; calls: Record<string, number>; finishCorrections: number };
+  toolUse?: { steps: number; calls: Record<string, number>; finishCorrections: number; wrapUp?: boolean };
   /** ADR-0057: counts reported by context providers, by source (e.g. cited-code resolved/unresolved). */
   contextCounts?: Record<string, Record<string, number>>;
 }

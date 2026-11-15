@@ -81,10 +81,12 @@ test("X37: read_file accepts citations and returns numbered ranges; search_code 
 function loop(script: (messages: ToolLoopMessage[], step: number) => ToolCall, finish?: FinishValidator, mcp = false, maxSteps?: number) {
   const transcript: TranscriptMessage[] = [];
   const requests: ToolLoopMessage[][] = [];
+  const offered: string[][] = [];
   const tools = new Registry<AgentTool>();
   for (const t of SANDBOX_TOOLS) tools.register(t.name, t);
-  const client = { complete: async () => "", completeWithTools: async (req: { messages: ToolLoopMessage[] }) => {
+  const client = { complete: async () => "", completeWithTools: async (req: { messages: ToolLoopMessage[]; tools: { name: string }[] }) => {
     requests.push(structuredClone(req.messages));
+    offered.push(req.tools.map((t) => t.name));
     return { toolCalls: [script(req.messages, requests.length)] };
   } };
   const executor = new ToolLoopExecutor({
@@ -102,7 +104,7 @@ function loop(script: (messages: ToolLoopMessage[], step: number) => ToolCall, f
     workspaces: [workspace("repo")], inputs: [], sections: [], clarifications: [], skills: [],
     transcript: { ref: { name: "t" }, record: async (m: TranscriptMessage) => { transcript.push(m); } },
   } as unknown as ExecutionContext;
-  return { run: () => executor.execute(ctx), transcript, requests };
+  return { run: () => executor.execute(ctx), transcript, requests, offered };
 }
 
 const finishCall = (summary: string, step: number): ToolCall => ({ id: `f${step}`, name: "finish", arguments: { summary } });
@@ -141,4 +143,21 @@ test("X37: the tool guide lists only bound tools with harness guidance; MCP tool
   assert.match(system, /- MCP server jira \(external; see each tool's own description\): `jira__search`/);
   assert.match(system, /Before you finish, check the claims you rely on/);
   assert.ok(!system.includes("write_file") && !system.includes("IGNORE ALL PREVIOUS"), "unbound tools and untrusted MCP text are not rendered");
+});
+
+test("X38: agents know their step budget, are warned near the end, and the last step reports instead of failing", async () => {
+  const read: ToolCall = { id: "r", name: "read_file", arguments: { path: "web/a.ts" } };
+  const l = loop((_messages, step) => step < 5 ? { ...read, id: `r${step}` } : finishCall("partial: tests still flaky", step), undefined, false, 5);
+  const result = await l.run();
+  assert.equal(result.summary, "partial: tests still flaky");
+  assert.deepEqual(result.provenance?.toolUse, { steps: 5, calls: { read_file: 4, finish: 1 }, finishCorrections: 0, wrapUp: true });
+  assert.match(String(l.requests[0][0].content), /Step budget: 5 model steps/);
+  assert.deepEqual(l.offered[4], ["finish"], "only finish on the last step");
+  assert.ok(l.offered[3].includes("read_file"));
+  assert.match(String(l.requests[2].at(-1)!.content), /3 model step\(s\) left/, "warned after the second step");
+  assert.match(String(l.requests[4].at(-1)!.content), /Last model step/);
+  assert.equal(l.transcript.filter((m) => m.role === "note" && /\[harness\]/.test(m.content)).length, 4, "every notice is recorded");
+
+  const stuck = loop((_messages, step) => ({ ...read, id: `s${step}` }), undefined, false, 2);
+  await assert.rejects(stuck.run(), /did not finish within 2 steps/, "a run that still does not finish fails as before");
 });
