@@ -1,5 +1,6 @@
 import type { AgentRun, Conversation } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
+import { normalizeQuestions } from "../questions.ts";
 import type {
   ChatMessage,
   ConversationResponder,
@@ -80,7 +81,7 @@ function deterministicExplanation(run: AgentRun, msgs: TranscriptMessage[]): str
     `**Executor:** ${p?.executor ?? "unknown"}${p?.model ? ` (${p.model.provider}/${p.model.name})` : ""}`,
     r?.summary ? `**Summary:** ${r.summary}` : "",
     r?.outcome ? `**Outcome:** ${r.outcome}` : "",
-    r?.questions?.length ? `**Questions asked:**\n${r.questions.map((q) => `- ${q}`).join("\n")}` : "",
+    r?.questions?.length ? `**Questions asked:**\n${normalizeQuestions(r.questions).map((q) => `- ${q.text}`).join("\n")}` : "",
     notes.length ? `**Notes:**\n${notes.join("\n")}` : "",
     tools.length ? `**Tool calls:**\n${tools.join("\n")}` : "",
     `**Inputs used:** ${Object.keys(p?.inputs ?? {}).join(", ") || "none"}`,

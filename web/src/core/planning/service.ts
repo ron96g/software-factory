@@ -13,6 +13,7 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const invalid = (message: string): never => { throw new StoreError(message, "Invalid"); };
 const current = (resource: { metadata: { labels?: Record<string, string> } }) =>
   !resource.metadata.labels?.[LABEL_SUPERSEDED] && !resource.metadata.labels?.["factory.ai-dlc.io/replay"];
+import { normalizeQuestions } from "../questions.ts";
 const normalized = (text: string) => text.trim().toLowerCase().replace(/\s+/g, " ");
 const signature = (decision: PlanningDecision) => hash([
   normalized(decision.question), decision.options.map(normalized).sort(), decision.required,
@@ -53,6 +54,8 @@ export function parsePlanningDocument(content: string, format?: PlanFormat): Pla
         typeof raw.rationale !== "string" || !raw.rationale.trim() || raw.rationale.length > 3000 ||
         typeof raw.required !== "boolean" || !Array.isArray(raw.options) || raw.options.length > 20 ||
         !raw.options.every((option: unknown) => typeof option === "string" && !!option.trim() && option.length <= 1000) ||
+        (raw.answersQuestionIds !== undefined && (!Array.isArray(raw.answersQuestionIds) || raw.answersQuestionIds.length > 50 ||
+          !raw.answersQuestionIds.every((q: unknown) => typeof q === "string" && !!q.trim() && q.length <= 200))) ||
         (raw.recommendation !== undefined && (typeof raw.recommendation !== "string" || !raw.recommendation.trim() || raw.recommendation.length > 2000))) {
       return invalid("Each decision needs a stable id, question, options[], rationale and required boolean");
     }
@@ -66,7 +69,8 @@ export function parsePlanningDocument(content: string, format?: PlanFormat): Pla
       return invalid(`Optional decision ${raw.id}: the recommended default must be one of its displayed options`);
     }
     decisions.push({ id: raw.id, question: raw.question.trim(), options, rationale: raw.rationale.trim(),
-      required: raw.required, ...(raw.recommendation ? { recommendation: raw.recommendation } : {}) });
+      required: raw.required, ...(raw.answersQuestionIds?.length ? { answersQuestionIds: raw.answersQuestionIds.map((q: string) => q.trim()) } : {}),
+      ...(raw.recommendation ? { recommendation: raw.recommendation } : {}) });
   }
   return { ...sections, decisions };
 }
@@ -141,8 +145,10 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
 
   private decisions(item: WorkItem, document: PlanningDocument, runs: AgentRun[], stages: Set<string>) {
     const decisions = [...document.decisions];
+    const linked = new Set(document.decisions.flatMap((decision) => decision.answersQuestionIds ?? []));
     for (const run of runs.filter((run) => stages.has(run.spec.stage))) {
-      for (const question of run.status?.result?.questions ?? []) {
+      for (const { id: questionId, text: question } of normalizeQuestions(run.status?.result?.questions)) {
+        if (linked.has(questionId)) continue;
         if (decisions.some((decision) => normalized(decision.question) === normalized(question))) continue;
         // A question that explicitly cites a structured decision ("OD-1: …") is that decision, not a new blocker.
         const cited = /^\s*\[?([a-zA-Z0-9][a-zA-Z0-9_-]{0,79})\]?\s*[:—–]/.exec(question)?.[1];

@@ -80,8 +80,8 @@ export class SimulatedExecutor implements AgentExecutor {
       if (thin && !ctx.clarifications.length && outcomes.includes("needs-info")) {
         result.outcome = "needs-info";
         result.questions = [
-          "What is the expected behaviour or outcome?",
-          "Who is affected, and how urgent is it?",
+          { text: "What is the expected behaviour or outcome?", blocker: true },
+          { text: "Who is affected, and how urgent is it?", blocker: true },
         ];
         result.summary = "The description is too thin to triage. Asking the reporter for details.";
       } else {

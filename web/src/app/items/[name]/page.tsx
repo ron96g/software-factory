@@ -44,6 +44,7 @@ import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
 import { UnitProgressPanel } from "@/ui/unit-progress.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import PlanningWorkspace from "@/ui/planning-workspace.tsx";
+import { normalizeQuestions } from "@/core/questions.ts";
 
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
@@ -558,7 +559,7 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
   const asker = c.spec.askedBy?.agentRunRef
     ? d.runs.find((r) => r.metadata.name === c.spec.askedBy!.agentRunRef!.name)
     : c.spec.askedBy?.gate ? undefined
-    : [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && r.status?.result?.questions?.join("\n") === c.spec.questions.join("\n"));
+    : [...d.runs].reverse().find((r) => r.spec.stage === c.spec.stage && (() => { const t = normalizeQuestions(r.status?.result?.questions); const b = t.filter((x) => x.blocker).map((x) => x.text); return (b.length ? b : t.map((x) => x.text)).join("\n") === c.spec.questions.join("\n"); })());
   const gate = !asker ? c.spec.askedBy?.gate : undefined;
   const done = c.spec.questions.filter((_, i) => skipped[i] || answers[i]?.trim()).length;
   const anyAnswer = answers.some((a, i) => !skipped[i] && a?.trim());
@@ -625,6 +626,15 @@ function ClarificationPanel({ c, d }: { c: Clarification; d: WorkItemDetail }) {
                 </Group>
               ) : (
                 <Group gap="xs" align="flex-start" wrap="nowrap">
+                  {(c.spec.options?.[i] ?? []).length > 0 && (
+                    <Group gap={4} style={{ flexShrink: 0 }}>
+                      {(c.spec.options?.[i] ?? []).map((o) => (
+                        <Button key={o} size="compact-xs" variant={answers[i] === o ? "filled" : "light"} onClick={() => setAnswers((a) => set(a, i, o))}>
+                          {o}
+                        </Button>
+                      ))}
+                    </Group>
+                  )}
                   <Textarea
                     style={{ flex: 1 }}
                     size="sm"

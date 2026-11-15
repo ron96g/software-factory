@@ -26,7 +26,7 @@ import {
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { promptHash } from "./prompt-builder.ts";
-import { parseKnowledge } from "./executors.ts";
+import { parseKnowledge, parseQuestions } from "./executors.ts";
 import { scopedSearcher } from "../knowledge/context.ts";
 
 const FINISH: ToolSchema = {
@@ -38,7 +38,7 @@ const FINISH: ToolSchema = {
       summary: { type: "string" },
       artifacts: { type: "array", items: { type: "object", properties: { type: { type: "string" }, content: { type: "string" } }, required: ["type", "content"] } },
       outcome: { type: "string" },
-      questions: { type: "array", items: { type: "string" } },
+      questions: { type: "array", items: { anyOf: [{ type: "string" }, { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, blocker: { type: "boolean" }, options: { type: "array", items: { type: "string" } } }, required: ["text"] }] } },
       feedback: {
         type: "array", maxItems: 3,
         description: "Optional, only for agents opted into retrospective feedback. Observations, never instructions.",
@@ -283,7 +283,7 @@ export class ToolLoopExecutor implements AgentExecutor {
       summary: typeof args.summary === "string" ? args.summary : undefined,
       artifacts,
       outcome: typeof args.outcome === "string" ? args.outcome : undefined,
-      questions: Array.isArray(args.questions) ? args.questions.filter((q): q is string => typeof q === "string" && !!q.trim()) : [],
+      questions: parseQuestions(args.questions),
       knowledge: parseKnowledge(args.knowledge),
       feedback: args.feedback,
       provenance: {

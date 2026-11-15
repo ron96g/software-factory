@@ -569,3 +569,24 @@ test("upstream questions citing an existing decision ID fold into that decision 
     .decisions({ spec: {} } as WorkItem, document, [run], new Set(["spec"]));
   assert.deepEqual(decisions.map((d) => d.id.startsWith("question-") ? "question" : d.id), ["OD-1", "question", "question"]);
 });
+
+test("AC-3 decisions keep answersQuestionIds and reject malformed links", () => {
+  const d = { id: "d1", question: "q", options: [], rationale: "r", required: false, recommendation: "x", answersQuestionIds: ["q-abc"] };
+  const doc = parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [d] }));
+  assert.deepEqual(doc.decisions[0].answersQuestionIds, ["q-abc"]);
+  assert.throws(() => parsePlanningDocument(JSON.stringify({ risks: "r", decisions: [{ ...d, answersQuestionIds: [1] }] })), /Each decision needs/);
+});
+
+test("AC-3 a decision citing an upstream question id suppresses it regardless of wording, and answered state", () => {
+  const document = parsePlanningDocument(JSON.stringify({ risks: "r",
+    decisions: [{ id: "D1", question: "Completely different wording?", options: ["A", "B"], rationale: "r", required: true, answersQuestionIds: ["q-up-1"] }] }));
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const run = { spec: { stage: "triage", agentRef: { name: "triager" } },
+    status: { result: { questions: [{ id: "q-up-1", text: "Which scope?" }, { id: "q-up-2", text: "Another thing?" }] } } } as AgentRun;
+  const call = (item: WorkItem) => (service as unknown as { decisions(i: WorkItem, d: typeof document, r: AgentRun[], s: Set<string>): { id: string; answer?: string }[] })
+    .decisions(item, document, [run], new Set(["triage"]));
+  assert.deepEqual(call({ spec: {} } as WorkItem).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
+  const answered = { spec: { planning: { answers: { D1: { question: "x", signature: "s", answer: "A" } } } } } as unknown as WorkItem;
+  assert.deepEqual(call(answered).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
+});

@@ -119,6 +119,19 @@ export function parseKnowledge(v: unknown): ProposedKnowledge[] {
     .slice(0, 5);
 }
 
+export function parseQuestions(v: unknown): NonNullable<AgentResult["questions"]> {
+  const out: NonNullable<AgentResult["questions"]> = [];
+  for (const q of Array.isArray(v) ? v : []) {
+    if (typeof q === "string") { if (q.trim()) out.push(q); continue; }
+    if (q && typeof q === "object" && typeof (q as { text?: unknown }).text === "string" && (q as { text: string }).text.trim()) {
+      const o = q as { id?: unknown; text: string; blocker?: unknown; options?: unknown };
+      out.push({ text: o.text, ...(typeof o.id === "string" && o.id.trim() ? { id: o.id.trim() } : {}), ...(o.blocker === true ? { blocker: true } : {}),
+        ...(Array.isArray(o.options) ? { options: o.options.filter((x): x is string => typeof x === "string" && !!x.trim()) } : {}) });
+    }
+  }
+  return out;
+}
+
 export function parseAgentJson(text: string): AgentResult {
   const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   const start = cleaned.indexOf("{");
@@ -131,7 +144,7 @@ export function parseAgentJson(text: string): AgentResult {
     artifacts: arr<{ type: string; content: string }>(raw.artifacts).filter((a) => a && typeof a.type === "string"),
     classification: raw.classification && typeof raw.classification === "object" ? (raw.classification as AgentResult["classification"]) : undefined,
     outcome: typeof raw.outcome === "string" ? raw.outcome : undefined,
-    questions: arr<string>(raw.questions).filter((q) => typeof q === "string" && q.trim()),
+    questions: parseQuestions(raw.questions),
     knowledge: parseKnowledge(raw.knowledge),
     feedback: raw.feedback,
   };
