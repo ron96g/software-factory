@@ -1,0 +1,21 @@
+web/src/core/adapters/workspaces/git-auth.test.ts
+  s_eba6099c9c685b::t_cc4765dd758662 1-17
+web/src/core/adapters/workspaces/git-auth.ts
+  s_eba6099c9c685b::t_85a69da7522d9d 4-10,15,21-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "525b8b24b4458d02548418f444e50316729ad333",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
