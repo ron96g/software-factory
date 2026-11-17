@@ -1,41 +1,61 @@
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { lstat, readFile, readlink, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { copyFile, mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Workspace } from "../../model/kinds.ts";
 import type { WorkspaceSnapshotter } from "../../ports/index.ts";
 
 const exec = promisify(execFile);
+const MAX_BUFFER = 64 * 1024 * 1024;
 
-/** Hash tracked and non-ignored untracked contents, including deletions, executable bits and symlinks. */
+/**
+ * Fingerprint = the Git tree of the working copy: tracked and non-ignored untracked contents, deletions, executable
+ * bits and symlinks (never followed). Git hashes in C and reuses the index's stat cache, so unchanged files are not
+ * re-read. A throwaway index and object directory keep the workspace's own index and object store untouched.
+ */
 export class GitWorkspaceSnapshotter implements WorkspaceSnapshotter {
   async fingerprint(workspace: Workspace): Promise<string> {
     const cwd = workspace.status?.path;
     if (!cwd) throw new Error(`workspace ${workspace.metadata.name} has no path`);
-    const { stdout } = await exec("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd, maxBuffer: 16 * 1024 * 1024 });
-    const root = await realpath(cwd);
-    const hash = createHash("sha256");
-    for (const name of [...new Set(stdout.split("\0").filter(Boolean))].sort()) {
-      hash.update(JSON.stringify(name));
-      const path = join(cwd, name);
-      let stat;
-      try {
-        const parent = relative(root, await realpath(dirname(path)));
-        if (parent.startsWith("..") || isAbsolute(parent)) throw new Error(`workspace path escapes through a symlink: ${name}`);
-        stat = await lstat(path);
-      }
-      catch (e) {
-        if (!(e instanceof Error && "code" in e && e.code === "ENOENT")) throw e;
-        hash.update("deleted\0");
-        continue;
-      }
-      if (stat.isSymbolicLink()) hash.update(`symlink:${await readlink(path)}\0`);
-      else if (stat.isFile()) {
-        hash.update(`file:${stat.mode & 0o111}:`);
-        hash.update(createHash("sha256").update(await readFile(path)).digest());
-      } else throw new Error(`cannot snapshot non-file workspace entry ${name}`);
+    const git = async (args: string[], env?: NodeJS.ProcessEnv) =>
+      (await exec("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, maxBuffer: MAX_BUFFER, ...(env ? { env } : {}) })).stdout;
+    const gitPath = async (name: string) => resolve(cwd, (await git(["rev-parse", "--git-path", name])).trim());
+    const scratch = await mkdtemp(join(tmpdir(), "factory-snapshot-"));
+    try {
+      const index = join(scratch, "index");
+      const objects = join(scratch, "objects");
+      await mkdir(objects);
+      await copyFile(await gitPath("index"), index).catch(() => {}); // stat cache; a missing index just means a full hash
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        GIT_INDEX_FILE: index,
+        GIT_OBJECT_DIRECTORY: objects,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: await gitPath("objects"),
+        GIT_OPTIONAL_LOCKS: "0",
+        // No user/system config: clean filters (e.g. LFS) and other drivers must not run or change contents.
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      };
+      await git(["add", "-A", "--", "."], env);
+      const tree = (await git(["write-tree"], env)).trim();
+      await this.rejectEscapes(cwd, git, env);
+      return tree;
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
     }
-    return hash.digest("hex");
+  }
+
+  /** A tracked path below a symlink that leads outside the workspace would let checks read or write outside it. */
+  private async rejectEscapes(cwd: string, git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<string>, env: NodeJS.ProcessEnv) {
+    const root = await realpath(cwd);
+    const links = (await git(["ls-files", "-s", "-z"], env)).split("\0").filter((e) => e.startsWith("120000 ")).map((e) => e.slice(e.indexOf("\t") + 1));
+    for (const link of links) {
+      const target = await realpath(join(cwd, link)).catch(() => undefined);
+      if (!target) continue;
+      const rel = relative(root, target);
+      if (!(rel.startsWith("..") || isAbsolute(rel)) || !(await stat(target)).isDirectory()) continue;
+      if ((await git(["ls-files", "-z", "--cached", "--", `${link}/`])).length) throw new Error(`workspace path escapes through a symlink: ${link}`);
+    }
   }
 }
