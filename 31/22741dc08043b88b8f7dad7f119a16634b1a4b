@@ -1,0 +1,63 @@
+web/src/core/model/check-scope.ts
+  s_eba6099c9c685b::t_9743666df06ceb 2,51-61
+  s_eba6099c9c685b::t_56438bc50c754c 41-50
+  s_eba6099c9c685b::t_0e556a54935718 1,3-40
+tools/validate.py
+  s_eba6099c9c685b::t_537d8bdb5330d9 146-181
+  s_eba6099c9c685b::t_4e7bc061d2b9a0 4
+docs/ai-dlc-glossary.md
+  s_eba6099c9c685b::t_9743666df06ceb 115
+web/src/core/model/kinds.ts
+  s_eba6099c9c685b::t_721cc86bb86723 161-166,171-173,440-444,446
+web/src/core/ports/checks.ts
+  s_eba6099c9c685b::t_323e884d13c521 1
+  s_eba6099c9c685b::t_721cc86bb86723 12-16
+AGENTS.md
+  s_eba6099c9c685b::t_c0ad8b768ec89d 207
+web/src/core/units/service.ts
+  s_eba6099c9c685b::t_9743666df06ceb 2,312
+web/src/core/checks/config.ts
+  s_eba6099c9c685b::t_56438bc50c754c 1-2,32-33
+  s_eba6099c9c685b::t_0e556a54935718 16-17,20-21,27-28,30,34,39
+web/src/core/checks/admission.ts
+  s_eba6099c9c685b::t_bbd8df786984ee 139
+docs/architecture.md
+  s_eba6099c9c685b::t_c0ad8b768ec89d 446-455,457,460-462
+  s_eba6099c9c685b::t_9743666df06ceb 456,458-459
+web/src/core/verification/service.ts
+  s_eba6099c9c685b::t_9743666df06ceb 14,488
+  s_eba6099c9c685b::t_bbd8df786984ee 612
+web/src/core/verification/context.ts
+  s_eba6099c9c685b::t_db708234cf0505 41
+web/src/core/adapters/workspaces/module-scope.ts
+  s_eba6099c9c685b::t_323e884d13c521 6,42,73,87-88
+  s_eba6099c9c685b::t_4c16f783733d50 89
+web/src/core/module-scope.test.ts
+  s_eba6099c9c685b::t_e78cccf019d5f4 284-346,348-371,390
+  s_eba6099c9c685b::t_69d900b696cf60 347
+  s_eba6099c9c685b::t_a47f490fcf7f9e 16,372-389
+repositories/repositories.yaml
+  s_eba6099c9c685b::t_cb3ccf9f0ae558 106-110
+web/src/ui/check-runs.tsx
+  s_eba6099c9c685b::t_9743666df06ceb 143
+web/src/core/checks/scheduler.ts
+  s_eba6099c9c685b::t_bbd8df786984ee 165
+web/src/core/checks/controller.ts
+  s_eba6099c9c685b::t_bbd8df786984ee 124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "3122741dc08043b88b8f7dad7f119a16634b1a4b",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
