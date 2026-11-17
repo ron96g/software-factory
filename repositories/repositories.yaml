@@ -89,8 +89,12 @@ spec:
   local:
     # Dedicated clone for the factory (it adds git worktrees and factory/* branches there), outside the factory root.
     path: ~/git/personal/software-factory-repos/controlplane
-  # No `git:` on purpose: without it the factory never pushes branches or opens PRs on the public
-  # telekom/controlplane repository (ADR-0023). Add `git: { url, defaultBranch: main, secretRef }` to enable that.
+  # ADR-0023: when an item enters its publish stage (after verification), its factory/* branch is pushed to the
+  # public repository and a draft PR is opened.
+  git:
+    url: https://github.com/telekom/controlplane.git
+    defaultBranch: main
+    secretRef: { name: github-token }
   index:
     enabled: true
     type: ripgrep
