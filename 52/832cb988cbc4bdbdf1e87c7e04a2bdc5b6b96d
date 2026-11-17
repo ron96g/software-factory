@@ -1,0 +1,41 @@
+docs/adr/0065-ship-publishes-the-pull-request-only.md
+  s_eba6099c9c685b::t_6840686cce68e4 6,18-20
+  s_eba6099c9c685b::t_504882ca2c22a5 1-5,7-17,21-36
+workflows/factory-loop.yaml
+  s_eba6099c9c685b::t_fde8c2599e2a57 8,16,94
+docs/adr/0003-factory-loop.md
+  s_eba6099c9c685b::t_6840686cce68e4 5
+workflows/factory-verified.yaml
+  s_eba6099c9c685b::t_fde8c2599e2a57 124-125
+web/src/ui/stage-state.test.ts
+  s_eba6099c9c685b::t_6840686cce68e4 13,23-26,28,31-36
+docs/ai-dlc-glossary.md
+  s_eba6099c9c685b::t_504882ca2c22a5 154,166-167,177
+web/src/core/factory.test.ts
+  s_eba6099c9c685b::t_1d4dab8d5f84b0 82
+  s_eba6099c9c685b::t_4a6a2505e1c88b 81
+web/src/core/checks-pr.test.ts
+  s_eba6099c9c685b::t_6840686cce68e4 184
+workflows/factory-planned.yaml
+  s_eba6099c9c685b::t_fde8c2599e2a57 143-144
+AGENTS.md
+  s_eba6099c9c685b::t_504882ca2c22a5 23,211
+workflows/factory-plan.yaml
+  s_eba6099c9c685b::t_fde8c2599e2a57 150-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "52832cb988cbc4bdbdf1e87c7e04a2bdc5b6b96d",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
