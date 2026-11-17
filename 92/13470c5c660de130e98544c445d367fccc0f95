@@ -1,0 +1,36 @@
+web/src/core/verification/service.ts
+  s_eba6099c9c685b::t_e520d0b25acaca 312-315,317-329,432,526,531-532,538-554,584,699,717,727
+  s_eba6099c9c685b::t_ac8cf20c65730b 555-582
+web/src/core/verification.test.ts
+  s_eba6099c9c685b::t_310d3b3b52cda7 551-552
+  s_eba6099c9c685b::t_2eb82860aae7ff 539-550,553-569
+web/src/core/verification/context.ts
+  s_eba6099c9c685b::t_579e3fcb6c75ce 59-70
+agents/verifier.md
+  s_eba6099c9c685b::t_579e3fcb6c75ce 14,28-31
+  s_eba6099c9c685b::t_47e442e88e2322 24
+docs/adr/0063-verification-evidence-before-the-verifier.md
+  s_eba6099c9c685b::t_675501478f84de 1-51
+skills/verification.md
+  s_eba6099c9c685b::t_6dac244febf079 12-13,15
+docs/architecture.md
+  s_eba6099c9c685b::t_d88d5e86e6eb91 406-408
+AGENTS.md
+  s_eba6099c9c685b::t_d88d5e86e6eb91 209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "9213470c5c660de130e98544c445d367fccc0f95",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
