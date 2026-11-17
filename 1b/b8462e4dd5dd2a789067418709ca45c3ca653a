@@ -1,0 +1,107 @@
+web/src/core/knowledge.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 54
+web/src/acceptance/factory.acceptance.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 103
+web/next.config.ts
+  s_eba6099c9c685b::t_c1c16f231e3eb3 6
+web/package.json
+  s_eba6099c9c685b::t_e7ea6a45bd02f7 19-20,22
+web/src/core/factory.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 10,338
+docs/adr/0060-opencode-agent-runtime.md
+  s_eba6099c9c685b::t_ed379036d6eff8 1-53,58-103
+  s_eba6099c9c685b::t_4ee5b2a73b1030 54-57
+web/src/core/factory.ts
+  s_eba6099c9c685b::t_6c21d5599d45fc 71
+  s_eba6099c9c685b::t_ad8203fa385e3a 67-68,145-146,312-320,322-338,353,512
+web/src/core/agent-chat.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 51,172,201,240,265,307,363,400,412,435
+web/src/acceptance/grounded-reviews.acceptance.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 58
+web/src/core/adapters/opencode/host.ts
+  s_eba6099c9c685b::t_cb6a98b7183670 7-9,24,195,397-398,400,444-449
+  s_eba6099c9c685b::t_ec940f035a7b3c 16,186-187,207,309-312,314-318,332,366-374
+  s_eba6099c9c685b::t_8f0717d22d000a 35-40
+  s_eba6099c9c685b::t_2570726e12f139 1-6,12-15,17-19,46-80,82-97,100-139,142-167,169-185,188-194,196-206,208-254,256,259-272,274-308,313,319-331,333-365,375-395,399,401-404,413-438,440-443,450-492,494-538,540,546-564
+  s_eba6099c9c685b::t_a070222c2506a2 81,168,439,493,539
+  s_eba6099c9c685b::t_5400bdcab83df9 98-99,257,541-545
+  s_eba6099c9c685b::t_8aa6352853bd9b 140-141,396,405-412
+  s_eba6099c9c685b::t_7f9ba19dc6233e 10-11,20-23,25-34,41-45,255,258,273
+web/src/core/retrospectives/evidence.ts
+  s_eba6099c9c685b::t_6c21d5599d45fc 41
+web/src/core/work-item-followups.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 22,50
+docs/architecture.md
+  s_eba6099c9c685b::t_53684321b87588 213-241
+web/src/core/adapters/opencode/mapping.ts
+  s_eba6099c9c685b::t_76d9f0c10d3f8f 1-64
+README.md
+  s_eba6099c9c685b::t_8e196cf71e28f0 76-77
+web/src/core/adapters/opencode/executor.ts
+  s_eba6099c9c685b::t_d9b9c5a834ed08 1-5,7-66,70-141,145,147-190,193-224,226-228,230-243,246-259,274-284
+  s_eba6099c9c685b::t_a070222c2506a2 225,229,244-245
+  s_eba6099c9c685b::t_afff676ccb07a6 6,67-69,191-192,260-273
+  s_eba6099c9c685b::t_cb6a98b7183670 142-144,146
+web/src/core/mcp.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 127
+web/src/core/agents/model-resolver.ts
+  s_eba6099c9c685b::t_d3b8c450319234 40-41
+web/src/core/retrospectives.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 259
+web/src/core/item-chat.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 12
+web/src/core/tool-loop.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 63,149
+web/src/core/opencode-runtime.test.ts
+  s_eba6099c9c685b::t_585c6159db83e0 1-25,27-69,72-195,197-200,221-238,256-261
+  s_eba6099c9c685b::t_c41107151bfbdb 26,70-71,249-253
+  s_eba6099c9c685b::t_8f0717d22d000a 201-220
+  s_eba6099c9c685b::t_afff676ccb07a6 196
+  s_eba6099c9c685b::t_f9d8fe384d6844 239-248,254-255
+web/src/core/planning-factory.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 48
+web/src/core/gate-input.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 16
+web/src/core/review-loop.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 30
+web/src/core/adapters/opencode/skills.ts
+  s_eba6099c9c685b::t_17a99f9a52df0b 1-56
+web/src/core/gate-evidence.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 108
+docs/ai-dlc-glossary.md
+  s_eba6099c9c685b::t_8e196cf71e28f0 114
+web/src/core/ports/integration.ts
+  s_eba6099c9c685b::t_50be74f84bc528 164-175,184
+web/src/core/agents/tool-loop.ts
+  s_eba6099c9c685b::t_a0f14d1e6edcd4 31-35
+  s_eba6099c9c685b::t_0dfb4459b5ef31 268,270-273
+  s_eba6099c9c685b::t_6d405dd0f8c210 87,116,134
+  s_eba6099c9c685b::t_e424af2f92a642 170-172,175-179,186,196,204,218,223,231,234,238,248
+  s_eba6099c9c685b::t_222f12b3b02951 260
+web/src/core/agents/run-harness.ts
+  s_eba6099c9c685b::t_3d0f814ba5325f 1-242
+web/src/core/readonly-tools.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 45
+AGENTS.md
+  s_eba6099c9c685b::t_37d62bb512fcb5 76-77,206
+web/src/acceptance/typed-planning-review.acceptance.test.ts
+  s_eba6099c9c685b::t_69d63e5a162eba 52
+web/package-lock.json
+  s_eba6099c9c685b::t_2d93012da23e9d 15-16,37-80,94-570,623-626,628-667,670-673,676-684,687-690,693-929,964-981,1512-1661,1726-1730,1732-1765,1796-1808,1908-3645,3648-3656,3658,3661-3669,3671,3674-3685,3721-3742,4081-4089,4284-4492,4495,4498,4501-4504,4506,4508,4514,4517-4520,4524,4527,4530,4533-4536,4538,4540,4543,4546,4549-4552,4554,4556,4559,4562,4565-4568,4572,4575,4578,4581-4584,4586,4588,4591,4594,4597-4600,4602-4603,4605,4611,4614-4617,4621,4627,4630-4636,4652-4672,4706-4744,4755-4783,4796-4820,4874-4933,4943-4963,5089-5112,5128-5154,5174-5182,5249-5277,5798-5806,5830-6223,6238-6252,6259-6264,6271-6276,6290-6353,6414-6426,6467-6472,6554-6565,6605-6658,6680-6719,6738-6749,6756-6826,6875-6951,6964-7020,7100-7111,7122-7146,7167-7192,7205-7226,7243-7251,7319-7372,7383-7421,7440-7454,7461-7484,7500-7549,7562-7618,7649-7657,7692-7723,8671-8695,8721-8874,8881-8889,9018-9228,9262-9334,9337-9341,9349-9393,9443-9458,9665-9712,9724-9734,9971-9996,10072-10168,10203-10214,10221-10240,10253-10265,10459-10638,10641-10643,10646,10649,10652-10662,10664,10667-10670,10672-10673,10676-10685,10687-10689,10691,10708-10753,10833-10848,10874-10885,10895-10909,10930-10935,10951-10964,11046-11054,11206-11214,11252-11309,11325-11438,11445-11522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1bb8462e4dd5dd2a789067418709ca45c3ca653a",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
