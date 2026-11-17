@@ -1,0 +1,63 @@
+docs/adr/0064-check-evidence-binds-to-check-definition.md
+  s_eba6099c9c685b::t_f4789f2fba5f49 1-26,29-34,38,41-48
+  s_eba6099c9c685b::t_bc658cf74c814a 27-28,35-37,39-40
+web/src/core/units.test.ts
+  s_eba6099c9c685b::t_106876ad88f8a3 23,69
+web/src/core/verification/context.ts
+  s_eba6099c9c685b::t_bc658cf74c814a 7,31
+web/src/core/checks/admission.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 9,136
+docs/adr/0061-verification-tiers-and-side-effect-free-checks.md
+  s_eba6099c9c685b::t_3a57a6710b6f61 4,119
+web/src/core/checks/actions.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 8,114
+web/src/core/ports/verification.ts
+  s_eba6099c9c685b::t_a4b3d9a50b98b9 50-51
+web/src/core/checks/controller.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 10,120
+web/src/acceptance/durable-recovery.acceptance.test.ts
+  s_eba6099c9c685b::t_106876ad88f8a3 20,58
+web/src/core/recovery/check-authorization.ts
+  s_eba6099c9c685b::t_d67729f2b7a353 6,46
+web/src/core/checks/scheduler.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 10,206
+  s_eba6099c9c685b::t_d67729f2b7a353 151
+web/src/core/units/service.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 13,312
+web/src/core/verification.test.ts
+  s_eba6099c9c685b::t_bc658cf74c814a 633-634
+  s_eba6099c9c685b::t_106876ad88f8a3 18,60
+  s_eba6099c9c685b::t_cd06c0c12eb985 598-632,635-640
+web/src/core/verification/service.ts
+  s_eba6099c9c685b::t_3d92feffe0176a 16,151,338,421,538,602
+  s_eba6099c9c685b::t_584dbb2f02e59d 385,749-752
+docs/ai-dlc-glossary.md
+  s_eba6099c9c685b::t_3a57a6710b6f61 209
+web/src/core/checks/definition-version.ts
+  s_eba6099c9c685b::t_bc658cf74c814a 7-8,12,15-21
+  s_eba6099c9c685b::t_a314e60661aee0 1-6,9-11,13-14
+docs/adr/0042-reliable-verification-and-recovery.md
+  s_eba6099c9c685b::t_3a57a6710b6f61 4
+AGENTS.md
+  s_eba6099c9c685b::t_3a57a6710b6f61 210
+docs/architecture.md
+  s_eba6099c9c685b::t_3a57a6710b6f61 541-543
+docs/adr/0062-check-worker-and-cross-process-coordination.md
+  s_eba6099c9c685b::t_2ab285a8ca446e 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "19df0440782bc657ec137118ddbf37c7a8e8a131",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
