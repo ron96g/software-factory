@@ -136,7 +136,7 @@ export function checkRunValidator(scopes?: ModuleScopePlanner, recoveryChecks?: 
         errors.push("CheckRun repository reference/version is not current");
       } else {
         try {
-          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes);
+          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes, spec.workflow?.purpose);
           if (!config) throw new Error("check workspace is unavailable");
           if (config.command !== spec.command || config.timeoutMs !== spec.timeoutMs ||
               config.resultFormat !== spec.resultFormat || JSON.stringify(config.scope) !== JSON.stringify(spec.scope)) {

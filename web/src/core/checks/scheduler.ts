@@ -162,7 +162,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
         await this.d.recoveryChecks.authorize({ item, origin, repository, workspace, check: request.check, caller, existing: existing ?? undefined });
       }
       if (existing) return existing;
-      const config = await resolveCheckConfig(repository, request.check, workspace, this.d.scopes);
+      const config = await resolveCheckConfig(repository, request.check, workspace, this.d.scopes, origin.purpose);
       if (this.d.redactor.redact(config.command) !== config.command) throw new StoreError("check command contains a factory secret", "Invalid");
 
       const profile = repository.spec.sandboxRef

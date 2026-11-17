@@ -121,7 +121,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     }
     let config: Awaited<ReturnType<typeof resolveCheckConfig>>;
     try {
-      config = await resolveCheckConfig(repository, run.spec.check, workspace, d.scopes);
+      config = await resolveCheckConfig(repository, run.spec.check, workspace, d.scopes, run.spec.workflow?.purpose);
     } catch (error) {
       return { reason: error instanceof Error ? error.message : "check configuration is invalid" };
     }

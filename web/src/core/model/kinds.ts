@@ -158,13 +158,19 @@ export interface RepositorySpec {
   observability?: Record<string, unknown>;
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
-  /** ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`. */
-  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string; moduleScoped?: boolean }>;
+  /**
+   * ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`.
+   * `scoped` (ADR-0061): the command takes a module selection whose scope follows the verification tier.
+   * `moduleScoped` (legacy, ADR-0044): always the affected scope, whatever the tier.
+   */
+  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
   moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
   verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[];
     /** ADR-0047: configured checks an approved Unit manifest may require as construction-readiness evidence. */
-    readinessChecks?: string[] };
+    readinessChecks?: string[];
+    /** ADR-0061: raises a scoped check's scope in a tier above the tier's default, e.g. `{ verification: { tests: "full" } }`. */
+    minScope?: Partial<Record<VerificationTier, Record<string, "affected" | "full">>> };
   /** Workspace preparation (ADR-0021): commands run once in a fresh workspace, e.g. `cd web && npm ci`. */
   workspace?: { baseRef?: string; setup?: string[] };
 }
@@ -431,8 +437,13 @@ export interface CheckWorkflowOrigin {
   baselineCommit?: string;
 }
 
+/** ADR-0061: when a check runs decides how much a scoped check covers. */
+export type VerificationTier = "readiness" | "preparation" | "verification";
+/** `changed`: modules changed against the pinned base; `affected`: plus transitive dependents (ADR-0044); `full`: all. */
+export type ModuleScopeMode = "changed" | "affected" | "full";
+
 export interface ModuleCheckScope {
-  mode: "affected" | "full";
+  mode: ModuleScopeMode;
   baseCommit: string;
   graphHash: string;
   modules: string[];

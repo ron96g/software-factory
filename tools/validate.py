@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Load all factory resources, validate their envelope, and resolve every *Ref."""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -141,6 +142,42 @@ def main():
                     warnings.append(message + "; every item needs a waiver until it is configured")
                 else:
                     errors.append(message)
+
+        # ADR-0061: tier-scoped checks and minScope (same rules as web/src/core/model/check-scope.ts and checks/config.ts).
+        make_target = re.compile(r"^make [a-zA-Z0-9][a-zA-Z0-9_-]*$")
+        for check, value in commands.items():
+            if not isinstance(value, dict):
+                continue
+            scoped, legacy = value.get("scoped") is True, value.get("moduleScoped") is True
+            if scoped and legacy:
+                errors.append(f"{path}: {name}/{check} sets both scoped and the legacy moduleScoped")
+            if (scoped or legacy) and (not spec.get("moduleScope") or not make_target.match(str(value.get("command", "")))):
+                errors.append(f"{path}: {name}/{check} is module-scoped and requires moduleScope policy and a single named make target")
+            if legacy:
+                warnings.append(f"{path}: {name}/{check} uses legacy moduleScoped (always affected scope); migrate to scoped: true (ADR-0061)")
+        min_scope = policy.get("minScope")
+        if min_scope is not None:
+            if not isinstance(min_scope, dict):
+                errors.append(f"{path}: {name}: verification.minScope must be an object of tiers")
+                min_scope = {}
+            for tier, checks in min_scope.items():
+                if tier not in ("readiness", "preparation", "verification"):
+                    errors.append(f"{path}: {name}: verification.minScope: unknown tier '{tier}'")
+                    continue
+                if not isinstance(checks, dict):
+                    errors.append(f"{path}: {name}: verification.minScope.{tier} must map checks to a scope")
+                    continue
+                for check, scope in checks.items():
+                    value = commands.get(check)
+                    where = f"{path}: {name}: verification.minScope.{tier}.{check}"
+                    if scope not in ("affected", "full"):
+                        errors.append(f"{where} must be 'affected' or 'full'")
+                    elif value is None:
+                        errors.append(f"{where}: check is not configured")
+                    elif isinstance(value, dict) and value.get("moduleScoped") is True:
+                        errors.append(f"{where}: legacy moduleScoped checks always run affected; declare scoped: true")
+                    elif not (isinstance(value, dict) and value.get("scoped") is True):
+                        errors.append(f"{where}: only scoped checks have a scope")
 
     for w in warnings:
         print("WARNING", w)

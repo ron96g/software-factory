@@ -443,6 +443,23 @@ affected-module coverage; `full-build` and `full-tests` remain available when ac
 Changing repository policy invalidates existing approved contracts and requires fresh human plan review.
 See [ADR-0044](adr/0044-affected-module-verification.md).
 
+### Verification tiers (ADR-0061)
+Checks declared with `scoped: true` take their scope from the **tier** of the CheckRun's purpose instead of a per-check
+flag. The tier table is data (`model/check-scope.ts`), and the planner receives the requested selection:
+
+| Purpose (tier) | Default scope |
+|---|---|
+| `unit-readiness` (readiness) | `changed`: changed modules only |
+| `preparation`, `verification` | `affected`: changed modules plus transitive dependents |
+| standalone, preflight, diagnostic | `affected` (unchanged) |
+
+`verification.minScope` raises a scoped check's scope per tier (e.g. `minScope: { verification: { tests: full } }`); it never
+lowers it. Shared, unknown or empty changes still select `full` in every tier. Legacy `moduleScoped: true` checks keep
+`affected` everywhere, and `validate.py` warns about them. Evidence counts only for its exact purpose and only with at least that purpose's scope (`scopeSatisfies`), so
+readiness results never count as verification evidence. Admission and execution re-resolve the scope with the run's purpose, so a
+CheckRun cannot carry another tier's scope. Side-effect-free checks, caches and the publication tier follow
+(X41b–d); the check worker is ADR-0062.
+
 ## Direct agent conversations (ADR-0036)
 
 **Agent chats** lists standalone conversations; an enabled Agent also offers **Start chat**. The support engineer

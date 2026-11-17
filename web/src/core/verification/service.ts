@@ -11,6 +11,7 @@ import { SandboxUnavailableError, StoreError, isStoreError, type AgentBaselineRe
 import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
 import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
 import { parseUnitManifest, unitChecks } from "../model/units.ts";
+import { isScoped, scopeSatisfies } from "../model/check-scope.ts";
 import { gapId, verificationPolicyGaps, type PolicyGap } from "../model/verification-policy.ts";
 
 /** Required plan checks without a configured command: they can only ever be Waived, so the plan reviewer must know. */
@@ -484,7 +485,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
       const ws = candidate.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
       const passed = runs.some((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.repositoryVersion === repo.metadata.resourceVersion &&
-        r.spec.check === check && r.spec.workflow?.purpose === "verification" && r.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
+        r.spec.check === check && scopeSatisfies(repo, check, r, "verification") && r.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
         r.status?.outcome === "Passed" && r.status.phase === "Completed" && !r.status.logsIncomplete &&
         r.status.finalSnapshot === r.spec.snapshot && r.spec.environment.runtime === candidate.health.runtime &&
         r.spec.environment.version === candidate.health.version && r.spec.environment.profileVersion === candidate.profiles[repository]);
@@ -608,8 +609,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     const check = input.check.startsWith(`${repository.metadata.name}/`) ? input.check.slice(repository.metadata.name.length + 1) : input.check;
     const diagnostic = caller.spec.recovery?.mode === "diagnosis";
     if (baseline && (!diagnostic || !workspace.status?.baseCommit)) return invalid("baseline check requires a diagnostic run and pinned baseline");
-    const config = repository.spec.checks?.[check];
-    if (baseline && typeof config === "object" && config.moduleScoped) return invalid("candidate-scoped module selection cannot be applied to a baseline");
+    if (baseline && repository.spec.checks?.[check] !== undefined && isScoped(repository, check)) return invalid("candidate-scoped module selection cannot be applied to a baseline");
     const purpose = baseline ? "baseline" : diagnostic ? "diagnostic" : "unit-readiness";
     const wf = await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item));
     const id = `${repository.metadata.name}/${check}`;
