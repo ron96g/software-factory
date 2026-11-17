@@ -20,7 +20,7 @@ A **software factory** that implements the **AI-DLC** (AI-Driven Development Lif
   **transcripts** are stored separately in an append-only log (ADR-0012).
 - **Factory loop** (diagram: `docs/ai-dlc-glossary.md`):
   input (manual | Jira | GitHub | monitoring) → classify → triage → spec → spec-review [human] → implement →
-  code-review [human] → verify → ship [human] → monitor → repeat
+  code-review [human] → verify → ship (draft PR) [human]; monitor → repeat returns with v0.6 (ADR-0065)
 - **UI:** a dashboard (table) of WorkItems. You can create items manually, sync them from sources, answer clarifications
   (which unblocks items), and approve or reject gates.
 - **code-researcher:** a shared, read-only agent that any agent (mainly the triager and the SRE) can delegate to.
@@ -208,6 +208,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X42 | Check worker | (a) store-backed change feed for all controllers and SSE; (b) store-backed workspace lock; (c) separate check worker with fenced CheckRun leases, reaper, concurrency limits (ADR-0062) | A web restart doesn't interrupt checks; a stale worker can't write results; agent mutations and checks never overlap across processes | Planned |
 | X43 | Evidence before the verifier | Entering the verify stage collects the plan's checks before the verifier runs; the verifier evaluates them (no `run_check`); the gate only confirms (ADR-0063) | The verification report describes the evidence the human approves; no authoritative check runs twice because an agent ended | ✅ |
 | X44 | Check definition version | Plans and check evidence bind to the repository's check definition (`local`, `workspace`, `sandboxRef`, `checks`, `moduleScope`, `verification`), not the whole Repository; a stale preflight is rerun in place before publication (ADR-0064) | Adding `git:` to a repository in flight needs no plan re-confirmation and no new checks | ✅ |
+| X45 | Ship publishes only | `ship` has no agent steps: it opens the draft PR and a human confirms it; `release` step, `monitor` stage and the monitor → classify loop are removed until v0.6 (ADR-0065) | An item is Done after its PR is confirmed; nothing waits on unavailable release tools | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

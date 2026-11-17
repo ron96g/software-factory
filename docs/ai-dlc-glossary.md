@@ -151,8 +151,7 @@ flowchart LR
     codeReview -- reject --> implement
     verify -- fail --> implement
   end
-  verify --> ship{{"ship<br/>HUMAN"}} --> monitor
-  monitor -- "repeat (signal)" --> feedback
+  verify --> ship{{"ship: draft PR<br/>HUMAN"}} --> done([Done])
 ```
 
 | Stage | AI-DLC phase | Agent | Skill | Output artifact | Gate |
@@ -164,9 +163,8 @@ flowchart LR
 | **implement** | Construction (Bolt) | architect, developer | domain-driven-design, test-driven-development | `domain-model`, `source-code` | – |
 | **code-review** | Construction (Mob Construction) | reviewer | code-review | `review-report` | **human**: tech lead, reject → implement |
 | **verify** | Construction | verifier | verification | `verification-report` | automated: tests, acceptance criteria, security; fail → implement |
-| **ship** | Operations | release-manager | release-management | `release` | **human**: ops lead |
-| **monitor** | Operations | sre | observability | `signal` | automated: SLOs, error budget; fail → rollback + feedback |
-| **repeat** | – | – | – | `signal` (source: feedback) | – |
+| **ship** | Operations | – (publishes the draft PR) | – | pull request | **human**: ops lead confirms the PR, reject → implement (ADR-0065) |
+| **monitor**, **repeat** | Operations | sre | observability | `signal` | planned for v0.6; not in the current workflows (ADR-0065) |
 
 | Term | Definition |
 |---|---|
@@ -176,7 +174,7 @@ flowchart LR
 | **Review report** | Findings marked as blocking or non-blocking. The AI pre-reviews, and a human decides. |
 | **Verification report** | A trace from each acceptance criterion to a test and its result. |
 | **Release** | A version, changelog, rollout plan, and rollback plan. |
-| **Feedback** | A signal emitted by monitor. It closes the loop. |
+| **Feedback** | A signal emitted by monitor. It closes the loop (v0.6; until then `monitoring-feedback` items are created by sync or by hand). |
 | **Service desk workflow** | `servicedesk`: classify → investigate (code research + `support-analysis`) → respond (`customer-response`) → response-review (**human**) → publish-response (**fresh human visibility review**, then delivery). Reject returns to respond; automatic ticket synchronization stays read-only (ADR-0040). |
 | **Publication review** | A fresh Approval of exact ticket response evidence, public/internal visibility and an optional Jira transition. Earlier response approval alone never authorizes publication. |
 | **Ticket transition** | A Jira-permitted action ID moving the current ticket to a target status. Humans confirm it independently or after reply delivery; status names are not guessed or hardcoded. |

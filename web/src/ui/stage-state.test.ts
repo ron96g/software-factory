@@ -10,7 +10,7 @@ const detail = (status: WorkItem["status"], extra: Partial<WorkItemDetail> = {})
   evidence: { items: [] } as unknown as WorkItemDetail["evidence"], events: [], knowledge: [],
   stages: [
     { name: "verify", lifecyclePhase: "construction", gate: "verified-checks", steps: [{ name: "verify-against-spec", agent: "verifier" }] },
-    { name: "ship", lifecyclePhase: "operations", gate: "human-approval", steps: [{ name: "release", agent: "release-manager" }], publishes: true },
+    { name: "ship", lifecyclePhase: "operations", gate: "human-approval", steps: [], publishes: true },
   ],
   repositories: [{ name: "controlplane", publishable: false }, { name: "software-factory", publishable: true }],
   ...extra,
@@ -20,14 +20,20 @@ const run = (name: string, stage: string, step: string, status: AgentRun["status
 const pr = (status: OutboxMessage["status"]): OutboxMessage =>
   ({ apiVersion: "v", kind: "OutboxMessage", metadata: { name: "item-ship-r31-pr-software-factory" }, spec: { action: "open-pull-request", payload: {} }, status } as unknown as OutboxMessage);
 
-test("a stage waiting on unavailable agent tools says it won't resolve by itself; unconfigured publication is explained", () => {
-  const d = detail({ phase: "Waiting", stage: "ship", round: 31, message: "Waiting instead of simulating: agent tools [shell, git, kubectl] are not available (ADR-0019)." },
-    { runs: [run("item-ship-0-r31", "ship", "release", { phase: "Pending" })], outbox: [pr({ phase: "Delivered", result: { url: "https://x/pull/1" } })] });
-  const s = deriveStageState(d, [], "ship");
+test("a stage waiting on unavailable agent tools says it won't resolve by itself", () => {
+  const d = detail({ phase: "Waiting", stage: "verify", round: 30, message: "Waiting instead of simulating: agent tools [shell] are not available (ADR-0019)." },
+    { runs: [run("item-verify-0-r30", "verify", "verify-against-spec", { phase: "Pending" })] });
+  const s = deriveStageState(d, [], "verify");
   assert.equal(s.status, "active");
-  assert.match(s.waitingFor!, /agent tools \[shell, git, kubectl\] are not available/);
+  assert.match(s.waitingFor!, /agent tools \[shell\] are not available/);
   assert.match(s.needsAction!, /does not resolve by itself/);
   assert.equal(s.steps[0].state, "Pending");
+});
+
+test("a publish-only stage lists its publication per repository; an unconfigured one is explained", () => {
+  const d = detail({ phase: "AwaitingApproval", stage: "ship", round: 31 }, { outbox: [pr({ phase: "Delivered", result: { url: "https://x/pull/1" } })] });
+  const s = deriveStageState(d, [], "ship");
+  assert.deepEqual(s.steps, []);
   assert.deepEqual(s.publication.map((p) => [p.repository, p.state]), [["controlplane", "not-configured"], ["software-factory", "Delivered"]]);
   assert.match(s.publication[0].detail, /changes stay in the workspace/);
   assert.equal(s.publication[1].url, "https://x/pull/1");

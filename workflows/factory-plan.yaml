@@ -147,22 +147,9 @@ spec:
     - name: operations
       stages:
         - name: ship
-          publish: { pullRequest: { draft: true, onConflict: { next: implement, maxAttempts: 2 } } }   # ADR-0053
-          steps:
-            - name: release
-              agentRef: { name: release-manager }
-              skillRefs: [{ name: release-management }]
-              inputs: [{ artifactRef: { name: verification-report } }, { artifactRef: { name: source-code } }]
-              outputs: [{ artifactRef: { name: release } }]
+          # ADR-0065: ship only publishes (draft PR, ADR-0023/0053); a human confirms it. Monitoring returns with v0.6.
+          publish: { pullRequest: { draft: true, onConflict: { next: implement, maxAttempts: 2 } } }
           gate:
             type: human-approval
             approvers: [{ role: ops-lead }]
             onReject: { next: implement }
-        - name: monitor
-          steps:
-            - name: observe
-              agentRef: { name: sre }
-              skillRefs: [{ name: observability }]
-              inputs: [{ artifactRef: { name: release } }]
-              outputs: [{ artifactRef: { name: signal } }]
-          gate: { type: automated, checks: [slo-healthy, error-budget] }

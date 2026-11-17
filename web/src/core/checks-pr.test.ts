@@ -181,7 +181,7 @@ test("ADR-0053: a PR that conflicts with the moved base is not opened; the base 
     assert.equal(d.workItem.status?.retries?.["base-conflict"], 1);
     assert.ok(d.events.some((e) => e.spec.reason === "BaseConflict" && /page\.tsx/.test(e.spec.message)));
     const conflictRound = prs[0].metadata.name.match(/-ship-r(\d+)-pr-/)![1];
-    assert.ok(!d.runs.some((r) => r.metadata.name.endsWith(`-ship-0-r${conflictRound}`)), "the release agent never ran on the conflicting candidate");
+    assert.ok(!d.approvals.some((a) => a.metadata.name.endsWith(`-ship-r${conflictRound}`)), "the conflicting candidate never reached the ship gate");
     const codeRuns = d.runs.filter((r) => r.spec.step === "write-code");
     assert.ok(codeRuns.length >= 2, "implement ran again to resolve the conflict");
   } finally {
