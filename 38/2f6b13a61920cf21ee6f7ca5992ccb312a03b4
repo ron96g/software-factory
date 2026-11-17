@@ -1,0 +1,38 @@
+docs/adr/0061-verification-tiers-and-side-effect-free-checks.md
+  s_eba6099c9c685b::t_a00042cc907762 1-2,4-48,57-58,68-77,84-88,95-96,103,110-111,120-125,127-128,132,135-155
+  s_eba6099c9c685b::t_dfa3ffbbf57dfa 89-94,97-102,104-109,112-119,126,129-131,133-134
+  s_eba6099c9c685b::t_d4e0bebb6105b3 3,49-50
+  s_eba6099c9c685b::t_ef3b7bb2dabace 51-56,59-67,78-83
+docs/adr/0062-check-worker-and-cross-process-coordination.md
+  s_eba6099c9c685b::t_3e647fcc25770b 1-2,4-26,42-43,46-47,61,63-65,82,85-91,93-99,104,106-110,115-119,124-141
+  s_eba6099c9c685b::t_dfa3ffbbf57dfa 27-41,44-45,48-60,62,66-81,83-84,100-103,105,111-114,120-123
+  s_eba6099c9c685b::t_e1175a52d22968 92
+  s_eba6099c9c685b::t_d4e0bebb6105b3 3
+AGENTS.md
+  s_eba6099c9c685b::t_d4e0bebb6105b3 207-208
+docs/adr/0047-complete-units-before-code-review.md
+  s_eba6099c9c685b::t_d4e0bebb6105b3 4
+docs/adr/0042-reliable-verification-and-recovery.md
+  s_eba6099c9c685b::t_d4e0bebb6105b3 4
+docs/ai-dlc-glossary.md
+  s_eba6099c9c685b::t_d4e0bebb6105b3 115,117
+  s_eba6099c9c685b::t_079ba46cb3182f 116
+docs/adr/0044-affected-module-verification.md
+  s_eba6099c9c685b::t_d4e0bebb6105b3 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "382f6b13a61920cf21ee6f7ca5992ccb312a03b4",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
