@@ -1,6 +1,7 @@
 # ADR-0047: Complete approved Units before code review
 
 - **Status:** Accepted
+- **Amended by:** ADR-0061
 - **Date:** 2026-11-14
 - **Deciders:** project owner
 - **Extends:** ADR-0024, ADR-0042, ADR-0043, ADR-0046

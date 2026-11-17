@@ -1,6 +1,7 @@
 # ADR-0044: Affected-module verification
 
 - **Status:** Accepted
+- **Amended by:** ADR-0061
 - **Date:** 2026-11-13
 - **Deciders:** Maintainers
 - **Supersedes:** ADR-0042's unconditional full Controlplane build/test requirement only.
