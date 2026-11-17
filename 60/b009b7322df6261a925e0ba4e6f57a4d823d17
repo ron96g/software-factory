@@ -1,0 +1,20 @@
+repositories/repositories.yaml
+  s_eba6099c9c685b::t_d810e503a34bff 94-97
+  s_eba6099c9c685b::t_32a29735a28abc 92-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "60b009b7322df6261a925e0ba4e6f57a4d823d17",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
