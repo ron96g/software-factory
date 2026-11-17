@@ -566,6 +566,15 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
       if (!check.spec.workflow || !affected.has(check.spec.workflow.stage) || check.metadata.labels?.[LABEL_SUPERSEDED]) continue;
       await d.writer.update<CheckRun>({ ...check, metadata: { ...check.metadata, labels: { ...check.metadata.labels, ...supersede } } });
     }
+    // Questions and approval requests of restarted stages can no longer be acted on; history keeps them as superseded.
+    for (const c of await d.reader.list<Clarification>("Clarification", { namespace: ns, ownedBy: owned })) {
+      if (c.spec.answers?.length || !affected.has(c.spec.stage) || c.metadata.labels?.[LABEL_SUPERSEDED]) continue;
+      await d.writer.update<Clarification>({ ...c, metadata: { ...c.metadata, labels: { ...c.metadata.labels, ...supersede } } });
+    }
+    for (const a of await d.reader.list<Approval>("Approval", { namespace: ns, ownedBy: owned })) {
+      if (a.spec.decision || !affected.has(a.spec.stage) || a.metadata.labels?.[LABEL_SUPERSEDED]) continue;
+      await d.writer.update<Approval>({ ...a, metadata: { ...a.metadata, labels: { ...a.metadata.labels, ...supersede } } });
+    }
     await ensureWorkspaces(wi);
     const round = (wi.status?.round ?? 0) + 1;
     return write(

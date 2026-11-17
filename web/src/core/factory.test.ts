@@ -186,6 +186,8 @@ test("restart from a stage: new round, earlier output of restarted stages supers
     assert.ok(after.events.some((e) => e.spec.reason === "Restarted"));
     assert.ok(after.workItem.status!.round! > before.workItem.status!.round!);
     await assert.rejects(f.app.decideApproval(p, before.workItem.status!.blockedBy!.name, "approve"), /no longer open/, "old round's approval is inert");
+    assert.ok(after.approvals.find((x) => x.metadata.name === before.workItem.status!.blockedBy!.name)?.metadata.labels?.["factory.ai-dlc.io/superseded"],
+      "the undecided approval of a restarted stage is superseded, not left pending");
     const label = (n: string) => after.artifacts.find((a) => a.metadata.name === n)?.metadata.labels?.["factory.ai-dlc.io/superseded"];
     assert.ok(label(oldSpec.metadata.name), "spec from before the restart is superseded");
     assert.equal(label(oldNotes.metadata.name), undefined, "triage output (before the restart stage) stays current");
@@ -193,6 +195,23 @@ test("restart from a stage: new round, earlier output of restarted stages supers
     assert.notEqual(newSpecRun.metadata.name, oldSpec.spec.producedBy!.agentRunRef.name);
     const superseded = new Set(after.artifacts.filter((a) => a.metadata.labels?.["factory.ai-dlc.io/superseded"]).map((a) => a.metadata.name));
     assert.ok(Object.keys(newSpecRun.status!.provenance!.inputs).every((n) => !superseded.has(n)), "no superseded inputs");
+  });
+});
+
+test("restart supersedes an open clarification of a restarted stage; answered history stays", async () => {
+  await withFactory({}, async (f) => {
+    const wi = await f.app.createWorkItem(p, { title: "Thin item", description: "short", workflowRef: "factory-loop" });
+    const blocked = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
+    const open = blocked.clarifications[0];
+    await f.app.restartWorkItem(p, wi.metadata.name, blocked.workItem.status!.stage!);
+    const after = await waitFor(async () => {
+      const x = await f.app.getWorkItem(p, wi.metadata.name);
+      return x?.workItem.status?.restartHandled ? x : undefined;
+    }, "restart handled");
+    const old = after.clarifications.find((c) => c.metadata.name === open.metadata.name)!;
+    assert.ok(old.metadata.labels?.["factory.ai-dlc.io/superseded"], "superseded instead of open forever");
+    assert.equal(old.spec.answers, undefined);
+    await assert.rejects(f.app.answerClarification(p, old.metadata.name, ["late"]));
   });
 });
 

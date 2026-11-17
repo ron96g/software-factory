@@ -1,4 +1,5 @@
 import type { OutboxMessage, Source, WorkItem, Clarification } from "../model/kinds.ts";
+import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { keyOf, ownerOf, parseKey } from "../model/meta.ts";
 import {
@@ -169,11 +170,11 @@ export function createClarificationSyncController(d: {
     watches: ["Clarification"],
     keysFor: (e) => (e.type === "DELETED" ? [] : [keyOf(e.object)]),
     initialKeys: async () =>
-      (await d.reader.list<Clarification>("Clarification")).filter((c) => !c.spec.answers?.length).map(keyOf),
+      (await d.reader.list<Clarification>("Clarification")).filter((c) => !c.spec.answers?.length && !c.metadata.labels?.[LABEL_SUPERSEDED]).map(keyOf),
     async reconcile(key) {
       const { namespace, name } = parseKey(key);
       const c = await d.reader.get<Clarification>("Clarification", namespace, name);
-      if (!c || c.spec.answers?.length) return;
+      if (!c || c.spec.answers?.length || c.metadata.labels?.[LABEL_SUPERSEDED]) return;
       const wiRef = ownerOf(c, "WorkItem");
       const wi = wiRef ? await d.reader.get<WorkItem>("WorkItem", namespace, wiRef.name) : null;
       if (!wi?.spec.externalRef) return; // manual items are answered in the UI only

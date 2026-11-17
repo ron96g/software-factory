@@ -314,6 +314,8 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
    * for the approved candidate before the verifier runs, so it evaluates complete evidence.
    */
   async beforeStage(item: WorkItem, stage: CompiledStage): Promise<GateDecision> {
+    const refresh = await this.refreshPreflight(item, stage);
+    if (refresh) return refresh;
     const permission = await this.stagePermission(item, stage);
     if (permission.action !== "advance" || !item.spec.workflowRef) return permission;
     const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
@@ -323,6 +325,45 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const candidate = await this.candidateApproved(item, contract);
       return await this.collectChecks(item, stage, contract, candidate, false) ?? { action: "advance" };
     } catch (e) { return this.checkError(e); }
+  }
+
+  /** The first approved preflight without current passing evidence (definitions, plan, environment), if any. */
+  private stalePreflight(item: WorkItem, contract: ValidationContract, state: CandidateState, runs: CheckRun[]): string | undefined {
+    return contract.plan.preflight.find((id) => {
+      const [repository, check] = id.split("/");
+      const ws = state.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
+      const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
+      return !runs.some((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid && r.spec.workspaceUid === ws.metadata.uid &&
+        r.spec.repositoryVersion === repo.metadata.resourceVersion && r.spec.workflow?.planFingerprint === contract.fingerprint &&
+        r.spec.workflow.purpose === "preflight" && r.spec.check === check && r.status?.phase === "Completed" && r.status.outcome === "Passed" &&
+        !r.status.logsIncomplete && r.spec.environment.runtime === state.health.runtime && r.spec.environment.version === state.health.version &&
+        r.spec.environment.profileVersion === state.profiles[repository]);
+    });
+  }
+
+  /**
+   * ADR-0042 §4: entering a stage after preflight with missing or stale preflight evidence (e.g. a definition change
+   * after plan re-confirmation) reruns preflight in place, within its budgets, instead of asking a human to restart
+   * preflight and discard all later work. Undefined when nothing needs refreshing or the permission check decides.
+   */
+  private async refreshPreflight(item: WorkItem, stage: CompiledStage): Promise<GateDecision | undefined> {
+    if (!item.spec.workflowRef) return undefined;
+    const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+    if (!wf.verification) return undefined;
+    const position = (name: string) => wf.stages.findIndex((s) => s.name === name);
+    try {
+      if (position(stage.name) <= position(verificationPolicy(wf).preflightStage)) return undefined;
+      if ((await this.beforeResume(item)).action === "wait") return { action: "wait", retryAfterMs: 1000 };
+      const contract = await this.plan(item, true);
+      const state = await this.candidate(item, contract);
+      if (!state.health.available) return undefined;
+      const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
+      if (!this.stalePreflight(item, contract, state, runs)) return undefined;
+      return await this.collectChecks(item, stage, contract, state, true);
+    } catch (e) {
+      if (isStoreError(e, "Invalid")) return undefined; // e.g. no approved plan: the permission check reports it
+      return this.checkError(e);
+    }
   }
 
   /** Side-effect free: may the item be at this stage with its current plan and candidate? */
@@ -339,16 +380,8 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const state = await this.candidate(item, contract);
       if (!state.health.available) return invalid("verification environment is unavailable; restore it before construction");
       const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
-      for (const id of contract.plan.preflight) {
-        const [repository, check] = id.split("/");
-        const ws = state.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
-        const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
-        if (!runs.some((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid && r.spec.workspaceUid === ws.metadata.uid &&
-            r.spec.repositoryVersion === repo.metadata.resourceVersion && r.spec.workflow?.planFingerprint === contract.fingerprint &&
-            r.spec.workflow.purpose === "preflight" && r.spec.check === check && r.status?.phase === "Completed" && r.status.outcome === "Passed" &&
-            !r.status.logsIncomplete && r.spec.environment.runtime === state.health.runtime && r.spec.environment.version === state.health.version &&
-            r.spec.environment.profileVersion === state.profiles[repository])) return invalid(`preflight ${id} is missing or stale; restart preflight before construction`);
-      }
+      const stale = this.stalePreflight(item, contract, state, runs);
+      if (stale) return invalid(`preflight ${stale} is missing or stale for the current definitions and environment; it is rerun when the next stage starts`);
       if (contract.unitPolicy && wf.stages.findIndex((s) => s.name === stage.name) > wf.stages.findIndex((s) => s.name === contract.policy.implementationStage)) {
         if (!this.d.completeness) return invalid("unit completeness barrier is unavailable; review cannot start");
         const barrier = await this.d.completeness.beforeCandidate(item, stage, contract);

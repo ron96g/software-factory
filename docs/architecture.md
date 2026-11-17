@@ -390,7 +390,11 @@ generic UnknownFailure. Standalone evidence does not advance/restart items or sa
 X23b/c add the explicitly selected `factory-verified` workflow. Its architect writes a JSON `validation-plan` mapping
 every acceptance criterion to named policy checks. Human spec-review approves its exact artifact/specification,
 workflow versions and repository policy, then same-environment preflight runs before construction. Restarting directly
-into implementation cannot bypass this policy. Human code-review binds the candidate tree and environment; generation
+into implementation cannot bypass this policy: entering any later stage with missing or stale preflight evidence (e.g.
+after a definition change and plan re-confirmation) reruns preflight in place, within its budgets, instead of asking a
+human to restart preflight and discard later work (ADR-0042 §4). A restart marks the restarted stages' open
+Clarifications and undecided Approvals as superseded, like their runs, artifacts and CheckRuns; they can't be acted on
+and are no longer polled on synced tickets. Human code-review binds the candidate tree and environment; generation
 or formatting during a later check invalidates the review instead of silently publishing changed code.
 
 [ADR-0043](adr/0043-candidate-preparation-and-drift-recovery.md) adds optional named **candidate preparation** checks

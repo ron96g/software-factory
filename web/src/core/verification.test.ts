@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { originAuthorized } from "./checks/origin.ts";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentRun, Approval, Artifact, CheckOutcome, CheckRun, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
@@ -382,8 +383,10 @@ test("stage entry cannot bypass human plan review or current same-environment pr
     const stage = (await f.context("implement")).stage;
     assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "block");
     await f.approve("spec-review");
-    assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "block");
-    await f.seedPass("preflight", "preflight", "preflight");
+    assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "wait", "a missing preflight is run, never skipped");
+    const preflight = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(preflight.spec.workflow?.purpose, "preflight");
+    await f.finish(preflight, "Passed");
     assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "advance");
     const profileChangedRepo = await f.store.update({ ...f.repo, spec: { ...f.repo.spec, checks: { ...f.repo.spec.checks, preflight: "new prerequisites" } } });
     assert.ok(profileChangedRepo.metadata.resourceVersion !== f.repo.metadata.resourceVersion);
@@ -566,4 +569,38 @@ test("ADR-0063: entering verify collects the plan's checks before the verifier r
     assert.equal(decision.action, "await-approval", "only the unconfigured manual check needs a waiver");
     assert.equal((await checks()).length, before, "the gate reuses the evidence collected at entry");
   } finally { f.db.close(); }
+});
+
+test("ADR-0042 §4: entering a later stage with a stale preflight reruns it in place instead of asking for a restart", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    const old = await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    await f.store.update<CheckRun>({ ...old, metadata: { ...old.metadata, labels: { "factory.ai-dlc.io/superseded": "definition-change" } } });
+    const verify = (await f.context("verify")).stage;
+
+    assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait");
+    const refreshed = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(refreshed.spec.workflow?.purpose, "preflight");
+    assert.equal(refreshed.spec.workflow?.stage, "verify", "rerun at the current stage, nothing after preflight is discarded");
+    await f.finish(refreshed, "Passed");
+    const next = await f.service.beforeStage(await f.current(), verify);
+    assert.equal(next.action, "wait");
+    assert.equal((await f.store.list<CheckRun>("CheckRun")).at(-1)!.spec.workflow?.purpose, "verification", "then the verification evidence is collected");
+
+  } finally { f.db.close(); }
+});
+
+test("preflight checks are authorized at the preflight stage and later stages only", () => {
+  const workflow = { spec: { verification: { planningStage: "plan", reviewStage: "review", preflightStage: "preflight", verifyStage: "verify",
+    implementationStage: "implement", maxCodeAttempts: 1, maxExecutionAttempts: 1, retryDelayMs: 1 },
+    phases: [{ name: "p", stages: [{ name: "plan" }, { name: "review" }, { name: "preflight" }, { name: "implement" }, { name: "verify" }] }] } } as unknown as Workflow;
+  const origin = (stage: string) => ({ stage, round: 1, purpose: "preflight" as const, planFingerprint: "x", attempt: 1 });
+  assert.equal(originAuthorized(workflow, origin("preflight")), true);
+  assert.equal(originAuthorized(workflow, origin("verify")), true);
+  assert.equal(originAuthorized(workflow, origin("review")), false, "never before the plan is approved");
+  assert.equal(originAuthorized(workflow, origin("unknown")), false);
 });

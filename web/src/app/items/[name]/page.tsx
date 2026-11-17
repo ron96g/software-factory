@@ -956,7 +956,9 @@ function HumanHistory({ clarifications, approvals }: { clarifications: Clarifica
             <Text size="sm" fw={600}>
               Clarification · {c.spec.stage}
             </Text>
-            <Badge color={c.spec.answers?.length ? "teal" : "orange"}>{c.spec.answers?.length ? "answered" : "open"}</Badge>
+            <Badge color={c.spec.answers?.length ? "teal" : c.metadata.labels?.[LABEL_SUPERSEDED] ? "gray" : "orange"}>
+              {c.spec.answers?.length ? "answered" : c.metadata.labels?.[LABEL_SUPERSEDED] ? "superseded by restart" : "open"}
+            </Badge>
           </Group>
           {c.spec.questions.map((q, i) => (
             <Text key={i} size="sm" mt={4}>
@@ -977,7 +979,9 @@ function HumanHistory({ clarifications, approvals }: { clarifications: Clarifica
             <Text size="sm" fw={600}>
               Approval · {a.spec.stage}
             </Text>
-            <Badge color={a.spec.decision === "approve" ? "teal" : a.spec.decision === "reject" ? "red" : "yellow"}>{a.spec.decision ?? "pending"}</Badge>
+            <Badge color={a.spec.decision === "approve" ? "teal" : a.spec.decision === "reject" ? "red" : a.metadata.labels?.[LABEL_SUPERSEDED] ? "gray" : "yellow"}>
+              {a.spec.decision ?? (a.metadata.labels?.[LABEL_SUPERSEDED] ? "superseded by restart" : "pending")}
+            </Badge>
           </Group>
           {a.spec.comment && <Text size="sm">{a.spec.comment}</Text>}
           {a.spec.decidedBy && (
