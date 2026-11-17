@@ -56,6 +56,18 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
           JSON.stringify(prepared.map((run) => ({ checkRun: run.metadata.name, check: run.spec.check, command: run.spec.command,
             scope: run.spec.scope, before: run.spec.snapshot, after: run.status?.finalSnapshot, executionOutcome: run.status?.executionOutcome,
             outcome: run.status?.outcome, logRef: run.status?.logRef })), null, 2) });
+      // ADR-0063: at the verify stage the plan's checks ran before this run; the verifier evaluates them, it doesn't rerun them.
+      if (ctx.run.spec.stage === compiled.verification?.verifyStage) {
+        const latest = new Map<string, CheckRun>();
+        for (const run of allRuns.filter((r) => r.spec.workflow?.purpose === "verification" && r.spec.workflow.stage === ctx.run.spec.stage &&
+          r.spec.workflow.round === ctx.workItem.status?.round && r.status?.phase === "Completed")) latest.set(`${run.spec.repositoryRef.name}/${run.spec.check}`, run);
+        sections.push({ title: "Current verification evidence (authoritative CheckRuns for this candidate)", source: "verification-contract",
+          content: "The factory ran the approved plan's checks before this run. Evaluate this evidence against the specification and the " +
+            "validation plan; do not rerun these checks. A check without an entry here has no configured command or no result and counts as missing evidence.\n" +
+            JSON.stringify([...latest].map(([id, run]) => ({ check: id, checkRun: run.metadata.name, outcome: run.status?.outcome,
+              message: d.redactor.redact(run.status?.message ?? ""), scope: run.spec.scope, command: run.spec.command, snapshot: run.spec.snapshot,
+              finishedAt: run.status?.finishedAt, logRef: run.status?.logRef, logsIncomplete: run.status?.logsIncomplete })), null, 2) });
+      }
       const runs = allRuns.filter((r) => r.spec.workflow?.purpose !== "preparation" && r.status?.outcome && r.status.outcome !== "Passed").slice(-6);
       const historical = (await d.reader.list<FactoryEvent>("Event", { namespace: nsOf(ctx.workItem),
         labelSelector: { "factory.ai-dlc.io/workitem": ctx.workItem.metadata.name } })).filter((event) =>

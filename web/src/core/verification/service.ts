@@ -309,7 +309,24 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       health.runtime, health.version, profiles]) };
   }
 
+  /**
+   * ADR-0063: stage entry. Permission first; on entering the verify stage, the plan's verification checks are collected
+   * for the approved candidate before the verifier runs, so it evaluates complete evidence.
+   */
   async beforeStage(item: WorkItem, stage: CompiledStage): Promise<GateDecision> {
+    const permission = await this.stagePermission(item, stage);
+    if (permission.action !== "advance" || !item.spec.workflowRef) return permission;
+    const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
+    if (!wf.verification || stage.name !== verificationPolicy(wf).verifyStage) return permission;
+    try {
+      const contract = await this.plan(item, true);
+      const candidate = await this.candidateApproved(item, contract);
+      return await this.collectChecks(item, stage, contract, candidate, false) ?? { action: "advance" };
+    } catch (e) { return this.checkError(e); }
+  }
+
+  /** Side-effect free: may the item be at this stage with its current plan and candidate? */
+  private async stagePermission(item: WorkItem, stage: CompiledStage): Promise<GateDecision> {
     if (!item.spec.workflowRef) return { action: "advance" };
     const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
     if (!wf.verification) return { action: "advance" };
@@ -412,7 +429,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       evaluate: async ({ workItem, stage }) => {
         try {
           if (kind === "candidate") {
-            const permission = await this.beforeStage(workItem, stage);
+            const permission = await this.stagePermission(workItem, stage);
             if (permission.action !== "advance") return permission;
           }
           const contract = await this.plan(workItem, kind === "candidate");
@@ -506,52 +523,65 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const preflight = ctx.stage.name === contract.policy.preflightStage;
       if (!preflight && ctx.stage.name !== contract.policy.verifyStage) return { action: "fail", reason: "verified gate is not at a configured verification stage" };
       if (!preflight) {
-        const permission = await this.beforeStage(item, ctx.stage);
+        const permission = await this.stagePermission(item, ctx.stage);
         if (permission.action !== "advance") return permission;
       }
       const candidate = preflight ? await this.candidate(item, contract) : await this.candidateApproved(item, contract);
       if (!candidate.health.available) return { action: "block", questions: ["Verification environment is unavailable; restore the runtime and explicitly retry preflight. No code-fix retry was charged."] };
-      const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
-      if (runs.some((r) => r.spec.workItemUid === item.metadata.uid && active(r))) return { action: "wait", retryAfterMs: 1000 };
-      const requirements = preflight ? contract.plan.preflight : contract.plan.checks;
-      for (const id of requirements) {
-        const [repository, check] = id.split("/");
-        const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
-        const ws = candidate.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
-        if (!repo.spec.checks?.[check]) continue;
-        const attempts = runs.filter((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid && r.spec.workspaceUid === ws.metadata.uid &&
-          r.spec.check === check && r.spec.workflow?.planFingerprint === contract.fingerprint && r.spec.workflow.purpose === (preflight ? "preflight" : "verification") &&
-          r.spec.workflow.stage === ctx.stage.name && r.spec.workflow.round === item.status?.round);
-        const last = attempts.at(-1);
-        if (last?.status?.outcome === "Passed" && !last.status.logsIncomplete && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
-            last.status.finalSnapshot === last.spec.snapshot && last.spec.repositoryVersion === repo.metadata.resourceVersion) continue;
-        if (last?.status?.outcome === "AssertionFailed" && !preflight) {
-          if ((item.status?.retries?.[ctx.stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: ctx.stage.name };
-          return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget. Inspect CheckRun ${last.metadata.name} and its redacted logs.`] };
-        }
-        if (last && attempts.length >= contract.policy.maxExecutionAttempts) {
-          return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts. No code-fix retry was charged. Inspect CheckRun ${last.metadata.name}; fix prerequisites/scope or review the budget, then explicitly retry.`] };
-        }
-        const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
-        if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };
-        await this.d.scheduler.submit({ workItem: item, workspace: ws, repository: repo, check,
-          requestId: `${ctx.stage.name}/${item.status?.round}/${id}/${attempts.length + 1}`,
-          requestedBy: "verification-gate", workflow: { stage: ctx.stage.name, round: item.status!.round!, purpose: preflight ? "preflight" : "verification",
-            planFingerprint: contract.fingerprint, attempt: attempts.length + 1 } });
-        return { action: "wait", retryAfterMs: 1000 };
-      }
+      const collected = await this.collectChecks(item, ctx.stage, contract, candidate, preflight);
+      if (collected) return collected;
       if (preflight) return { action: "advance" };
       const state = await this.evidence(item, contract);
       if (!state.missing.length) return { action: "advance" };
       if (state.unwaivable.length) return { action: "block", questions: [`Required evidence is missing/stale/incomplete: ${state.unwaivable.join(", ")}. These checks cannot be waived.`] };
       return { action: "await-approval", verification: { kind: "waiver", fingerprint: state.fingerprint, planFingerprint: contract.fingerprint, requirements: state.missing } };
-    } catch (e) {
-      if (e instanceof SandboxUnavailableError) return { action: "block", questions: [this.d.redactor.redact(
-        `Verification environment unavailable (${e.runtime}): ${e.message}. Restore the runtime and explicitly retry. No code-fix retry was charged.`)] };
-      if (isStoreError(e, "Conflict")) return { action: "wait", retryAfterMs: 1000 };
-      if (!isStoreError(e, "Invalid")) throw e;
-      return { action: "block", questions: [e.message] };
+    } catch (e) { return this.checkError(e); }
+  }
+
+  private checkError(e: unknown): GateDecision {
+    if (e instanceof SandboxUnavailableError) return { action: "block", questions: [this.d.redactor.redact(
+      `Verification environment unavailable (${e.runtime}): ${e.message}. Restore the runtime and explicitly retry. No code-fix retry was charged.`)] };
+    if (isStoreError(e, "Conflict")) return { action: "wait", retryAfterMs: 1000 };
+    if (!isStoreError(e, "Invalid")) throw e;
+    return { action: "block", questions: [e.message] };
+  }
+
+  /**
+   * Submits the next required check without current passing evidence, or decides what its last attempt means (ADR-0042
+   * §3). Undefined when every configured required check passed for this candidate; shared by stage entry and the gate.
+   */
+  private async collectChecks(item: WorkItem, stage: CompiledStage, contract: ValidationContract, candidate: CandidateState,
+    preflight: boolean): Promise<GateDecision | undefined> {
+    const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
+    if (runs.some((r) => r.spec.workItemUid === item.metadata.uid && active(r))) return { action: "wait", retryAfterMs: 1000 };
+    const requirements = preflight ? contract.plan.preflight : contract.plan.checks;
+    for (const id of requirements) {
+      const [repository, check] = id.split("/");
+      const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
+      const ws = candidate.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
+      if (!repo.spec.checks?.[check]) continue;
+      const attempts = runs.filter((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid && r.spec.workspaceUid === ws.metadata.uid &&
+        r.spec.check === check && r.spec.workflow?.planFingerprint === contract.fingerprint && r.spec.workflow.purpose === (preflight ? "preflight" : "verification") &&
+        r.spec.workflow.stage === stage.name && r.spec.workflow.round === item.status?.round);
+      const last = attempts.at(-1);
+      if (last?.status?.outcome === "Passed" && !last.status.logsIncomplete && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
+          last.status.finalSnapshot === last.spec.snapshot && last.spec.repositoryVersion === repo.metadata.resourceVersion) continue;
+      if (last?.status?.outcome === "AssertionFailed" && !preflight) {
+        if ((item.status?.retries?.[stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: stage.name };
+        return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget. Inspect CheckRun ${last.metadata.name} and its redacted logs.`] };
+      }
+      if (last && attempts.length >= contract.policy.maxExecutionAttempts) {
+        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts. No code-fix retry was charged. Inspect CheckRun ${last.metadata.name}; fix prerequisites/scope or review the budget, then explicitly retry.`] };
+      }
+      const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
+      if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };
+      await this.d.scheduler.submit({ workItem: item, workspace: ws, repository: repo, check,
+        requestId: `${stage.name}/${item.status?.round}/${id}/${attempts.length + 1}`,
+        requestedBy: "verification-gate", workflow: { stage: stage.name, round: item.status!.round!, purpose: preflight ? "preflight" : "verification",
+          planFingerprint: contract.fingerprint, attempt: attempts.length + 1 } });
+      return { action: "wait", retryAfterMs: 1000 };
     }
+    return undefined;
   }
 
   async tools(ctx: ExecutionContext): Promise<string[]> {
@@ -666,7 +696,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     }
     if (!existing) {
       const compiled = await this.d.compiler.compile(ctx.workItem.spec.workflowRef!, nsOf(ctx.workItem));
-      const permission = await this.beforeStage(ctx.workItem, compiled.stage(contract.policy.verifyStage)!);
+      const permission = await this.stagePermission(ctx.workItem, compiled.stage(contract.policy.verifyStage)!);
       if (permission.action !== "advance") throw new StoreError(
         permission.action === "wait" ? "another check is active; wait for its result" : "candidate needs fresh review; the workflow gate will return to code-review",
         "Conflict");
@@ -684,7 +714,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     if (!wf.verification) return undefined;
     try {
       const contract = await this.plan(item, true);
-      const permission = await this.beforeStage(item, wf.stage(contract.policy.verifyStage)!);
+      const permission = await this.stagePermission(item, wf.stage(contract.policy.verifyStage)!);
       return permission.action === "goto" || permission.action === "wait" ? permission : undefined;
     } catch (e) { if (!isStoreError(e, "Invalid")) throw e; return undefined; }
   }
@@ -694,7 +724,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     try {
       const contract = await this.plan(item, true);
       const wf = await this.d.compiler.compile(item.spec.workflowRef!, nsOf(item));
-      const permission = await this.beforeStage(item, wf.stage(contract.policy.verifyStage)!);
+      const permission = await this.stagePermission(item, wf.stage(contract.policy.verifyStage)!);
       if (permission.action === "block") return permission.questions.join("; ");
       if (permission.action === "goto") return `the candidate changed after review and verification; it must go through ${permission.stage} again`;
       if (permission.action !== "advance") return "verification prerequisites are not satisfied";

@@ -9,9 +9,10 @@ spec:
 
 # Verification
 
-1. Build and run unit and integration tests.
+1. Get build and test results: on verified workflows they are the factory's check evidence ("Current verification
+   evidence"); evaluate it and don't rerun it. Otherwise build and run the unit and integration tests yourself.
 2. Map each acceptance criterion to a test and its result.
-3. Run the security and dependency scans.
+3. Include the security and dependency scan results (run them yourself only where no check evidence exists).
 4. Output a `verification-report` with the trace matrix and a pass/fail verdict.
 5. **Verdict (outcome)**, exactly one of:
    - `pass`: every acceptance criterion is covered by a passing test or check, and build and tests are green.

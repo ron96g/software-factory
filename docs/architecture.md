@@ -403,7 +403,9 @@ returns to fresh code-review through a separate bounded recovery counter, not a 
 Budget exhaustion requests human attention; an answer is not approval. `run_check` accepts workspace resource names
 or unique repository aliases, and bare or `repository/check` identifiers, normalized before idempotent scheduling.
 
-The registered `verified-checks` gate and verifier's recorded `run_check` tool share CheckRun scheduling. Checks
+Entering the verify stage collects the approved plan's checks for the approved candidate **before** the verifier runs
+(ADR-0063); the verifier evaluates that evidence ("Current verification evidence") and no longer has `run_check`. The
+`verified-checks` gate shares the same collection code and afterwards only confirms the evidence is current. Checks
 serialize on a WorkItem's workspace. Only typed AssertionFailed enters the code-fix budget; timeout, cancellation,
 setup and unknown failures use a separate bounded execution budget, then a durable Clarification with check/log
 references. Retry timing and attempts derive from persisted jobs. Developer prompts receive redacted structured

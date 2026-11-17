@@ -536,3 +536,34 @@ test("plan review shows required checks without a command as known evidence gaps
     assert.match(gapCriterion([{ repository: "repo", check: "manual-acceptance", role: "required", waivable: false }])[0], /Unpassable checks/);
   } finally { f.db.close(); }
 });
+
+test("ADR-0063: entering verify collects the plan's checks before the verifier runs; the gate then only confirms", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    const verify = (await f.context("verify")).stage;
+    const checks = async () => (await f.store.list<CheckRun>("CheckRun")).filter((r) => r.spec.workflow?.purpose === "verification");
+
+    await f.service.check(await f.current());
+    await f.service.recover(await f.current());
+    assert.equal((await checks()).length, 0, "a permission check never submits checks");
+
+    for (const check of ["build", "test"]) {
+      assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait", `entry waits for ${check}`);
+      const submitted = (await checks()).at(-1)!;
+      assert.equal(submitted.spec.check, check);
+      assert.equal(submitted.spec.requestedBy, "gate");
+      assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait", "an active check keeps the stage waiting");
+      await f.finish(submitted, "Passed");
+    }
+    assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "advance", "the verifier may start once evidence is complete");
+    const before = (await checks()).length;
+    const decision = await f.runStage("verify");
+    assert.equal(decision.action, "await-approval", "only the unconfigured manual check needs a waiver");
+    assert.equal((await checks()).length, before, "the gate reuses the evidence collected at entry");
+  } finally { f.db.close(); }
+});
