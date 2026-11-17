@@ -1,6 +1,7 @@
 # ADR-0061: Verification tiers and side-effect-free checks
 
 - **Status:** Accepted
+- **Amended by:** ADR-0064
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Amends:** ADR-0042 §4 (check side effects), ADR-0044 (scope selection), ADR-0047 (readiness checks)
@@ -115,7 +116,7 @@ An item on the `controlplane` Go monorepo stayed in "checking" for a long time w
   tier requires. It warns about `moduleScoped`, and the docs describe the migration.
 - `scoped: true` keeps today's constraints for module-scoped commands: a single `make <target>` and a `moduleScope`
   policy on the Repository.
-- Changing a definition changes `repositoryVersion`. As today, checks pinned to an older version end as "definition
+- Changing a definition changes `repositoryVersion` (since ADR-0064: only changes to the check definition do). As today, checks pinned to an older version end as "definition
   changed" and approved plans need fresh review (ADR-0044); old checks and approvals are never reinterpreted.
 
 ## Phases (AGENTS.md X41)

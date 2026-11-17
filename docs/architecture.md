@@ -538,4 +538,6 @@ flowchart LR
   that goes through the same conflict resolution and pushes to the same branch. A plan approval made stale only by
   workflow/repository definition edits is re-confirmed in place through an Approval instead of restarting plan review.
 - A repository without `spec.git.url` is never published: its changes stay in the workspace, and the publish stage
-  shows the publication as "not configured" instead of retrying a delivery that can't succeed.
+  shows the publication as "not configured" instead of retrying a delivery that can't succeed. Adding `git:` later
+  keeps the item's plan and check evidence (they bind to the check definition version, ADR-0064); a preflight made
+  stale by a check-definition change is rerun in place before publication.

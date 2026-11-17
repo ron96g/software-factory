@@ -47,7 +47,8 @@ export interface VerificationPublicationGuard {
 
 /**
  * ADR-0054: the route to take when a candidate is not publishable only because it changed after review/verification
- * (e.g. a base merge) or a check is still running; undefined when only a human can help.
+ * (e.g. a base merge), a check is still running, or preflight went stale and is rerun in place (ADR-0064); undefined
+ * when only a human can help.
  */
 export interface PublicationRecovery {
   recover(item: WorkItem): Promise<GateDecision | undefined>;

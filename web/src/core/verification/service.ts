@@ -13,6 +13,7 @@ import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "
 import { parseUnitManifest, unitChecks } from "../model/units.ts";
 import { isScoped, scopeSatisfies } from "../model/check-scope.ts";
 import { gapId, verificationPolicyGaps, type PolicyGap } from "../model/verification-policy.ts";
+import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 /** Required plan checks without a configured command: they can only ever be Waived, so the plan reviewer must know. */
 const planGaps = (contract: Pick<ValidationContract, "plan" | "repositories">): PolicyGap[] =>
@@ -147,7 +148,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     const workflowVersions = compiled.versions ?? {};
     const planningBinding = await this.d.planning?.binding(item);
     const fingerprint = digest([item.metadata.uid, specification.metadata.uid, specification.metadata.resourceVersion, artifact.metadata.uid, artifact.metadata.resourceVersion, plan,
-      workflowVersions, repositories.map((r) => [r.metadata.name, r.metadata.resourceVersion]),
+      workflowVersions, repositories.map((r) => [r.metadata.name, checkDefinitionVersion(r)]),
       ...(planningBinding ? [planningBinding] : [])]);
     const contract: ValidationContract = { artifact, plan, fingerprint, workflowVersions, repositories, policy, unitPolicy };
     if (approved) {
@@ -334,7 +335,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const ws = state.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
       const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
       return !runs.some((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid && r.spec.workspaceUid === ws.metadata.uid &&
-        r.spec.repositoryVersion === repo.metadata.resourceVersion && r.spec.workflow?.planFingerprint === contract.fingerprint &&
+        r.spec.repositoryVersion === checkDefinitionVersion(repo) && r.spec.workflow?.planFingerprint === contract.fingerprint &&
         r.spec.workflow.purpose === "preflight" && r.spec.check === check && r.status?.phase === "Completed" && r.status.outcome === "Passed" &&
         !r.status.logsIncomplete && r.spec.environment.runtime === state.health.runtime && r.spec.environment.version === state.health.version &&
         r.spec.environment.profileVersion === state.profiles[repository]);
@@ -381,7 +382,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       if (!state.health.available) return invalid("verification environment is unavailable; restore it before construction");
       const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
       const stale = this.stalePreflight(item, contract, state, runs);
-      if (stale) return invalid(`preflight ${stale} is missing or stale for the current definitions and environment; it is rerun when the next stage starts`);
+      if (stale) return invalid(`preflight ${stale} is missing or stale for the current check definitions and environment; it is rerun in place before the next stage or publication`);
       if (contract.unitPolicy && wf.stages.findIndex((s) => s.name === stage.name) > wf.stages.findIndex((s) => s.name === contract.policy.implementationStage)) {
         if (!this.d.completeness) return invalid("unit completeness barrier is unavailable; review cannot start");
         const barrier = await this.d.completeness.beforeCandidate(item, stage, contract);
@@ -417,7 +418,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const ws = state.workspaces.find((workspace) => workspace.spec.repositoryRef.name === repo.metadata.name)!;
       for (const check of repo.spec.verification?.preparationChecks ?? []) {
         const attempts = runs.filter((run) => eligible(run) && run.spec.workItemUid === item.metadata.uid &&
-          run.spec.workspaceUid === ws.metadata.uid && run.spec.repositoryVersion === repo.metadata.resourceVersion &&
+          run.spec.workspaceUid === ws.metadata.uid && run.spec.repositoryVersion === checkDefinitionVersion(repo) &&
           run.spec.check === check && run.spec.workflow?.purpose === "preparation" && run.spec.workflow.stage === stage.name &&
           run.spec.workflow.planFingerprint === contract.fingerprint && run.spec.environment.runtime === state.health.runtime &&
           run.spec.environment.version === state.health.version && run.spec.environment.profileVersion === state.profiles[repo.metadata.name]);
@@ -534,7 +535,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const [repository, check] = id.split("/");
       const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
       const ws = candidate.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
-      const passed = runs.some((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.repositoryVersion === repo.metadata.resourceVersion &&
+      const passed = runs.some((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.repositoryVersion === checkDefinitionVersion(repo) &&
         r.spec.check === check && scopeSatisfies(repo, check, r, "verification") && r.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
         r.status?.outcome === "Passed" && r.status.phase === "Completed" && !r.status.logsIncomplete &&
         r.status.finalSnapshot === r.spec.snapshot && r.spec.environment.runtime === candidate.health.runtime &&
@@ -598,7 +599,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         r.spec.workflow.stage === stage.name && r.spec.workflow.round === item.status?.round);
       const last = attempts.at(-1);
       if (last?.status?.outcome === "Passed" && !last.status.logsIncomplete && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
-          last.status.finalSnapshot === last.spec.snapshot && last.spec.repositoryVersion === repo.metadata.resourceVersion) continue;
+          last.status.finalSnapshot === last.spec.snapshot && last.spec.repositoryVersion === checkDefinitionVersion(repo)) continue;
       if (last?.status?.outcome === "AssertionFailed" && !preflight) {
         if ((item.status?.retries?.[stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: stage.name };
         return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget. Inspect CheckRun ${last.metadata.name} and its redacted logs.`] };
@@ -745,6 +746,10 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     if (!item.spec.workflowRef) return undefined;
     const wf = await this.d.compiler.compile(item.spec.workflowRef, nsOf(item));
     if (!wf.verification) return undefined;
+    // A definition change after the publish stage was entered leaves preflight stale; rerun it in place, as on stage entry.
+    const current = item.status?.stage ? wf.stage(item.status.stage) : undefined;
+    const refresh = current && await this.refreshPreflight(item, current);
+    if (refresh) return refresh;
     try {
       const contract = await this.plan(item, true);
       const permission = await this.stagePermission(item, wf.stage(contract.policy.verifyStage)!);

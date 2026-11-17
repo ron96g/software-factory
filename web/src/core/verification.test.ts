@@ -15,6 +15,7 @@ import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { Registry } from "./registry/registry.ts";
 import type { GateEvaluator } from "./ports/index.ts";
+import { checkDefinitionVersion } from "./checks/definition-version.ts";
 
 async function fixture(preparation = false) {
   const db = new DatabaseSync(":memory:");
@@ -56,7 +57,7 @@ async function fixture(preparation = false) {
     submit: async (request) => store.create<CheckRun>({ apiVersion: API_VERSION, kind: "CheckRun",
       metadata: { name: `check-${request.workflow.stage}-${request.check}-${request.workflow.attempt}`, namespace: "default", ownerReferences: [ownerRef(item)] },
       spec: { workItemRef: { name: "item" }, workItemUid: item.metadata.uid!, workspaceRef: { name: "ws" }, workspaceUid: workspace.metadata.uid!,
-        repositoryRef: { name: "repo" }, repositoryVersion: repo.metadata.resourceVersion!, check: request.check, command: request.check,
+        repositoryRef: { name: "repo" }, repositoryVersion: checkDefinitionVersion(repo), check: request.check, command: request.check,
         timeoutMs: 1000, snapshot: tree, environment: { runtime: "fake", version: "1", profileVersion: "default" }, requestedBy: "gate",
         requestFingerprint: request.requestId, workflow: request.workflow } }),
   };
@@ -591,6 +592,49 @@ test("ADR-0042 §4: entering a later stage with a stale preflight reruns it in p
     assert.equal(next.action, "wait");
     assert.equal((await f.store.list<CheckRun>("CheckRun")).at(-1)!.spec.workflow?.purpose, "verification", "then the verification evidence is collected");
 
+  } finally { f.db.close(); }
+});
+
+test("ADR-0064: editing publication, code search or agent context keeps the approved plan and check evidence current", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    const approved = (await f.service.plan(await f.current(), true)).fingerprint;
+    const repo = (await f.store.get<Repository>("Repository", "factory-system", "repo"))!;
+    const published = await f.store.update<Repository>({ ...repo, metadata: { ...repo.metadata, labels: { team: "x" } },
+      spec: { ...repo.spec, git: { url: "https://example.test/repo.git", defaultBranch: "main" }, index: { enabled: true }, context: { docs: ["docs"] } } });
+
+    assert.equal((await f.service.plan(await f.current(), true)).fingerprint, approved, "no plan re-confirmation");
+    assert.equal((await f.service.beforeStage(await f.current(), (await f.context("verify")).stage)).action, "wait");
+    assert.deepEqual((await f.store.list<CheckRun>("CheckRun")).map((r) => r.spec.workflow?.purpose), ["preflight", "verification"],
+      "the earlier preflight still counts; only the verification checks are collected");
+
+    await f.store.update<Repository>({ ...published, spec: { ...published.spec, checks: { ...published.spec.checks, preflight: "prepare --strict" } } });
+    assert.notEqual((await f.service.plan(await f.current(), false)).fingerprint, approved, "a changed check definition needs the plan re-confirmed");
+  } finally { f.db.close(); }
+});
+
+test("ADR-0064: a stale preflight at the publish stage is rerun in place before publication instead of blocking", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    const old = await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "ship" } });
+    await f.store.update<CheckRun>({ ...old, metadata: { ...old.metadata, labels: { "factory.ai-dlc.io/superseded": "definition-change" } } });
+
+    assert.match((await f.service.check(await f.current()))!, /preflight repo\/preflight is missing or stale/);
+    assert.equal((await f.service.recover(await f.current()))?.action, "wait");
+    assert.equal((await f.service.recover(await f.current()))?.action, "wait", "an active refresh keeps publication waiting");
+    assert.equal((await f.store.list<CheckRun>("CheckRun")).length, 2, "repeated reconciles submit the refresh once");
+    const refreshed = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(refreshed.spec.workflow?.purpose, "preflight");
+    assert.equal(refreshed.spec.workflow?.stage, "ship");
   } finally { f.db.close(); }
 });
 

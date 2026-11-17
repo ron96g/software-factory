@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-17
 - **Deciders:** project owner
+- **Amended by:** ADR-0064
 - **Amends:** ADR-0042 §2 (restart recovery), ADR-0010 (ends the "single process, no leases" MVP simplification
   for check execution; an explicit scope change)
 - **Related:** ADR-0061 (verification tiers, proposed)

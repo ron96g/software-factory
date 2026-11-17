@@ -4,6 +4,7 @@ import { nsOf } from "../model/meta.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { gapId, verificationPolicyGaps } from "../model/verification-policy.ts";
 import { StoreError, type ContextProvider, type Redactor, type ResourceReader, type TranscriptReader, type WorkflowCompiler } from "../ports/index.ts";
+import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 export function verificationContext(d: { reader: ResourceReader; logs: TranscriptReader; compiler: WorkflowCompiler; redactor: Redactor }): ContextProvider {
   return {
@@ -27,7 +28,7 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
         source: "verification-contract",
         content: JSON.stringify({
           workflowVersions: compiled.versions, policy: compiled.verification,
-          repositories: ctx.repositories.map((repo) => ({ name: repo.metadata.name, resourceVersion: repo.metadata.resourceVersion,
+          repositories: ctx.repositories.map((repo) => ({ name: repo.metadata.name, checkDefinitionVersion: checkDefinitionVersion(repo),
             checks: repo.spec.checks, moduleScope: repo.spec.moduleScope, verification: repo.spec.verification })),
           workspaces: ctx.workspaces.map((workspace) => ({ workspace: workspace.metadata.name, repositoryAlias: workspace.spec.repositoryRef.name,
             checkSyntax: `${workspace.spec.repositoryRef.name}/<configured-check>` })),

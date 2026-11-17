@@ -7,6 +7,7 @@ import { SandboxUnavailableError, StoreError, isStoreError, canPrepareIsolated, 
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
+import { checkDefinitionVersion } from "./definition-version.ts";
 
 type Request = Parameters<CheckRunScheduler["submit"]>[0];
 
@@ -147,10 +148,9 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       const repository = await resolveRef<Repository>(this.d.reader, "Repository", workspace.spec.repositoryRef, namespace);
       if (!repository || repository.metadata.name !== suppliedRepository.metadata.name ||
           repository.metadata.uid !== suppliedRepository.metadata.uid ||
-          repository.metadata.resourceVersion !== suppliedRepository.metadata.resourceVersion) {
+          checkDefinitionVersion(repository) !== checkDefinitionVersion(suppliedRepository)) {
         throw new StoreError("repository changed or does not match the workspace", "Conflict");
       }
-      if (!repository.metadata.resourceVersion) throw new StoreError("repository has no resourceVersion", "Invalid");
       const policyChecks = originChecks(repository, origin, workflow);
       if (!policyChecks?.includes(request.check)) {
         throw new StoreError(`check "${request.check}" is not authorized for ${origin.purpose}`, "Invalid");
@@ -203,7 +203,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
           workspaceRef: { name: workspace.metadata.name },
           workspaceUid: workspace.metadata.uid,
           repositoryRef: { name: repository.metadata.name, namespace: nsOf(repository) === namespace ? undefined : nsOf(repository) },
-          repositoryVersion: repository.metadata.resourceVersion!,
+          repositoryVersion: checkDefinitionVersion(repository),
           check: request.check,
           ...config,
           snapshot,

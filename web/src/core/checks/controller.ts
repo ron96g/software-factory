@@ -7,6 +7,7 @@ import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
+import { checkDefinitionVersion } from "./definition-version.ts";
 
 export interface CheckControllerDeps {
   reader: ResourceReader;
@@ -116,7 +117,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     }
     const repository = await resolveRef<Repository>(d.reader, "Repository", run.spec.repositoryRef, namespace);
     if (!repository || repository.metadata.name !== workspace.spec.repositoryRef.name ||
-        repository.metadata.resourceVersion !== run.spec.repositoryVersion) {
+        checkDefinitionVersion(repository) !== run.spec.repositoryVersion) {
       return { reason: "repository identity or definition changed" };
     }
     let config: Awaited<ReturnType<typeof resolveCheckConfig>>;
