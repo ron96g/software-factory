@@ -70,8 +70,10 @@ export interface WorkItemDetail {
   /** Evidence for human gates, derived from the latest round (ADR-0027). */
   evidence: GateEvidence;
   events: FactoryEvent[];
-  /** Stage names of the compiled workflow, in order (for progress display). */
-  stages: { name: string; lifecyclePhase: string; gate?: string }[];
+  /** Stages of the compiled workflow, in order (progress and stage state display). */
+  stages: { name: string; lifecyclePhase: string; gate?: string; steps: { name: string; agent: string }[]; publishes?: boolean }[];
+  /** The item's repositories and whether their changes can be published as pull requests (ADR-0023). */
+  repositories: { name: string; publishable: boolean }[];
   /** Knowledge proposed by this item's runs (ADR-0030). */
   knowledge: KnowledgeEntry[];
 }

@@ -176,6 +176,9 @@ export interface RepositorySpec {
 }
 export type Repository = Resource<RepositorySpec>;
 
+/** ADR-0023: only repositories with a `git` remote are ever pushed or get pull requests. */
+export const isPublishable = (repository: Repository) => !!repository.spec.git?.url;
+
 export interface ModelProviderSpec {
   type: string; // "openai-compatible" | "anthropic" | …
   baseUrl?: string;

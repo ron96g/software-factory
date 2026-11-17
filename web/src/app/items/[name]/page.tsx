@@ -1,4 +1,5 @@
 "use client";
+import { CurrentStageSummary, StageDrawer, useItemCheckRuns } from "@/ui/stage-drawer.tsx";
 import {
   Accordion,
   Alert,
@@ -59,6 +60,8 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const planning = useLive<PlanningWorkspaceData>(`/api/workitems/${encodeURIComponent(name)}/planning`, (n) =>
     n.workItem === name || n.name === name || ["Workflow", "Repository"].includes(n.kind ?? ""));
   const [openRun, setOpenRun] = useState<string | null>(null);
+  const [openStage, setOpenStage] = useState<string | null>(null);
+  const checkRuns = useItemCheckRuns(name);
   const [askOpen, setAskOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
@@ -154,7 +157,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Group>
       </Group>
 
-      <StageProgress d={d} />
+      <StageProgress d={d} onOpen={setOpenStage} />
+      <CurrentStageSummary d={d} checks={checkRuns} onOpen={setOpenStage} />
+      <StageDrawer d={d} checks={checkRuns} stage={openStage} onClose={() => setOpenStage(null)} onOpenRun={(r) => { setOpenStage(null); setOpenRun(r); }} />
       {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
       <Modal opened={deleteOpen} onClose={() => { if (!deleting) setDeleteOpen(false); }} title="Delete work item?" centered>
         <Stack>
@@ -520,7 +525,7 @@ function RestartMenu({ d }: { d: WorkItemDetail }) {
   );
 }
 
-function StageProgress({ d }: { d: WorkItemDetail }) {
+function StageProgress({ d, onOpen }: { d: WorkItemDetail; onOpen: (stage: string) => void }) {
   const st = d.workItem.status;
   const idx = d.stages.findIndex((s) => s.name === st?.stage);
   const done = st?.phase === "Done";
@@ -533,15 +538,17 @@ function StageProgress({ d }: { d: WorkItemDetail }) {
           const verdict = d.evidence.items.find((i) => i.stage === s.name && i.severity !== "ok");
           const color = verdict?.severity === "blocking" ? "red" : verdict?.severity === "warning" ? "yellow" : (PHASE_COLOR[s.lifecyclePhase] ?? "gray");
           return (
-            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}${verdict ? ` · ${verdict.label}` : ""}`}>
+            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}${verdict ? ` · ${verdict.label}` : ""} · click for details`}>
               <Badge
+                component="button"
+                onClick={() => onOpen(s.name)}
                 size="lg"
                 color={current && st?.phase === "Blocked" ? "orange" : current && st?.phase === "AwaitingApproval" ? "yellow" : color}
                 variant={current ? "filled" : passed ? "light" : "outline"}
                 leftSection={
                   verdict?.severity === "blocking" ? <IconX size={12} /> : passed ? <IconCheck size={12} /> : s.gate === "human-approval" ? <IconHandStop size={12} /> : undefined
                 }
-                style={{ opacity: passed || current ? 1 : 0.55 }}
+                style={{ opacity: passed || current ? 1 : 0.55, cursor: "pointer" }}
               >
                 {s.name}
               </Badge>

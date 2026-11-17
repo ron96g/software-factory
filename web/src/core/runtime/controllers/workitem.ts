@@ -1,5 +1,5 @@
 import type { AgentRun, Approval, Artifact, CheckRun, Clarification, ClarificationSpec, OutboxMessage, Repository, Source, WorkItem, WorkItemStatus, Workspace } from "../../model/kinds.ts";
-import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
+import { LABEL_SUPERSEDED, isPublishable } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey, setCondition } from "../../model/meta.ts";
 import {
@@ -190,6 +190,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
     if (!stage.publish?.pullRequest) return;
     const list = await ownedWorkspaces(wi);
     for (const ws of list.filter((w) => w.status?.phase === "Ready")) {
+      // Without a git remote a pull request can never be delivered; the changes stay in the workspace (shown on the stage).
+      const repository = await resolveRef<Repository>(d.reader, "Repository", ws.spec.repositoryRef, nsOf(wi));
+      if (!repository || !isPublishable(repository)) continue;
       await d.outbox.enqueue({
         key: pullRequestKey(wi, stage, ws),
         namespace: nsOf(wi),

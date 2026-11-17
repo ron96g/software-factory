@@ -15,6 +15,7 @@ import type {
   Workspace,
   OutboxMessage,
 } from "../model/kinds.ts";
+import { isPublishable } from "../model/kinds.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
@@ -164,14 +165,19 @@ export class FactoryApp
       try {
         const wf = await this.d.compiler.compile(workItem.spec.workflowRef, this.ns);
         verified = !!wf.verification;
-        stages = wf.stages.map((s) => ({ name: s.name, lifecyclePhase: s.lifecyclePhase, gate: s.gate?.type }));
+        stages = wf.stages.map((s) => ({ name: s.name, lifecyclePhase: s.lifecyclePhase, gate: s.gate?.type,
+          steps: s.steps.map((step) => ({ name: step.name, agent: step.agentRef.name })), ...(s.publish?.pullRequest ? { publishes: true } : {}) }));
       } catch {
         // a broken workflow is surfaced through the item's status
       }
     }
     const evidence = deriveGateEvidence({ runs, events, clarifications, artifacts, verified });
     const knowledge = await this.d.reader.list<KnowledgeEntry>("KnowledgeEntry", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: name } });
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, knowledge };
+    const repositories = await Promise.all([...new Set(workspaces.map((w) => w.spec.repositoryRef.name))].map(async (repo) => {
+      const resolved = await resolveRef<Repository>(this.d.reader, "Repository", { name: repo }, this.ns);
+      return { name: repo, publishable: !!resolved && isPublishable(resolved) };
+    }));
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge };
   }
 
   async newItemOptions(_p: Principal): Promise<NewItemOptions> {

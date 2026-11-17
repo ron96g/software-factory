@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
 import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { ANONYMOUS, type BaseConflictDetector, type PreparedWorkspace, type WorkspaceIntegrator } from "./ports/index.ts";
@@ -9,7 +11,7 @@ const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function setup(buildResults: number[], baseSync: BaseConflictDetector & WorkspaceIntegrator = movingBase(0)) {
+function setup(buildResults: number[], baseSync: BaseConflictDetector & WorkspaceIntegrator = movingBase(0), definitionsRoot = ROOT) {
   const commands: string[] = [];
   let builds = 0;
   const sandbox = new InMemorySandboxEnvironment({
@@ -38,7 +40,7 @@ function setup(buildResults: number[], baseSync: BaseConflictDetector & Workspac
     prs,
     make: () =>
       createFactory({
-        definitionsRoot: ROOT,
+        definitionsRoot,
         databasePath: ":memory:",
         env: { FACTORY_SANDBOX_RUNTIME: "in-memory" },
         sandboxes: [sandbox],
@@ -99,6 +101,28 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
     assert.equal(d.workItem.status?.stage, "ship");
   } finally {
     await f.stop();
+  }
+});
+
+test("a repository without a git remote is not published: ship is reached with no pull request in the outbox", async () => {
+  const root = mkdtempSync(join(tmpdir(), "sf-nogit-"));
+  for (const entry of readdirSync(ROOT)) if (entry !== "repositories" && entry !== ".git") symlinkSync(join(ROOT, entry), join(root, entry));
+  mkdirSync(join(root, "repositories"));
+  const repos = readFileSync(join(ROOT, "repositories/repositories.yaml"), "utf8").replace(/\n  git: +# ADR-0023[^\n]*\n(    [^\n]*\n)+/, "\n");
+  assert.ok(!/ron96g\/software-factory\.git/.test(repos), "the git section was removed");
+  writeFileSync(join(root, "repositories/repositories.yaml"), repos);
+  const s = setup([0], movingBase(0), root);
+  const f = await s.make();
+  await f.start();
+  try {
+    const wi = await f.app.createWorkItem(p, { title: "No remote", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.stage === "ship" && x.workItem.status.phase === "AwaitingApproval");
+    assert.deepEqual(d.outbox.filter((m) => m.spec.action === "open-pull-request"), []);
+    assert.deepEqual(s.published, []);
+    assert.deepEqual(d.repositories.find((r) => r.name === "software-factory"), { name: "software-factory", publishable: false });
+  } finally {
+    await f.stop();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -100,6 +100,11 @@ stateDiagram-v2
 Actions: **New item** (manual), **Sync now** (per source), **Answer** (unblocks an item), **Approve / Reject** (gates),
 **Create follow-up** (independent item with inherited evidence).
 
+On the item page, every stage chip opens a **stage view**: the stage's steps and their runs, its checks, its
+pull-request publication, and the human input it waits on. Above the chips, the active stage says what it waits for (a
+running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
+agent tools that no sandbox provides, or a pull request that failed to deliver.
+
 ## Planning workspace (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
 The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.
@@ -532,3 +537,5 @@ flowchart LR
 - An already published PR is brought up to date with "Update pull request" (ADR-0054): a restart from the publish stage
   that goes through the same conflict resolution and pushes to the same branch. A plan approval made stale only by
   workflow/repository definition edits is re-confirmed in place through an Approval instead of restarting plan review.
+- A repository without `spec.git.url` is never published: its changes stay in the workspace, and the publish stage
+  shows the publication as "not configured" instead of retrying a delivery that can't succeed.
