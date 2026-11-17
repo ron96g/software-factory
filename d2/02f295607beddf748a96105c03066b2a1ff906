@@ -1,0 +1,22 @@
+web/src/core/checks.test.ts
+  s_eba6099c9c685b::t_42007c1f07a5f5 219-222,224-234
+  s_eba6099c9c685b::t_bc177164411efa 4
+web/src/core/adapters/workspaces/snapshot.ts
+  s_eba6099c9c685b::t_5a41944b1374e2 2-4,10,12-16,21-50,52-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "d202f295607beddf748a96105c03066b2a1ff906",
+  "prompts": {},
+  "sessions": {
+    "s_eba6099c9c685b": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "b698d323-d3bf-49f7-938d-f8cd19f37fc4",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
