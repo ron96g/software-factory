@@ -210,6 +210,35 @@ use and cited-code counts for observability only.
 The tool guide also states the run's step budget. Near the end the harness tells the agent to wrap up, and the last
 step only offers `finish`, so a run out of budget reports what it completed instead of failing (ADR-0058).
 
+### Agent runtime: OpenCode v2 (ADR-0060)
+
+Model-backed AgentRuns run in an OpenCode v2 host embedded in the factory process (`@opencode/sdk`), one session
+per run. The same factory rules as the tool loop apply, through shared harness code: tool selection, guarded and
+serialized workspace mutations, in-loop `finish` validation, step budget and wrap-up, `source-code` diffs. OpenCode
+adds precise edit tools, a real shell, compaction, the repository's own skills and `AGENTS.md`, and background
+sub-agents.
+
+```mermaid
+flowchart LR
+  Ctx[ExecutionContext] --> Exec[OpenCodeExecutor]
+  Exec -->|SessionSpec: prompt, permissions, tools, model| Host[OpenCodeHost]
+  Host --> Plugin[factory plugin]
+  Plugin -->|providers| Model[(factory ModelProvider only)]
+  Plugin -->|tools| FT[finish, factory tools, ToolServer tools]
+  Plugin -->|hooks| Guard[step budget, tool filter, mutation guard, scrubbed shell env, no quota retries]
+  Host -->|events + tool hooks| Transcript[(run transcript)]
+```
+
+- Only the factory's resolved model is available; OpenCode's bundled providers, the public model catalogue, user and
+  repository configuration and plugins are never loaded. The key stays in-process.
+- Sessions start from "deny everything"; the agent's tools grant `read`/`glob`/`grep`, `edit`/`write` (never `.git`)
+  or `shell`. `skill` and `subagent` are always allowed; sub-agents inherit the rules, cannot delegate further and
+  cannot call `finish`. Web access, Code Mode and the interactive `question` tool are hidden.
+- Agents that write or execute use OpenCode only on the `host` sandbox runtime; with an isolated runtime they fall
+  back to the tool loop. Commands get the scrubbed environment plus the sandbox profile's `env`.
+- A 429/503/529 is not retried inside OpenCode: the run waits (ADR-0031). `FACTORY_AGENT_RUNTIME=tool-loop` disables
+  the runtime.
+
 ### In progress: autonomous technical recovery (proposed ADR-0059)
 
 Opted-in workflows retain completed-attempt diagnoses and use bounded, schema-backed `recovery-report`

@@ -73,7 +73,8 @@ Required reading:
     `ModelProvider` definitions resolved through `ModelResolver`.
 18. **No free-form execution on the host (ADR-0016, ADR-0019, ADR-0022).** Shell, file writes, and code execution only run inside an
     `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason, or wait for one
-    with `FACTORY_SIMULATION=wait` (ADR-0029).
+    with `FACTORY_SIMULATION=wait` (ADR-0029). The OpenCode agent runtime (ADR-0060) follows the same rule: it writes
+    and executes only on the `host` runtime, with deny-by-default permissions and a scrubbed command environment.
 
 ---
 
@@ -202,6 +203,7 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X37 | Accessible tools, grounded reviews | Cited code resolved into context before the first step, harness-rendered tool guide, citable read tools, output validated in-loop at `finish`, code evidence and investigated research gaps in `planning-review` v2, tool-use provenance (ADR-0057) | Cited claims are visible to agents without tool calls; output mistakes are corrected in the same run, reruns stay the exception; research gaps show what was checked; agent definitions unchanged | ✅ |
 | X38 | Graceful step budget | Budget stated in the tool guide, recorded wrap-up warnings near the end, a finish-only last step whose result is marked and reviewed normally (ADR-0058) | A run out of budget reports its work instead of failing the item; runs that never finish still fail | ✅ |
 | X39 | Autonomous technical recovery | Retained completed-attempt evidence, schema-backed diagnostics, bounded evidence-driven recovery and harness-offered scoped readiness checks (ADR-0059); production diagnostic isolation and authenticated operator allocation remain unavailable | Routine technical failures recover without human questions; unchanged failures cannot loop indefinitely; genuine human-only needs are consolidated; completeness, approvals and publication guards remain intact | In progress |
+| X40 | OpenCode agent runtime | Embedded OpenCode v2 (`@opencode/sdk`) runs every LLM AgentRun: factory-controlled models only, deny-by-default permissions from agent tools, repository skills and sub-agents, factory tools and ToolServers as plugin tools, in-loop `finish` validation, step budget and wrap-up, quota waits, full transcript; `FACTORY_AGENT_RUNTIME=tool-loop` opts out; isolated sandboxes fall back to the tool loop until a workspace driver exists (ADR-0060) | An item runs end to end on OpenCode with every step recorded; read-only agents cannot write; commands never see factory secrets; the tool loop is removed once parity is shown on real items | In progress |
 
 #### Later increments
 | Version | Increment | Highlights |

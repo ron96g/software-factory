@@ -100,7 +100,7 @@ test("AC-30: one planner run, independent review, and withdrawn answers no longe
     }) } }] });
   };
   const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:",
-    env: { OPENAI_API_KEY: "test-planner-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "test-planner-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
     fetch: fetchImpl, log: () => {} });
   await f.start();
   try {

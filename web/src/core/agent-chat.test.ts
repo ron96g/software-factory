@@ -48,7 +48,7 @@ async function ready(f: Factory, name: string, turn: string) {
 }
 
 test("contextual agent chat: fresh work-item evidence and MCP reads are recorded without changing the workflow", async () => {
-  const env: Record<string, string | undefined> = {};
+  const env: Record<string, string | undefined> = { FACTORY_AGENT_RUNTIME: "tool-loop" };
   const prompts: RequestBody[] = [];
   const remotes: Server[] = [];
   const invoked: string[] = [];
@@ -169,7 +169,7 @@ test("work-item evidence digest bounds large records including its truncation ma
 
 test("agent chat: durable submission, opt-in, idempotency and one pending turn; no synthetic item", async () => {
   let calls = 0;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch(() => { calls++; return textReply("An ordinary answer"); }) });
   try {
     assert.deepEqual((await f.app.chatAgents(p)).map((a) => a.metadata.name), ["support-engineer"]);
@@ -198,7 +198,7 @@ test("agent chat: a discovery announcement is interim, not a final answer or rec
   let requests = 0;
   let discoveries = 0;
   const remotes: Server[] = [];
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch(() => {
       requests++;
       if (requests === 1) return Response.json({ choices: [{ message: { content: "I'll start by discovering which resource types I'm allowed to query." } }] });
@@ -237,7 +237,7 @@ test("agent chat: a discovery announcement is interim, not a final answer or rec
 
 test("agent chat: models that keep announcing work fail within the step budget without a false final answer", async () => {
   let requests = 0;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch((body) => {
       requests++;
       assert.equal(body.tool_choice, undefined, "do not require provider-specific forced tool selection");
@@ -262,7 +262,7 @@ test("agent chat: models that keep announcing work fail within the step budget w
 
 test("agent chat: mixed and empty completion calls cannot hide pending reads or grant execution permissions", async () => {
   let requests = 0;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch(() => {
       requests++;
       if (requests === 1) return Response.json({ choices: [{ message: { tool_calls: [
@@ -304,7 +304,7 @@ test("agent chat: real MCP recording, denied tool injection, bounded history, re
     assert.ok(body.messages.filter((m) => m.role === "tool").slice(-3).every((m) => m.content?.includes("disallowed tool")));
     return textReply(`Rover desk/ticket-rover resourceVersion 42 is not Ready. ${SECRET}`);
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: llm, mcpTransportFor: (definition) => {
       const remote = new Server({ name: "chat-read-fixture", version: "1" }, { capabilities: { tools: {} } });
       remote.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -360,7 +360,7 @@ test("agent chat: real MCP recording, denied tool injection, bounded history, re
 
 test("agent chat: quota waits visibly then retries without duplicating user messages", async () => {
   let attempts = 0;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET }, fetch: modelFetch(() => {
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET }, fetch: modelFetch(() => {
     if (++attempts === 1) return new Response("quota exhausted", { status: 429, headers: { "retry-after": "1" } });
     return textReply("The model recovered");
   }) });
@@ -397,7 +397,7 @@ test("agent chat: missing model waits (no simulated answer), persisted turn resu
     assert.match(waiting.conversation.status?.message ?? "", /No tool-calling model/);
     assert.equal(waiting.messages.filter((m) => m.role === "assistant").length, 0);
     await f.stop(); stopped = true;
-    f = await createFactory({ definitionsRoot: ROOT, databasePath, env: { OPENAI_API_KEY: SECRET },
+    f = await createFactory({ definitionsRoot: ROOT, databasePath, env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
       clock: { now: () => new Date(Date.now() + 61_000) }, fetch: modelFetch(() => textReply("Recovered on the new process")) });
     stopped = false;
     await f.start();
@@ -409,7 +409,7 @@ test("agent chat: missing model waits (no simulated answer), persisted turn resu
 
 test("agent chat: hard failures are visible and a new turn can explicitly retry", async () => {
   let attempts = 0;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch(() => ++attempts === 1 ? new Response("invalid request", { status: 400 }) : textReply("Retry answered")) });
   await f.start();
   try {
@@ -432,7 +432,7 @@ test("agent chat: hard failures are visible and a new turn can explicitly retry"
 
 test("agent chat: model history retains the latest question and stays below 60000 characters", async () => {
   let latest: RequestBody | undefined;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: SECRET },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: SECRET },
     fetch: modelFetch((body) => { latest = body; return textReply("Evidence ".repeat(3100)); }) });
   await f.start();
   try {

@@ -161,6 +161,18 @@ export interface LLMClientFactory {
   create(provider: ModelProvider, apiKey: string | undefined): LLMClient;
 }
 
+/**
+ * Where a resolved model is served, for runtimes that call the provider themselves (ADR-0060). The key comes from
+ * `SecretResolver`; holders must never put it into prompts, transcripts or command environments (rule 16).
+ */
+export interface ModelEndpoint {
+  /** `ModelProvider.spec.type`, e.g. "openai-compatible" | "anthropic". */
+  type: string;
+  /** `ModelProvider.spec.baseUrl` as configured; undefined means the provider type's default. */
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 export interface ResolvedModel {
   provider: string;
   providerType: string;
@@ -169,6 +181,7 @@ export interface ResolvedModel {
   /** How the model was chosen: per-agent mapping or tier. */
   selectedBy?: "agent" | "tier";
   client: LLMClient;
+  endpoint?: ModelEndpoint;
 }
 
 /** Maps a tier (+ optional explicit provider) to a concrete client & model. Undefined when none is configured. */

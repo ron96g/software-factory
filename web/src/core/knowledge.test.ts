@@ -51,7 +51,7 @@ function fakeLLM(seen: string[]) {
 
 async function withFactory(fn: (f: Factory, seen: string[]) => Promise<void>) {
   const seen: string[] = [];
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(seen), log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(seen), log: () => {} });
   await f.start();
   try {
     await fn(f, seen);

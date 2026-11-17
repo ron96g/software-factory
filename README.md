@@ -73,6 +73,8 @@ npm run typecheck
 Without an LLM key, the factory still runs end to end. Classification and code research use deterministic
 skill handlers (ripgrep over the `software-factory` repository itself), and the other agents are simulated.
 Set `FACTORY_SIMULATION=wait` to keep agent runs waiting until an LLM is configured instead of producing placeholders.
+With an LLM, agents run in the embedded OpenCode v2 runtime (ADR-0060). Set `FACTORY_AGENT_RUNTIME=tool-loop` to use
+the factory's own tool loop instead. OpenCode keeps its session cache in `web/data/opencode/`.
 Use **Restart** on an item to run it again (e.g. after adding a key). Earlier output stays as superseded history.
 Data lives in `web/data/factory.db`. Delete the file to reset.
 

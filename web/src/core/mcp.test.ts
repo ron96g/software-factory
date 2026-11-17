@@ -124,7 +124,7 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
   f = await createFactory({
     definitionsRoot: ROOT,
     databasePath: ":memory:",
-    env: { OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
     fetch: routing(() => f, llm),
     workspaceBackend: backend,
     mcpTransportFor: (definition) => {

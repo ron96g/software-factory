@@ -7,7 +7,7 @@ import { ANONYMOUS } from "./ports/index.ts";
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 async function withFactory(env: Record<string, string>, fn: (f: Factory) => Promise<void>, fetchImpl?: typeof fetch) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
   await f.start();
   try {
     await fn(f);
@@ -335,7 +335,7 @@ test("model quota: Retry-After is capped, and a restart (e.g. with a new token) 
   const db = join(mkdtempSync(join(tmpdir(), "sf-quota-")), "factory.db");
   const exhausted = (async () => new Response("quota exceeded", { status: 429, headers: { "retry-after": "1209600" } })) as typeof fetch;
   const ok = (async () => Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] })) as typeof fetch;
-  const open = (fetchImpl: typeof fetch) => createFactory({ definitionsRoot: ROOT, databasePath: db, env: { OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
+  const open = (fetchImpl: typeof fetch) => createFactory({ definitionsRoot: ROOT, databasePath: db, env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
 
   let f = await open(exhausted);
   await f.start();

@@ -37,7 +37,8 @@ export class DefaultModelResolver implements ModelResolver {
       const perAgent = input.agent ? p.spec.agentModels?.[input.agent] : undefined;
       const model = perAgent ?? p.spec.models[tier] ?? p.spec.models.default ?? Object.values(p.spec.models)[0];
       if (!model) continue;
-      return { provider: p.metadata.name, providerType: p.spec.type, model, tier, selectedBy: perAgent ? "agent" : "tier", client: factory.create(p, key) };
+      return { provider: p.metadata.name, providerType: p.spec.type, model, tier, selectedBy: perAgent ? "agent" : "tier", client: factory.create(p, key),
+        endpoint: { type: p.spec.type, baseUrl: p.spec.baseUrl, apiKey: key } };
     }
     return undefined;
   }
