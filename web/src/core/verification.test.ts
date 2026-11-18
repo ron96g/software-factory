@@ -17,7 +17,7 @@ import { Registry } from "./registry/registry.ts";
 import type { GateEvaluator } from "./ports/index.ts";
 import { checkDefinitionVersion } from "./checks/definition-version.ts";
 
-async function fixture(preparation = false) {
+async function fixture(preparation = false, scan?: boolean) {
   const db = new DatabaseSync(":memory:");
   const clock = { now: () => new Date("2026-11-13T12:00:00Z") };
   const store = new SqliteStore(db, clock);
@@ -32,9 +32,10 @@ async function fixture(preparation = false) {
       { name: "ship", publish: { pullRequest: { draft: true } }, gate: { type: "human-approval" } },
     ] }] } });
   const repo = await store.create<Repository>({ apiVersion: API_VERSION, kind: "Repository", metadata: { name: "repo", namespace: "factory-system" },
-    spec: { checks: { preflight: "prepare", build: "build", test: { command: "tests", resultFormat: "go-test-json" } },
+    spec: { checks: { preflight: "prepare", build: "build", test: { command: "tests", resultFormat: "go-test-json" }, ...(scan === undefined ? {} : { "manual-acceptance": "scan" }) },
       verification: { requiredChecks: ["build", "test", "manual-acceptance"], preflightChecks: ["preflight"],
-        ...(preparation ? { preparationChecks: ["build"] } : {}), waivableChecks: ["manual-acceptance"] } } });
+        ...(preparation ? { preparationChecks: ["build"] } : {}), waivableChecks: ["manual-acceptance"],
+        ...(scan ? { autoWaive: [{ check: "manual-acceptance", when: "pre-existing" as const, followUp: "finding" as const }] } : {}) } } });
   const item = await store.create<WorkItem>({ apiVersion: API_VERSION, kind: "WorkItem", metadata: { name: "item", namespace: "default" },
     spec: { title: "Verify", sourceRef: { name: "manual" }, repositoryRefs: [{ name: "repo" }], workflowRef: { name: "verified" } },
     status: { phase: "Running", stage: "spec-review", round: 1 } });
@@ -451,6 +452,32 @@ test("only typed assertions enter code-fix recovery; stale reviewed candidates c
   } finally { f.db.close(); }
 });
 
+test("AC-2: a change-caused failure after the code-fix budget enters a stage-bound recovery episode within one budget", async () => {
+  const f = await fixture();
+  try {
+    const compile = f.compiler.compile.bind(f.compiler);
+    f.compiler.compile = (async (...args: Parameters<typeof compile>) => Object.assign(await compile(...args),
+      { recovery: { version: "1", maxTotalAttempts: 3, humanNeedReserve: 0, maxOperatorAllowance: 0, diagnosticChecks: [] } })) as typeof compile;    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify", retries: { verify: 2 } } });
+    assert.equal((await f.runStage("verify")).action, "wait");
+    const run = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    await f.finish(run, "AssertionFailed");
+    const decision = await f.runStage("verify");
+    assert.equal(decision.action, "recovery");
+    if (decision.action !== "recovery") return;
+    assert.equal(decision.unit, "stage:verify");
+    assert.equal(decision.trigger.name, run.metadata.name);
+    const spent = await f.current();
+    await f.store.updateStatus({ ...spent, status: { ...spent.status!, recovery: [1, 2, 3].map((n) => ({ id: `e${n}`, workItemUid: spent.metadata.uid!, planFingerprint: decision.planFingerprint,
+      unit: "stage:verify", policyVersion: "1", stage: "verify", maxTotalAttempts: 3, operatorAllowance: 0, trigger: { kind: "CheckRun" as const, name: "x", uid: "x" },
+      diagnosticAttempts: 0, codeAttempts: 0, executionAttempts: 0, disposition: "resolved" as const })) } });
+    assert.equal((await f.runStage("verify")).action, "block", "the single reserved budget is spent");
+  } finally { f.db.close(); }
+});
+
 test("missing required evidence needs an explicit revision-bound waiver; waiver never fabricates Passed", async () => {
   const f = await fixture();
   try {
@@ -647,4 +674,58 @@ test("preflight checks are authorized at the preflight stage and later stages on
   assert.equal(originAuthorized(workflow, origin("verify")), true);
   assert.equal(originAuthorized(workflow, origin("review")), false, "never before the plan is approved");
   assert.equal(originAuthorized(workflow, origin("unknown")), false);
+});
+
+async function exhaustedScan(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.approve("spec-review");
+  await f.seedPass("preflight", "preflight", "preflight");
+  await f.approve("code-review");
+  const wi = await f.current();
+  await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+  const ws = await f.store.get<Workspace>("Workspace", "default", "ws");
+  await f.store.updateStatus({ ...ws!, status: { ...ws!.status!, baseCommit: "a".repeat(40) } });
+  const contract = await f.service.plan(await f.current(), true);
+  for (const check of ["build", "test"]) await f.seedPass(check, "verification", "verify");
+  return { repo: f.repo, contract };
+}
+
+test("AC-1: an exhausted waivable check reaches the waiver path and never asks for a retry", async () => {
+  const f = await fixture(false, false);
+  try {
+    await exhaustedScan(f);
+    for (let i = 0; i < 2; i++) {
+      assert.equal((await f.service.beforeStage(await f.current(), (await f.context("verify")).stage)).action, "wait");
+      await f.finish((await f.store.list<CheckRun>("CheckRun")).at(-1)!, "UnknownFailure");
+    }
+    const decision = await f.runStage("verify");
+    assert.equal(decision.action, "await-approval");
+  } finally { f.db.close(); }
+});
+
+test("AC-3: pre-existing findings with a comparable baseline get a policy waiver; AC-8 the veto is durable", async () => {
+  const f = await fixture(false, true);
+  try {
+    const { contract } = await exhaustedScan(f);
+    const findings = async (run: CheckRun, ids: string[]) => f.store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed", outcome: "FindingsReported",
+      finalSnapshot: run.spec.snapshot, finishedAt: "2026-11-13T11:00:00Z", findings: ids.map((id) => ({ id })) } });
+    const verify = (await f.context("verify")).stage;
+    assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait");
+    await findings((await f.store.list<CheckRun>("CheckRun")).at(-1)!, ["adv-1"]);
+    const baseline = await f.scheduler.submit({ workItem: await f.current(), workspace: f.workspace, repository: f.repo, check: "manual-acceptance", requestedBy: "fixture",
+      requestId: "baseline", workflow: { stage: "verify", round: 1, purpose: "baseline", planFingerprint: contract.fingerprint, attempt: 9, baselineCommit: "a".repeat(40) } });
+    await f.store.update({ ...baseline, spec: { ...baseline.spec, repositoryVersion: (await f.store.list<CheckRun>("CheckRun")).at(-2)!.spec.repositoryVersion } });
+    const stored = (await f.store.list<CheckRun>("CheckRun")).find((r) => r.spec.workflow?.purpose === "baseline")!;
+    await findings(stored, ["adv-1", "adv-2"]);
+    const decision = await f.runStage("verify");
+    assert.equal(decision.action, "await-approval");
+    const [approval] = await f.store.list<Approval>("Approval", { namespace: "default" }).then((all) => all.filter((a) => a.spec.verification?.kind === "waiver"));
+    assert.match(approval.spec.decidedBy ?? "", /^policy:repo@/);
+    assert.equal(approval.spec.decision, "approve");
+    await f.service.validate(approval, "approve", approval.spec.comment);
+    await f.store.update({ ...approval, spec: { ...approval.spec, decision: "reject", decidedBy: "human" } });
+    await f.runStage("verify");
+    const after = (await f.store.list<Approval>("Approval", { namespace: "default" })).filter((a) => a.spec.verification?.kind === "waiver");
+    assert.equal(after.length, 1);
+    assert.equal(after[0].spec.decision, "reject");
+  } finally { f.db.close(); }
 });

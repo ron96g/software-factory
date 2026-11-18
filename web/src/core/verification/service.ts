@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { countsAsPassed } from "./evidence.ts";
 import type { Agent, AgentRun, Approval, Artifact, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfile, WorkItem, Workspace } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
-import { nsOf } from "../model/meta.ts";
+import { nsOf, ownerRef } from "../model/meta.ts";
+import { API_VERSION } from "../model/resource.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { SandboxUnavailableError, StoreError, isStoreError, type AgentBaselineRequests, type AgentCheckLogReader, type AgentCheckRequests, type AgentToolOffering, type ApprovalGateEvaluator, type CheckRunScheduler,
   type Clock, type CompiledStage, type CompiledWorkflow, type EventRecorder, type ExecutionContext, type ExecutionEnvironmentSelector, type GateContext,
@@ -537,8 +539,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const ws = candidate.workspaces.find((w) => w.spec.repositoryRef.name === repository)!;
       const passed = runs.some((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.repositoryVersion === checkDefinitionVersion(repo) &&
         r.spec.check === check && scopeSatisfies(repo, check, r, "verification") && r.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
-        r.status?.outcome === "Passed" && r.status.phase === "Completed" && !r.status.logsIncomplete &&
-        r.status.finalSnapshot === r.spec.snapshot && r.spec.environment.runtime === candidate.health.runtime &&
+        countsAsPassed(r) && r.spec.environment.runtime === candidate.health.runtime &&
         r.spec.environment.version === candidate.health.version && r.spec.environment.profileVersion === candidate.profiles[repository]);
       if (passed) continue;
       missing.push(id);
@@ -568,8 +569,73 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const state = await this.evidence(item, contract);
       if (!state.missing.length) return { action: "advance" };
       if (state.unwaivable.length) return { action: "block", questions: [`Required evidence is missing/stale/incomplete: ${state.unwaivable.join(", ")}. These checks cannot be waived.`] };
+      const waived = await this.policyWaiver(item, ctx.stage, contract, state);
+      if (waived === "submitted") return { action: "wait", retryAfterMs: 1000 };
       return { action: "await-approval", verification: { kind: "waiver", fingerprint: state.fingerprint, planFingerprint: contract.fingerprint, requirements: state.missing } };
     } catch (e) { return this.checkError(e); }
+  }
+
+  /**
+   * ADR-0067: decides a waiver by Git-declared policy when every missing check is a comparable FindingsReported failure
+   * whose findings all exist in a baseline run under an identical key. An existing Approval (a human veto) is never overwritten.
+   */
+  private async policyWaiver(item: WorkItem, stage: CompiledStage, contract: ValidationContract,
+    state: { missing: string[]; runs: CheckRun[]; workspaces: Workspace[]; fingerprint: string }): Promise<boolean | "submitted"> {
+    const baselines: string[] = [];
+    let policy = "";
+    for (const id of state.missing) {
+      const [repository, check] = id.split("/");
+      const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
+      const rule = repo.spec.verification?.autoWaive?.find((entry) => entry.check === check && entry.when === "pre-existing");
+      const ws = state.workspaces.find((w) => w.spec.repositoryRef.name === repository);
+      if (!rule || !ws?.status?.baseCommit) return false;
+      const mine = state.runs.filter((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.check === check && r.status?.phase === "Completed");
+      const candidate = mine.filter((r) => r.spec.workflow?.purpose === "verification").at(-1);
+      if (candidate?.status?.outcome !== "FindingsReported" || candidate.status.logsIncomplete || !candidate.status.findings?.length) return false;
+      const ids = candidate.status.findings.map((f) => f.id);
+      const fresh = this.d.clock.now().getTime() - 24 * 60 * 60 * 1000;
+      const baseline = mine.find((r) => r.spec.workflow?.purpose === "baseline" && r.spec.workflow.baselineCommit === ws.status!.baseCommit &&
+        r.status?.outcome === "FindingsReported" && !r.status.logsIncomplete && !!r.status.findings &&
+        r.spec.command === candidate.spec.command && r.spec.resultFormat === candidate.spec.resultFormat &&
+        r.spec.repositoryVersion === candidate.spec.repositoryVersion && digest(r.spec.scope ?? null) === digest(candidate.spec.scope ?? null) &&
+        digest(r.spec.environment) === digest(candidate.spec.environment) && Date.parse(r.status.finishedAt ?? "") > fresh &&
+        ids.every((i) => r.status!.findings!.some((f) => f.id === i)));
+      if (!baseline) {
+        const known = state.runs.filter((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.check === check &&
+          r.spec.workflow?.purpose === "baseline" && r.spec.workflow.baselineCommit === ws.status!.baseCommit &&
+          r.spec.workflow.round === item.status?.round);
+        if (known.some((r) => r.status?.phase !== "Completed" && r.status?.phase !== "Interrupted")) return "submitted";
+        if (known.length || isScoped(repo, check)) return false;
+        if (await this.automaticSpent(item, contract) >= await this.automaticBudget(item, contract)) return false;
+        try {
+          await this.d.scheduler.submit({ workItem: item, workspace: ws, repository: repo, check,
+            requestId: `baseline/${digest([stage.name, item.status?.round, repository, check, ws.status!.baseCommit])}`,
+            requestedBy: "verification-gate", workflow: { stage: stage.name, round: item.status!.round!, purpose: "baseline",
+              planFingerprint: contract.fingerprint, attempt: 1, baselineCommit: ws.status!.baseCommit } });
+        } catch (error) {
+          if (isStoreError(error, "Conflict") || isStoreError(error, "Invalid") || error instanceof SandboxUnavailableError) return false;
+          throw error;
+        }
+        return "submitted";
+      }
+      baselines.push(baseline.metadata.name);
+      policy ||= `policy:${repository}@${checkDefinitionVersion(repo)}`;
+    }
+    if (!baselines.length) return false;
+    const approval: Approval = {
+      apiVersion: API_VERSION, kind: "Approval",
+      metadata: { name: `${item.metadata.name}-${stage.name}-r${item.status!.round}`, namespace: nsOf(item), ownerReferences: [ownerRef(item)] },
+      spec: { workItemRef: { name: item.metadata.name }, stage: stage.name, approvers: stage.gate?.approvers ?? [],
+        criteria: [...(stage.gate?.criteria ?? []), `Verification waiver decided by policy. Binding: ${state.fingerprint}`],
+        decision: "approve", decidedBy: policy,
+        comment: `Pre-existing findings also present in baseline CheckRun ${baselines.join(", ")}; waived by Git policy.`,
+        verification: { kind: "waiver", fingerprint: state.fingerprint, planFingerprint: contract.fingerprint, requirements: state.missing } },
+      status: { phase: "Pending" },
+    };
+    try { await this.d.writer.create(approval); }
+    catch (e) { if (isStoreError(e, "AlreadyExists")) return false; throw e; }
+    await this.d.events.normal(item, "PolicyWaiver", `${state.missing.join(", ")}: decided automatically by ${policy} (baseline ${baselines.join(", ")}). Follow-up for the pre-existing findings recorded as this event.`);
+    return true;
   }
 
   private checkError(e: unknown): GateDecision {
@@ -578,6 +644,31 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     if (isStoreError(e, "Conflict")) return { action: "wait", retryAfterMs: 1000 };
     if (!isStoreError(e, "Invalid")) throw e;
     return { action: "block", questions: [e.message] };
+  }
+
+  /** ADR-0067: one budget per plan fingerprint covers every automatic attempt (baselines and recovery episodes). */
+  private async automaticBudget(item: WorkItem, contract: ValidationContract): Promise<number> {
+    const recovery = item.spec.workflowRef ? (await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).recovery : undefined;
+    return recovery?.maxTotalAttempts ?? contract.policy.maxCodeAttempts + contract.policy.maxExecutionAttempts;
+  }
+
+  /** Slots are counted from deterministic reservations (one baseline per stage/round/check/commit, one episode per trigger), never from run counts, so reconcile retries cannot double-charge. */
+  private async automaticSpent(item: WorkItem, contract: ValidationContract): Promise<number> {
+    const runs = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
+    const baselines = new Set(runs.filter((r) => r.spec.workItemUid === item.metadata.uid && r.spec.workflow?.purpose === "baseline" &&
+      r.spec.workflow.planFingerprint === contract.fingerprint).map((r) => digest([r.spec.workflow!.stage, r.spec.workflow!.round, r.spec.check, r.spec.workflow!.baselineCommit])));
+    const episodes = (item.status?.recovery ?? []).filter((e) => e.planFingerprint === contract.fingerprint).length;
+    return baselines.size + episodes;
+  }
+
+  /** Change-caused failures enter an ADR-0059 episode bound to the stage; without a recovery policy or budget the caller blocks as before. */
+  private async stageRecovery(item: WorkItem, stage: CompiledStage, contract: ValidationContract, trigger: CheckRun, cause: string): Promise<GateDecision | undefined> {
+    if (!item.spec.workflowRef || !(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).recovery) return undefined;
+    if (!trigger.metadata.uid) return { action: "fail", reason: "Recovery trigger has no durable identity." };
+    if (await this.automaticSpent(item, contract) >= await this.automaticBudget(item, contract)) return undefined;
+    await this.d.events.normal(item, "AutomaticDecision", `${stage.name}: ${cause} in CheckRun ${trigger.metadata.name} routed to recovery`);
+    return { action: "recovery", trigger: { kind: "CheckRun", name: trigger.metadata.name, uid: trigger.metadata.uid },
+      planFingerprint: contract.fingerprint, unit: `stage:${stage.name}` };
   }
 
   /**
@@ -598,14 +689,27 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         r.spec.check === check && r.spec.workflow?.planFingerprint === contract.fingerprint && r.spec.workflow.purpose === (preflight ? "preflight" : "verification") &&
         r.spec.workflow.stage === stage.name && r.spec.workflow.round === item.status?.round);
       const last = attempts.at(-1);
-      if (last?.status?.outcome === "Passed" && !last.status.logsIncomplete && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
-          last.status.finalSnapshot === last.spec.snapshot && last.spec.repositoryVersion === checkDefinitionVersion(repo)) continue;
+      if (last && countsAsPassed(last) && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
+          last.spec.repositoryVersion === checkDefinitionVersion(repo)) continue;
       if (last?.status?.outcome === "AssertionFailed" && !preflight) {
         if ((item.status?.retries?.[stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: stage.name };
+        const recovery = await this.stageRecovery(item, stage, contract, last, "assertion failure");
+        if (recovery) return recovery;
         return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget. Inspect CheckRun ${last.metadata.name} and its redacted logs.`] };
       }
+      if (last?.status?.outcome === "FindingsReported" && !preflight) {
+        // A comparable result is final: re-running cannot change it. Waivable checks reach the (policy or human) waiver.
+        if (repo.spec.verification?.waivableChecks?.includes(check)) continue;
+        return { action: "block", questions: [`${id}: reported findings caused by this change. Inspect CheckRun ${last.metadata.name} and its redacted logs; the check cannot be waived.`] };
+      }
       if (last && attempts.length >= contract.policy.maxExecutionAttempts) {
-        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts. No code-fix retry was charged. Inspect CheckRun ${last.metadata.name}; fix prerequisites/scope or review the budget, then explicitly retry.`] };
+        // ADR-0067: exhausted waivable checks reach the waiver in evaluateChecks; no retry question is ever asked.
+        if (!preflight && repo.spec.verification?.waivableChecks?.includes(check)) continue;
+        if (!preflight && last.status?.outcome === "UnknownFailure") {
+          const recovery = await this.stageRecovery(item, stage, contract, last, "opaque failure");
+          if (recovery) return recovery;
+        }
+        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts. No code-fix retry was charged. Inspect CheckRun ${last.metadata.name}; the check cannot be waived, so fix prerequisites or scope and restart the stage.`] };
       }
       const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
       if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };

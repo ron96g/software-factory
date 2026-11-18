@@ -250,6 +250,17 @@ export class ToolLoopExecutor implements AgentExecutor {
         }
         // A rejected finish on the last step still goes to the post-run checks (ADR-0057 §4).
         if (lastFinish) return lastFinish;
+        // ADR-0067: one finish-only correction step when the budget ended without any finish call.
+        const note = "[harness] The step budget is used up and no finish was received. Call finish now with what is done and what is not.";
+        await say(note, maxSteps);
+        messages.push({ role: "user", content: note });
+        const last = await this.d.turns.complete({ model, messages, tools: [FINISH], transcript: ctx.transcript, agent: ctx.agent.metadata.name, step: maxSteps + 1 });
+        const call = last.toolCalls.find((c) => c.name === "finish");
+        if (call) {
+          await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step: maxSteps + 1 } });
+          return finishResult(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: maxSteps + 1,
+            toolUse: { steps: maxSteps + 1, calls: { ...calls }, finishCorrections: corrections, wrapUp: true } });
+        }
         throw new Error(`tool loop did not finish within ${maxSteps} steps`);
       } finally {
         await session?.close();

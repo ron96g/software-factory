@@ -5,7 +5,7 @@ import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import type { ModuleScopePlanner, RecoveryCheckAuthorization, ResourceReader, Validator } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
-import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
@@ -80,7 +80,7 @@ async function validateWorkflowOrigin(run: CheckRun, item: WorkItem, repository:
     isOwnedBy(item, caller);
   if (!validCaller) return ["workflow caller is not an active, current-round AgentRun"];
   if (active.some((agent) => agent.metadata.name !== caller!.metadata.name)) return ["another agent run is active for this work item"];
-  if (origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness") {
+  if ((origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness") && !gateBaseline(origin)) {
     if (!recoveryChecks || !workspace) return ["scoped recovery authorization is unavailable"];
     try { await recoveryChecks.authorize({ item, origin, repository, workspace, check: run.spec.check, caller: caller! }); }
     catch (error) { return [error instanceof Error ? error.message : "recovery check authorization failed"]; }

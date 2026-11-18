@@ -250,3 +250,6 @@ restarted by deployment.
 - **Trust free-form diagnoses:** cannot enforce identity, routing, budget or evidence eligibility.
 - **Patch only the two tests:** fixes the immediate race, but not lost retry context, inaccessible checks or human
   escalation for ordinary technical failures.
+
+
+> Amended by ADR-0067: policy-declared waivers of pre-existing findings are allowed; stage-bound recovery episodes cover change-caused verify failures.

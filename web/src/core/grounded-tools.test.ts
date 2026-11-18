@@ -164,6 +164,14 @@ test("X38: agents know their step budget, are warned near the end, and the last 
   await assert.rejects(stuck.run(), /did not finish within 2 steps/, "a run that still does not finish fails as before");
 });
 
+test("AC-6: a run that ends its budget without finish gets one finish-only correction step", async () => {
+  const read: ToolCall = { id: "r", name: "read_file", arguments: { path: "web/a.ts" } };
+  const l = loop((_messages, step) => step <= 2 ? { ...read, id: `r${step}` } : finishCall("late finish", step), undefined, false, 2);
+  const result = await l.run();
+  assert.equal(result.summary, "late finish");
+  assert.deepEqual(l.offered[2], ["finish"]);
+});
+
 test("AC-39-5: harness check offerings need no Agent edit and respect explicit step restrictions", async () => {
   let submitted = 0;
   const additions = {

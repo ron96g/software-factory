@@ -1,5 +1,6 @@
 import type { CheckOutcome } from "../model/kinds.ts";
-import type { CheckResultClassifier } from "../ports/verification.ts";
+import type { CheckFinding } from "../model/kinds.ts";
+import type { CheckResultClassifier, FindingExtractor } from "../ports/verification.ts";
 import type { ExecResult } from "../ports/sandbox.ts";
 import type { Registrar } from "../ports/integration.ts";
 
@@ -114,8 +115,50 @@ export const nodeTestTapClassifier: CheckResultClassifier = {
   },
 };
 
+interface AuditVia { name?: string; severity?: string; title?: string; source?: unknown; url?: string }
+interface AuditVulnerability { name?: string; severity?: string; via?: (string | AuditVia)[]; nodes?: string[]; range?: string }
+
+function parseAudit(result: ExecResult): { findings: CheckFinding[]; error: boolean } | undefined {
+  if (result.truncated) return undefined;
+  let doc: { vulnerabilities?: Record<string, AuditVulnerability>; error?: unknown; metadata?: unknown };
+  try { doc = JSON.parse(result.stdout); } catch { return { findings: [], error: true }; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { findings: [], error: true };
+  if (doc.error) return { findings: [], error: true };
+  if (!doc.vulnerabilities || typeof doc.vulnerabilities !== "object") return { findings: [], error: true };
+  const findings: CheckFinding[] = [];
+  for (const [pkg, vuln] of Object.entries(doc.vulnerabilities)) {
+    const nodes = vuln.nodes?.length ? [...vuln.nodes].sort() : [""];
+    const advisories = (vuln.via ?? []).filter((v): v is AuditVia => typeof v === "object" && v !== null);
+    const ids = advisories.length ? advisories : [{ source: "transitive", severity: vuln.severity }];
+    for (const adv of ids) for (const node of nodes) {
+      const severity = adv.severity ?? vuln.severity ?? "unknown";
+      findings.push({ id: [String(adv.source ?? adv.url ?? adv.title ?? ""), vuln.name ?? pkg, vuln.range ?? "", node, severity].join("|"), severity, title: adv.title });
+    }
+  }
+  const seen = new Map(findings.map((f) => [f.id, f]));
+  return { findings: [...seen.values()].sort((a, b) => a.id.localeCompare(b.id)), error: false };
+}
+
+/** ADR-0067: `npm audit --json`. Finding identity is advisory + package + version range + dependency path + severity. */
+export const npmAuditJsonClassifier: CheckResultClassifier & FindingExtractor = {
+  format: "npm-audit-json",
+  classify(result) {
+    const terminated = terminationOutcome(result);
+    if (terminated) return terminated;
+    if (result.exitCode === 0) return "Passed";
+    const parsed = parseAudit(result);
+    if (!parsed || parsed.error) return "Unavailable";
+    return parsed.findings.length ? "FindingsReported" : "UnknownFailure";
+  },
+  extractFindings(result) {
+    const parsed = parseAudit(result);
+    return parsed && !parsed.error && result.exitCode !== 0 ? parsed.findings : undefined;
+  },
+};
+
 export function registerCheckResultClassifiers(registrar: Registrar<CheckResultClassifier>): void {
   registrar.register(exitCodeClassifier.format, exitCodeClassifier);
   registrar.register(goTestJsonClassifier.format, goTestJsonClassifier);
   registrar.register(nodeTestTapClassifier.format, nodeTestTapClassifier);
+  registrar.register(npmAuditJsonClassifier.format, npmAuditJsonClassifier);
 }

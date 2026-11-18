@@ -1,4 +1,5 @@
 import type { CheckWorkflowOrigin, Repository, Workspace } from "../model/kinds.ts";
+import { autoWaiveProblems } from "../model/auto-waive.ts";
 import { isScoped, minScopeProblems, requestedScope } from "../model/check-scope.ts";
 import { StoreError, type ModuleScopePlanner } from "../ports/index.ts";
 
@@ -8,6 +9,11 @@ export function checkConfig(repository: Repository, name: string) {
   const config = typeof value === "string" ? { command: value } : value;
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new StoreError(`check "${name}" must have a command configuration`, "Invalid");
+  }
+  const problems = autoWaiveProblems(repository);
+  if (problems.length) throw new StoreError(problems.join("; "), "Invalid");
+  if (config.maxOutputBytes !== undefined && (!Number.isSafeInteger(config.maxOutputBytes) || config.maxOutputBytes < 1)) {
+    throw new StoreError(`check "${name}" maxOutputBytes must be a positive integer`, "Invalid");
   }
   const timeoutMs = config.timeoutMs ?? 900_000;
   if (typeof config.command !== "string" || !config.command.trim() ||

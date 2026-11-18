@@ -143,6 +143,12 @@ def main():
                 else:
                     errors.append(message)
 
+        for entry in policy.get("autoWaive") or []:
+            if entry.get("check") not in (policy.get("waivableChecks") or []):
+                errors.append(f"{path}: {name}: autoWaive check '{entry.get('check')}' must be in waivableChecks")
+            if entry.get("when") != "pre-existing":
+                errors.append(f"{path}: {name}: autoWaive '{entry.get('check')}' needs when: pre-existing")
+
         # ADR-0061: tier-scoped checks and minScope (same rules as web/src/core/model/check-scope.ts and checks/config.ts).
         make_target = re.compile(r"^make [a-zA-Z0-9][a-zA-Z0-9_-]*$")
         for check, value in commands.items():

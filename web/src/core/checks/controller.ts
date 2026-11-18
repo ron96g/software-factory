@@ -1,12 +1,12 @@
-import type { AgentRun, CheckOutcome, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
+import type { AgentRun, CheckFinding, CheckOutcome, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
-import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
+import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 
 export interface CheckControllerDeps {
@@ -135,7 +135,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       return { reason: `check "${run.spec.check}" is not authorized for ${workflowOrigin.purpose}` };
     }
     if (workflowOrigin && (workflowOrigin.purpose === "diagnostic" || workflowOrigin.purpose === "baseline" ||
-        workflowOrigin.purpose === "unit-readiness" && workflowOrigin.agentRunRef)) {
+        workflowOrigin.purpose === "unit-readiness" && workflowOrigin.agentRunRef) && !gateBaseline(workflowOrigin)) {
       if (!d.recoveryChecks || !workflowOrigin.agentRunRef) return { reason: "scoped recovery authorization is unavailable" };
       const caller = await d.reader.get<AgentRun>("AgentRun", namespace, workflowOrigin.agentRunRef.name);
       if (!caller) return { reason: "recovery check caller not found" };
@@ -275,6 +275,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     let outputLogged = false;
     let finalSnapshot: string | undefined;
     let failureEvidence: { tests: string[] } | undefined;
+    let findings: CheckFinding[] | undefined;
     try {
       result = await d.runner.execute(run, workspace, repository);
       await d.logs.append(run.status!.logRef!, {
@@ -302,6 +303,11 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         else if (run.spec.workflow?.purpose === "preflight" && result.exitCode !== 0) outcome = "SetupFailed";
         else {
           outcome = selectedClassifier.classify(result);
+          if (outcome === "FindingsReported" && finalSnapshot === run.spec.snapshot && "extractFindings" in selectedClassifier) {
+            const extracted = (selectedClassifier as FindingExtractor).extractFindings(result);
+            if (extracted && extracted.every((f) => d.redactor.redact(f.id) === f.id)) findings = extracted;
+            else outcome = "UnknownFailure";
+          }
           if (outcome === "AssertionFailed" && finalSnapshot === run.spec.snapshot) {
             const evidence = selectedClassifier.failureEvidence?.(result);
             if (evidence && evidence.tests.every((name) => d.redactor.redact(name) === name)) failureEvidence = evidence;
@@ -345,6 +351,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         outcome,
         executionOutcome,
         failureEvidence,
+        findings,
         message: d.redactor.redact(message),
         finishedAt: now.toISOString(),
         exitCode: result?.exitCode,
