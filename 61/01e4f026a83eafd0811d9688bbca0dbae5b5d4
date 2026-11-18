@@ -1,0 +1,19 @@
+web/src/core/adapters/sources/jira.ts
+  s_1ad86bc6089685::t_76486d5046f22b 2-3,33-34,43,50,58,80,84,177-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6101e4f026a83eafd0811d9688bbca0dbae5b5d4",
+  "prompts": {},
+  "sessions": {
+    "s_1ad86bc6089685": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "4bed33a7-dcdc-4fb7-9d67-6bd3b9dd6d2a",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
