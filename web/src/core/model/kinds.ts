@@ -167,10 +167,12 @@ export interface RepositorySpec {
    * `scoped` (ADR-0061): the command takes a module selection whose scope follows the verification tier.
    * `moduleScoped` (legacy, ADR-0044): always the affected scope, whatever the tier.
    */
-  checks?: Record<string, string | { command: string; timeoutMs?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean }>;
+  checks?: Record<string, string | { command: string; timeoutMs?: number; maxOutputBytes?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
   moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
   verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[];
+    /** ADR-0067: Git-declared policy waivers; each check must also be in `waivableChecks`. Verify stage only. */
+    autoWaive?: AutoWaive[];
     /** ADR-0047: configured checks an approved Unit manifest may require as construction-readiness evidence. */
     readinessChecks?: string[];
     /** ADR-0061: raises a scoped check's scope in a tier above the tier's default, e.g. `{ verification: { tests: "full" } }`. */
@@ -423,7 +425,10 @@ export interface RetrospectiveSnapshot {
   reports: { name: string; uid: string; fingerprint: string; eligible: boolean; exclusions: string[]; spec: RetrospectiveFeedbackSpec }[];
 }
 
-export type CheckOutcome = "Passed" | "AssertionFailed" | "SetupFailed" | "UnknownFailure" | "Unavailable" | "TimedOut" | "Cancelled" | "NotVerified";
+/** ADR-0067: a comparable finding (e.g. an npm advisory) reported by a registered classifier. */
+export interface CheckFinding { id: string; severity?: string; title?: string }
+export interface AutoWaive { check: string; when: "pre-existing"; followUp?: "finding" }
+export type CheckOutcome = "Passed" | "FindingsReported" | "AssertionFailed" | "SetupFailed" | "UnknownFailure" | "Unavailable" | "TimedOut" | "Cancelled" | "NotVerified";
 
 export interface CheckWorkflowOrigin {
   stage: string;
@@ -485,6 +490,8 @@ export interface CheckRunStatus {
   /** Command classification before candidate/origin freshness invalidates authoritative evidence. */
   executionOutcome?: CheckOutcome;
   failureEvidence?: { tests: string[] };
+  /** ADR-0067: findings extracted by a FindingExtractor; only set with complete output. */
+  findings?: CheckFinding[];
   message?: string;
   exitCode?: number;
   signal?: string;

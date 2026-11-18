@@ -513,7 +513,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           (priorRepairs.some((e) => !e.repairEvidence) || !observations.some((observation) => !seen.has(observation)));
         const codeUsed = scope.reduce((n, e) => n + e.codeAttempts, 0);
         const execUsed = scope.reduce((n, e) => n + e.executionAttempts, 0);
-        const baseCeiling = route.action === "repair" ? wf.unitExecution?.maxCodeAttempts : wf.unitExecution?.maxExecutionAttempts;
+        const stageBound = episode.unit.startsWith("stage:");
+        const baseCeiling = stageBound ? policy.maxTotalAttempts
+          : route.action === "repair" ? wf.unitExecution?.maxCodeAttempts : wf.unitExecution?.maxExecutionAttempts;
         const ceiling = baseCeiling === undefined ? undefined : baseCeiling +
           (route.action === "repair" ? allocations.repair : allocations.execution);
         if (prior && episode.diagnosticAttempts < (policy.maxDiagnosisAttempts ?? 2) + allocations.diagnosis +
@@ -526,7 +528,9 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
             recovery: updateEpisode({ latestReport, disposition: "failed" }) });
         }
         const patch = route.action === "repair" ? { codeAttempts: episode.codeAttempts + 1 } : { executionAttempts: episode.executionAttempts + 1 };
-        return write(wi, { ...enterStage(wf, stage, (wi.status?.round ?? 0) + 1), recovery: updateEpisode({
+        const reentry = stageBound && route.action === "repair" && wf.verification
+          ? wf.stages.find((s) => s.name === wf.verification!.implementationStage) ?? stage : stage;
+        return write(wi, { ...enterStage(wf, reentry, (wi.status?.round ?? 0) + 1), recovery: updateEpisode({
           ...patch, latestReport, nextAttemptMode: route.action,
           ...(route.action === "repair" ? { repairSignature: episode.failureSignature, repairEvidence: observations } : {}),
           disposition: "repairing" }) }, "RecoveryRepairing", `${episode.unit}: ${route.action}`);

@@ -31,3 +31,6 @@ prompt or the conversation said how many steps it had or that it was about to ru
 - **Raise the budget:** postpones the same failure and costs more on runs that go astray.
 - **Return the last tool result as the result:** produces no summary and no outcome for the gate.
 - **Per-agent budgets in agent definitions:** possible later; it does not remove the need for a graceful end.
+
+
+> Amended by ADR-0067: an assigned run that exhausts its step budget without `finish` now retries the attempt (one attempt charged) after a finish-only correction step.
