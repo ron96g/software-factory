@@ -40,6 +40,7 @@ import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
 import { RetrospectivePanel } from "@/ui/retrospectives.tsx";
+import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
 import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
 import { CheckRunsPanel } from "@/ui/check-runs.tsx";
 import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
@@ -242,6 +243,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }} style={{ position: "sticky", top: 68, alignSelf: "flex-start" }}>
+          <IssueProposalsPanel issues={d.issues} />
           {d.knowledge.length > 0 && (
             <Card className="sf-surface" mb="md">
               <Title order={5} mb={4}>

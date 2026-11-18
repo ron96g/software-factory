@@ -1,0 +1,106 @@
+"use client";
+import { Anchor, Badge, Button, Card, Checkbox, Group, Select, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
+import { useState } from "react";
+import type { IssueProposal } from "@/core/model/kinds.ts";
+import type { NewItemOptions } from "@/core/ports/app.ts";
+import { act, useLive } from "@/ui/api.ts";
+import { PhaseBadge } from "@/ui/badges.tsx";
+
+export const issueNeedsReview = (i: IssueProposal) => (i.status?.phase ?? "Proposed") === "Proposed" && i.spec.review?.decision !== "reject";
+
+function linkedCondition(i: IssueProposal) {
+  return i.status?.conditions?.find((c) => c.type === "Linked");
+}
+
+/** ADR-0066 §7: edit, retarget, approve, reject and resolve; agents can only propose. */
+export function IssueProposalsPanel({ issues }: { issues: IssueProposal[] }) {
+  const { data: options } = useLive<NewItemOptions>(issues.length ? "/api/new-item-options" : null, () => false);
+  if (issues.length === 0) return null;
+  return (
+    <Card className="sf-surface" mb="md">
+      <Title order={5} mb={4}>
+        Issues
+      </Title>
+      <Text size="xs" c="dimmed" mb="sm">
+        Proposed for trackers. Nothing is created until a human approves it.
+      </Text>
+      <Stack gap="md">
+        {issues.map((i) => (
+          <IssueRow key={i.metadata.name} issue={i} targets={options?.issueTargets ?? []} />
+        ))}
+      </Stack>
+    </Card>
+  );
+}
+
+function IssueRow({ issue: i, targets }: { issue: IssueProposal; targets: { source: string; type: string; project?: string }[] }) {
+  const phase = i.status?.phase ?? "Proposed";
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(i.spec.title);
+  const [body, setBody] = useState(i.spec.body);
+  const [target, setTarget] = useState<string | null>(i.spec.targetRef?.name ?? null);
+  const [pickUp, setPickUp] = useState(!!i.spec.pickUp);
+  const [existing, setExisting] = useState("");
+  const [busy, setBusy] = useState(false);
+  const base = `/api/issues/${i.metadata.name}`;
+  const run = async (url: string, body: unknown, ok: string) => {
+    setBusy(true);
+    await act(url, body, ok);
+    setBusy(false);
+  };
+  const frozen = phase !== "Proposed" && phase !== "Rejected";
+  const linked = linkedCondition(i);
+  const ref = i.status?.externalRef;
+  return (
+    <Stack gap={6}>
+      <Group gap="xs" justify="space-between" wrap="nowrap">
+        <Text size="sm" fw={500} lineClamp={1}>
+          {i.spec.title}
+        </Text>
+        <PhaseBadge phase={phase} size="xs" />
+      </Group>
+      <Group gap={6}>
+        <Badge size="xs" variant="outline">{i.spec.purpose}</Badge>
+        {i.spec.targetRef ? <Badge size="xs" variant="light">{i.spec.targetRef.name}</Badge> : <Badge size="xs" color="yellow" variant="light">no target</Badge>}
+        {ref && (ref.url ? <Anchor href={ref.url} target="_blank" size="xs">{ref.externalId}</Anchor> : <Text size="xs">{ref.externalId}</Text>)}
+        {linked?.status === "True" && <Badge size="xs" color="teal" variant="light">linked</Badge>}
+        {linked?.reason === "Conflict" && <Badge size="xs" color="red" variant="light" title={linked.message}>conflict</Badge>}
+      </Group>
+      {linked?.reason === "Conflict" && <Text size="xs" c="red">{linked.message}</Text>}
+      {(phase === "Uncertain" || phase === "Failed") && (
+        <Text size="xs" c="dimmed">
+          {i.status?.conditions?.find((c) => c.type !== "Linked")?.message ?? "The outcome of the last attempt is not confirmed."}
+        </Text>
+      )}
+      {editing && !frozen ? (
+        <Stack gap={6}>
+          <TextInput size="xs" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
+          <Textarea size="xs" autosize minRows={4} value={body} onChange={(e) => setBody(e.currentTarget.value)} />
+          <Select size="xs" placeholder="Target" data={targets.map((t) => ({ value: t.source, label: `${t.source}${t.project ? ` (${t.project})` : ""}` }))} value={target} onChange={setTarget} />
+          <Checkbox size="xs" label="Let agents pick it up" checked={pickUp} onChange={(e) => setPickUp(e.currentTarget.checked)} />
+          <Group gap="xs">
+            <Button size="compact-xs" loading={busy} onClick={async () => { await run(`${base}/edit`, { title, body, pickUp, targetSource: target ?? undefined }, "Saved; approval is needed again"); setEditing(false); }}>Save</Button>
+            <Button size="compact-xs" variant="default" onClick={() => setEditing(false)}>Cancel</Button>
+          </Group>
+        </Stack>
+      ) : (
+        <Group gap="xs">
+          {!frozen && <Button size="compact-xs" variant="default" onClick={() => setEditing(true)}>Edit</Button>}
+          {(phase === "Proposed" || phase === "Rejected") && (
+            <>
+              <Button size="compact-xs" color="teal" loading={busy} disabled={!i.spec.targetRef} onClick={() => run(`${base}/review`, { decision: "approve" }, "Approved")}>Approve</Button>
+              {phase === "Proposed" && <Button size="compact-xs" color="red" variant="light" loading={busy} onClick={() => run(`${base}/review`, { decision: "reject" }, "Rejected")}>Reject</Button>}
+            </>
+          )}
+          {(phase === "Uncertain" || phase === "Failed") && (
+            <>
+              <Button size="compact-xs" loading={busy} onClick={() => run(`${base}/resolve`, { action: "create-again" }, "Creating again")}>{phase === "Failed" ? "Retry" : "Create again"}</Button>
+              <TextInput size="xs" placeholder="Existing issue key" value={existing} onChange={(e) => setExisting(e.currentTarget.value)} />
+              <Button size="compact-xs" variant="default" disabled={!existing.trim()} loading={busy} onClick={() => run(`${base}/resolve`, { action: "link", externalId: existing }, "Linked")}>Link existing</Button>
+            </>
+          )}
+        </Group>
+      )}
+    </Stack>
+  );
+}

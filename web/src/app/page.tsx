@@ -1,5 +1,6 @@
 "use client";
 import {
+  Badge,
   Button,
   Card,
   Group,
@@ -20,11 +21,14 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconCloudDownload, IconPlus, IconAlertTriangle } from "@tabler/icons-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import type { Source, WorkItem } from "@/core/model/kinds.ts";
 import type { NewItemOptions } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
+import { issueNeedsReview } from "@/ui/issue-proposals.tsx";
+import type { IssueProposal } from "@/core/model/kinds.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 
 const FILTERS = { all: "All", attention: "Needs you", active: "Active", done: "Done" } as const;
@@ -33,6 +37,8 @@ export default function Dashboard() {
   const router = useRouter();
   const { data: items } = useLive<WorkItem[]>("/api/workitems", (n) => n.kind === "WorkItem");
   const { data: sources } = useLive<Source[]>("/api/sources", () => false);
+  const { data: issues } = useLive<IssueProposal[]>("/api/issues", (n) => n.kind === "IssueProposal");
+  const awaitingIssues = (issues ?? []).filter(issueNeedsReview).length;
   const [opened, { open, close }] = useDisclosure(false);
   const [filter, setFilter] = useState<keyof typeof FILTERS>("all");
 
@@ -55,6 +61,11 @@ export default function Dashboard() {
           <Title order={2}>
             Work items
           </Title>
+          {awaitingIssues > 0 && (
+            <Badge component={Link} href="/resources/issueproposals" color="yellow" variant="light" mt={4} style={{ cursor: "pointer" }}>
+              {awaitingIssues} issue {awaitingIssues === 1 ? "proposal" : "proposals"} awaiting review
+            </Badge>
+          )}
           <Text c="dimmed" size="sm">
             Every item flows through the AI-DLC loop. Humans approve at the gates.
           </Text>
@@ -185,6 +196,7 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
   const [description, setDescription] = useState("");
   const [context, setContext] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mirrorTo, setMirrorTo] = useState<string | null>(null);
   const { data: options } = useLive<NewItemOptions>(opened ? "/api/new-item-options" : null, () => false);
   // null = untouched: follow the manual source's defaults until the user picks something.
   const [workflowPick, setWorkflow] = useState<string | null>(null);
@@ -237,6 +249,16 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
             styles={{ description: { marginTop: 6 } }}
           />
         </SimpleGrid>
+        {(options?.issueTargets.length ?? 0) > 0 && (
+          <Select
+            label="Also create in …"
+            description="Optional. Proposes an issue for this item in a tracker; it is only created after you approve it on the item page."
+            clearable
+            data={options!.issueTargets.map((t) => ({ value: t.source, label: `${t.source}${t.project ? ` (${t.project})` : ""}` }))}
+            value={mirrorTo}
+            onChange={setMirrorTo}
+          />
+        )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
             Cancel
@@ -248,7 +270,7 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
               setBusy(true);
               const wi = await act<WorkItem>(
                 "/api/workitems",
-                { title, description, context, workflowRef: workflow, repositoryRefs: repos },
+                { title, description, context, workflowRef: workflow, repositoryRefs: repos, mirrorTo: mirrorTo ?? undefined },
                 "Work item created",
               );
               setBusy(false);
@@ -258,6 +280,7 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
                 setContext("");
                 setWorkflow(null);
                 setRepos(null);
+                setMirrorTo(null);
                 onClose();
                 onCreated(wi.metadata.name);
               }

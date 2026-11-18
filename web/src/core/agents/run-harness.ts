@@ -22,7 +22,7 @@ import type {
   WorkspaceMutationGuard,
 } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { parseKnowledge, parseQuestions } from "./executors.ts";
+import { parseIssues, parseKnowledge, parseQuestions } from "./executors.ts";
 
 export const FINISH: ToolSchema = {
   name: "finish",
@@ -48,6 +48,11 @@ export const FINISH: ToolSchema = {
         type: "array",
         description: "Optional (knowledge-base skill): reusable knowledge to propose. Humans approve it before anyone uses it.",
         items: { type: "object", properties: { title: { type: "string" }, content: { type: "string" }, tags: { type: "array", items: { type: "string" } } }, required: ["title", "content"] },
+      },
+      issues: {
+        type: "array",
+        description: "Optional (issue-proposal skill): tracker issues to propose as findings. A human approves before anything is created.",
+        items: { type: "object", properties: { title: { type: "string" }, body: { type: "string" }, issueType: { type: "string" }, labels: { type: "array", items: { type: "string" } } }, required: ["title", "body"] },
       },
     },
     required: ["summary"],
@@ -221,6 +226,7 @@ export async function finishResult(ctx: ExecutionContext, args: Record<string, u
     outcome: typeof args.outcome === "string" ? args.outcome : undefined,
     questions: parseQuestions(args.questions),
     knowledge: parseKnowledge(args.knowledge),
+    issues: parseIssues(args.issues),
     feedback: args.feedback,
     provenance: {
       model: { provider: meta.model.provider, name: meta.model.model, tier: meta.model.tier, params: { steps: meta.steps, ...meta.params } },

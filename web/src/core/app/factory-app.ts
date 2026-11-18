@@ -8,6 +8,7 @@ import type {
   Conversation,
   FactoryEvent,
   KnowledgeEntry,
+  IssueProposal,
   Repository,
   Source,
   WorkItem,
@@ -19,6 +20,7 @@ import { isPublishable } from "../model/kinds.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
+import { issueContentHash } from "../issues/admission.ts";
 import { verificationPolicyGaps } from "../model/verification-policy.ts";
 import type {
   ConversationActions,
@@ -39,6 +41,8 @@ import type {
   Lookup,
   KindLookup,
   KnowledgeActions,
+  IssueProposalActions,
+  IssueReviewActions,
   KnowledgeDetail,
   NewItemOptions,
   NewItemOptionsQuery,
@@ -126,6 +130,8 @@ export class FactoryApp
     ItemConversationActions,
     NewItemOptionsQuery,
     KnowledgeActions,
+    IssueProposalActions,
+    IssueReviewActions,
     AgentChatQueries,
     AgentChatCommands,
     ChatWorkItemCreator,
@@ -177,7 +183,8 @@ export class FactoryApp
       const resolved = await resolveRef<Repository>(this.d.reader, "Repository", { name: repo }, this.ns);
       return { name: repo, publishable: !!resolved && isPublishable(resolved) };
     }));
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge };
+    const issues = await this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } });
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge, issues };
   }
 
   async newItemOptions(_p: Principal): Promise<NewItemOptions> {
@@ -197,6 +204,7 @@ export class FactoryApp
         workflow: manual?.spec.defaults?.workflowRef?.name,
         repositories: (manual?.spec.defaults?.repositoryRefs ?? []).map((r) => r.name),
       },
+      issueTargets: (await this.listIssueTargets(_p)).map((t) => ({ source: t.source, type: t.type, project: t.project })),
     };
   }
 
@@ -238,13 +246,86 @@ export class FactoryApp
     item.metadata.name = name;
     item.spec.conversationRef = origin ? { name: origin.metadata.name } : undefined;
     try {
-      return await this.d.writer.create(item);
+      const created = await this.d.writer.create<WorkItem>(item);
+      if (input.mirrorTo) await this.proposeMirror(p, created, input.mirrorTo);
+      return created;
     } catch (e) {
       if (!origin || !isStoreError(e, "AlreadyExists")) throw e;
       const existing = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
       if (existing?.spec.conversationRef?.name !== origin.metadata.name) throw e;
       return existing;
     }
+  }
+
+  /** ADR-0066 §6: the proposal stays Proposed; a human approves it on the item page. */
+  private async proposeMirror(p: Principal, item: WorkItem, target: string): Promise<void> {
+    const targets = await this.listIssueTargets(p);
+    if (!targets.some((t) => t.source === target)) throw new Error(`source "${target}" does not permit creating issues`);
+    const r = this.d.redactor;
+    await this.d.writer.create<IssueProposal>({
+      apiVersion: API_VERSION,
+      kind: "IssueProposal",
+      metadata: { name: `${item.metadata.name}-mirror`, namespace: this.ns, ownerReferences: [ownerRef(item)] },
+      spec: {
+        purpose: "mirror",
+        targetRef: { name: target },
+        title: r.redact(item.spec.title).slice(0, 200),
+        body: r.redact(item.spec.description?.trim() || item.spec.title),
+        pickUp: false,
+        provenance: { proposedBy: p.id, human: true, workItem: item.metadata.name, proposedAt: new Date().toISOString() },
+      },
+    });
+  }
+
+  async listIssueProposals(_p: Principal): Promise<IssueProposal[]> {
+    return this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns });
+  }
+
+  private async issueOrThrow(name: string): Promise<IssueProposal> {
+    const e = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, name);
+    if (!e) throw new Error(`issue proposal ${name} not found`);
+    return e;
+  }
+
+  async updateIssueProposal(p: Principal, name: string, patch: { title?: string; body?: string; issueType?: string; labels?: string[]; pickUp?: boolean; targetSource?: string }): Promise<IssueProposal> {
+    const e = await this.issueOrThrow(name);
+    const r = this.d.redactor;
+    const title = patch.title !== undefined ? r.redact(patch.title.trim()).slice(0, 200) : e.spec.title;
+    const body = patch.body !== undefined ? r.redact(patch.body.trim()) : e.spec.body;
+    if (!title || !body) throw new Error("title and body are required");
+    if (patch.targetSource && !(await this.listIssueTargets(p)).some((t) => t.source === patch.targetSource)) throw new Error(`source "${patch.targetSource}" does not permit creating issues`);
+    const labels = patch.labels !== undefined ? patch.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) : e.spec.labels;
+    // Any edit drops the earlier decision: approval is bound to the content that was reviewed.
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: {
+        ...e.spec, title, body, labels,
+        issueType: patch.issueType !== undefined ? r.redact(patch.issueType.trim()) || undefined : e.spec.issueType,
+        pickUp: patch.pickUp ?? e.spec.pickUp,
+        targetRef: patch.targetSource ? { name: patch.targetSource } : e.spec.targetRef,
+        review: undefined,
+      },
+    });
+  }
+
+  async reviewIssueProposal(p: Principal, name: string, decision: "approve" | "reject", comment?: string): Promise<IssueProposal> {
+    if (decision !== "approve" && decision !== "reject") throw new Error("decision must be approve or reject");
+    const e = await this.issueOrThrow(name);
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: { ...e.spec, review: { decision, ...(decision === "approve" ? { contentHash: issueContentHash(e.spec) } : {}), by: p.id, at: new Date().toISOString(), comment: comment?.trim() || undefined } },
+    });
+  }
+
+  async resolveIssueProposal(p: Principal, name: string, input: { action: "create-again" | "link"; externalId?: string }): Promise<IssueProposal> {
+    if (input.action !== "create-again" && input.action !== "link") throw new Error("action must be create-again or link");
+    if (input.action === "link" && !input.externalId?.trim()) throw new Error("externalId is required to link an existing issue");
+    const e = await this.issueOrThrow(name);
+    if (e.status?.phase !== "Uncertain" && e.status?.phase !== "Failed") throw new Error("only an uncertain or failed proposal can be resolved");
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: { ...e.spec, resolution: { action: input.action, externalId: input.externalId?.trim() || undefined, by: p.id, at: new Date().toISOString() } },
+    });
   }
 
   async previewWorkItemFollowUp(_p: Principal, name: string, context = "") {
@@ -629,6 +710,37 @@ export class FactoryApp
       if (item) await this.d.events.warning(item, "VerificationWaived", `Waived, not Passed: ${a.spec.verification.requirements?.join(", ")}. By ${p.id}: ${comment}`);
     }
     return updated;
+  }
+
+  async listIssueTargets(_p: Principal) {
+    return (await this.listSources(_p))
+      .filter((s) => s.spec.writeBack?.issues)
+      .map((s) => ({ source: s.metadata.name, type: s.spec.type, project: s.spec.writeBack?.issues?.project, issueType: s.spec.writeBack?.issues?.issueType }));
+  }
+
+  async proposeIssue(p: Principal, input: { title: string; body: string; issueType?: string; labels?: string[]; workItem?: string }): Promise<{ name: string }> {
+    const title = input.title?.trim();
+    const body = input.body?.trim();
+    if (!title || !body) throw new Error("title and body are required");
+    if (body.length > 20_000) throw new Error("body is too long (max 20000 characters)");
+    const wi = input.workItem ? await this.d.reader.get<WorkItem>("WorkItem", this.ns, input.workItem) : null;
+    if (input.workItem && !wi) throw new Error(`work item ${input.workItem} not found`);
+    const r = this.d.redactor;
+    const created = await this.d.writer.create<IssueProposal>({
+      apiVersion: API_VERSION,
+      kind: "IssueProposal",
+      metadata: { name: `issue-${slug(title).slice(0, 40)}-${randomUUID().slice(0, 6)}`, namespace: this.ns, ...(wi ? { ownerReferences: [ownerRef(wi)] } : {}) },
+      spec: {
+        purpose: "finding",
+        title: r.redact(title).slice(0, 200),
+        body: r.redact(body),
+        ...(input.issueType?.trim() ? { issueType: r.redact(input.issueType.trim()) } : {}),
+        ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
+        pickUp: false,
+        provenance: { proposedBy: p.id, workItem: wi?.metadata.name, proposedAt: new Date().toISOString() },
+      },
+    });
+    return { name: created.metadata.name };
   }
 
   async listSources(_p: Principal): Promise<Source[]> {

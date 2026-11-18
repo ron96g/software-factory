@@ -40,6 +40,7 @@ const SECTIONS: { title: string; entries: Entry[] }[] = [
       { label: "Workspaces", href: "/resources/workspaces", icon: IconGitBranch, kind: "Workspace" },
       { label: "Agent runs", href: "/resources/agentruns", icon: IconBolt, kind: "AgentRun" },
       { label: "Knowledge", href: "/knowledge", icon: IconBulb, kind: "KnowledgeEntry" },
+      { label: "Issues", href: "/resources/issueproposals", icon: IconFileDescription, kind: "IssueProposal" },
       { label: "Retrospectives", href: "/retrospectives", icon: IconRoute, kind: "RetrospectiveFeedback" },
     ],
   },

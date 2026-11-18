@@ -2,6 +2,7 @@ import type {
   ExposedTool,
   HumanActions,
   KnowledgeActions,
+  IssueProposalActions,
   KnowledgeSearcher,
   Principal,
   SourceActions,
@@ -37,6 +38,7 @@ export interface FactoryToolDeps {
   answers: Pick<HumanActions, "answerClarification">;
   sources: SourceActions;
   knowledge: Pick<KnowledgeActions, "proposeKnowledge">;
+  issues: IssueProposalActions;
   search: KnowledgeSearcher;
 }
 
@@ -202,6 +204,27 @@ export function factoryTools(d: FactoryToolDeps): ExposedTool[] {
           workflows: strs(a, "workflows"),
         });
         return { name: e.metadata.name, phase: "Proposed", note: "Approve it in the factory UI (Knowledge)." };
+      },
+    }),
+    tool({
+      name: "list_issue_targets",
+      description: "List the trackers (sources) where issues may be proposed.",
+      inputSchema: obj({}),
+      annotations: { readOnlyHint: true },
+      invoke: (p) => d.issues.listIssueTargets(p),
+    }),
+    tool({
+      name: "propose_issue",
+      description: "Propose a tracker issue. Nothing is created until a human picks the target and approves it in the factory UI.",
+      inputSchema: obj(
+        { title: S("short, precise title"), body: S("Markdown: what, evidence, why it matters"), issueType: S("optional issue type"), labels: LIST("optional labels"), workItem: S("optional work item this finding came from") },
+        ["title", "body"],
+      ),
+      async invoke(p, a) {
+        const r = await d.issues.proposeIssue(p, {
+          title: str(a, "title")!, body: str(a, "body")!, issueType: str(a, "issueType", false), labels: strs(a, "labels"), workItem: str(a, "workItem", false),
+        });
+        return { name: r.name, phase: "Proposed", note: "A human approves it in the factory UI (Issues)." };
       },
     }),
   ];

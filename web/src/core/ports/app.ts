@@ -4,6 +4,7 @@
  */
 import type {
   KnowledgeEntry,
+  IssueProposal,
   AgentRun,
   Approval,
   Artifact,
@@ -37,6 +38,8 @@ export interface NewWorkItemInput {
   workflowRef?: string;
   /** Default: the `manual` source's repositories. */
   repositoryRefs?: string[];
+  /** ADR-0066: also propose mirroring the item as an issue in this source (still needs human approval). */
+  mirrorTo?: string;
 }
 
 export interface NewItemChoice {
@@ -51,6 +54,8 @@ export interface NewItemOptions {
   /** Repositories agents can actually read (MVP: with a local checkout, ADR-0008). */
   repositories: NewItemChoice[];
   defaults: { workflow?: string; repositories: string[] };
+  /** ADR-0066: sources that permit creating issues ("Also create in …"). */
+  issueTargets: { source: string; type: string; project?: string }[];
 }
 
 export interface NewItemOptionsQuery {
@@ -76,6 +81,8 @@ export interface WorkItemDetail {
   repositories: { name: string; publishable: boolean }[];
   /** Knowledge proposed by this item's runs (ADR-0030). */
   knowledge: KnowledgeEntry[];
+  /** Issues proposed for this item (ADR-0066). */
+  issues: IssueProposal[];
 }
 
 export interface WorkItemQueries {
@@ -206,6 +213,23 @@ export interface ItemConversationActions {
 export interface KnowledgeDetail {
   entry: KnowledgeEntry;
   conversations: Conversation[];
+}
+
+/** ADR-0066: humans review issue proposals; agents and MCP can only propose (rule 8). */
+export interface IssueReviewActions {
+  listIssueProposals(p: Principal): Promise<IssueProposal[]>;
+  /** Editing publishing fields or the target drops a previous decision. */
+  updateIssueProposal(p: Principal, name: string, patch: { title?: string; body?: string; issueType?: string; labels?: string[]; pickUp?: boolean; targetSource?: string }): Promise<IssueProposal>;
+  /** Approval is bound to the content hash of the publishing fields. */
+  reviewIssueProposal(p: Principal, name: string, decision: "approve" | "reject", comment?: string): Promise<IssueProposal>;
+  /** For Uncertain or Failed: create again, or link an existing issue. */
+  resolveIssueProposal(p: Principal, name: string, input: { action: "create-again" | "link"; externalId?: string }): Promise<IssueProposal>;
+}
+
+/** ADR-0066: proposing issues. Approval, target choice and creation are deliberately not here (rule 8). */
+export interface IssueProposalActions {
+  listIssueTargets(p: Principal): Promise<{ source: string; type: string; project?: string; issueType?: string }[]>;
+  proposeIssue(p: Principal, input: { title: string; body: string; issueType?: string; labels?: string[]; workItem?: string }): Promise<{ name: string }>;
 }
 
 /** ADR-0030: humans review and edit knowledge; approval is always a human action. */

@@ -3,19 +3,21 @@ import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import {
   canFetch,
   type EventRecorder,
+  type MirrorLinkChecker,
   type Lookup,
   type ResourceReader,
   type ResourceWriter,
   type SourceConnector,
   type SourceSyncer,
 } from "../ports/index.ts";
+import { externalRefLabel } from "../issues/mirror.ts";
 import { resolveRef } from "../refs/refs.ts";
 
 const LABEL_EXTERNAL_UPDATED = "factory.ai-dlc.io/external-updated-at";
 
 /** Imports ExternalItems as WorkItems (anti-corruption layer: connectors never create WorkItems themselves). */
 export class DefaultSourceSyncer implements SourceSyncer {
-  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder };
+  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder; mirrors?: MirrorLinkChecker };
   constructor(d: DefaultSourceSyncer["d"]) {
     this.d = d;
   }
@@ -30,9 +32,15 @@ export class DefaultSourceSyncer implements SourceSyncer {
     const items = await connector.fetchItems(source);
     let created = 0;
     let updated = 0;
+    let skipped = 0;
     for (const item of items) {
       const name = `${sourceName}-${item.externalId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-      const existing = await this.d.reader.get<WorkItem>("WorkItem", DEFAULT_NAMESPACE, name);
+      if (await this.d.mirrors?.isUnlinkedMirror(item.description)) { skipped++; continue; }
+      let existing = await this.d.reader.get<WorkItem>("WorkItem", DEFAULT_NAMESPACE, name);
+      if (!existing) {
+        const byLabel = await this.d.reader.list<WorkItem>("WorkItem", { namespace: DEFAULT_NAMESPACE, labelSelector: { "factory.ai-dlc.io/external-ref": externalRefLabel(sourceName, item.externalId) } });
+        existing = byLabel[0] ?? null;
+      }
       if (!existing) {
         await this.d.writer.create<WorkItem>({
           apiVersion: API_VERSION,
@@ -55,7 +63,7 @@ export class DefaultSourceSyncer implements SourceSyncer {
         updated++;
       }
     }
-    await this.d.events.normal(source, "Synced", `${created} created, ${updated} updated`);
+    await this.d.events.normal(source, "Synced", `${created} created, ${updated} updated${skipped ? `, ${skipped} skipped (mirror not linked yet)` : ""}`);
     return { created, updated };
   }
 }

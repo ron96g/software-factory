@@ -1,9 +1,9 @@
-import type { AgentRun, Artifact, ArtifactType, CheckRun, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
+import type { AgentRun, Artifact, ArtifactType, CheckRun, IssueProposal, KnowledgeEntry, RunProvenance } from "../../model/kinds.ts";
 import { resolveRef } from "../../refs/refs.ts";
 import { LABEL_WORKITEM } from "../event-recorder.ts";
 import { LABEL_SUPERSEDED } from "../../model/kinds.ts";
 import { API_VERSION } from "../../model/resource.ts";
-import { keyOf, ownerOf, parseKey } from "../../model/meta.ts";
+import { keyOf, ownerOf, ownerRef, parseKey } from "../../model/meta.ts";
 import {
   isModelUnavailable,
   isStoreError,
@@ -44,6 +44,7 @@ export interface AgentRunControllerDeps {
  * Executes AgentRuns (Job pattern). Execution happens outside the reconcile (in-flight guard),
  * so a `Running` run found after a restart is simply executed again.
  */
+const MAX_ISSUES_PER_RUN = 5;
 const MODEL_RETRY_BASE_MS = 60_000;
 const MODEL_RETRY_MAX_MS = 15 * 60_000;
 
@@ -156,6 +157,40 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         }
       }
 
+      // ADR-0066: findings follow the same rules. Never a target or pickUp: a human chooses them at review.
+      const issuesProposed: string[] = [];
+      if (!run.spec.replayOf && !superseded && ctx.skills.some((s) => s.metadata.name === "issue-proposal")) {
+        const all = result.issues ?? [];
+        for (const [i, it] of all.slice(0, MAX_ISSUES_PER_RUN).entries()) {
+          const proposal: IssueProposal = {
+            apiVersion: API_VERSION,
+            kind: "IssueProposal",
+            metadata: {
+              name: `${run.metadata.name}-i${i}`.slice(0, 200),
+              namespace: ns,
+              ownerReferences: [ownerRef(ctx.workItem)],
+              labels: { [LABEL_WORKITEM]: ctx.workItem.metadata.name, "factory.ai-dlc.io/agentrun": run.metadata.name },
+            },
+            spec: {
+              purpose: "finding",
+              title: d.redactor.redact(it.title),
+              body: d.redactor.redact(it.body),
+              ...(it.issueType ? { issueType: d.redactor.redact(it.issueType) } : {}),
+              ...(it.labels?.length ? { labels: it.labels.map((l) => d.redactor.redact(l)) } : {}),
+              pickUp: false,
+              provenance: { agent: run.spec.agentRef.name, agentRun: run.metadata.name, workItem: ctx.workItem.metadata.name, proposedAt: d.clock.now().toISOString() },
+            },
+          };
+          try {
+            await d.writer.create(proposal);
+            issuesProposed.push(proposal.metadata.name);
+          } catch (e) {
+            if (!isStoreError(e, "AlreadyExists")) throw e;
+          }
+        }
+        if (all.length > MAX_ISSUES_PER_RUN) await d.events.warning(run, "IssueCapExceeded", `${all.length - MAX_ISSUES_PER_RUN} proposed issue(s) beyond the cap of ${MAX_ISSUES_PER_RUN} were dropped`);
+      }
+
       const provenance: RunProvenance = {
         executor: d.executor.name,
         definitions: {
@@ -197,6 +232,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         },
       });
       await d.events.normal(done, "Succeeded", result.summary ?? `${outputs.length} artifact(s)`);
+      if (issuesProposed.length) await d.events.normal(done, "IssueProposed", `${issuesProposed.length} issue proposal(s) awaiting review: ${issuesProposed.join(", ")}`);
       if (proposed.length) await d.events.normal(done, "KnowledgeProposed", `${proposed.length} entr${proposed.length === 1 ? "y" : "ies"} awaiting review: ${proposed.join(", ")}`);
     } catch (e) {
       const message = d.redactor.redact(e instanceof Error ? e.message : String(e)).trim(); // ADR-0015

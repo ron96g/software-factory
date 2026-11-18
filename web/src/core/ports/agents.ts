@@ -104,6 +104,15 @@ export interface ProducedArtifact {
   format?: string;
 }
 
+/** ADR-0066: a tracker issue an agent suggests (a "finding"). Target and pickUp are never agent-chosen. */
+export interface ProposedIssue {
+  title: string;
+  /** Markdown. */
+  body: string;
+  issueType?: string;
+  labels?: string[];
+}
+
 /** Uniform result of any executor. The controller interprets it. */
 export interface ProposedKnowledge {
   title: string;
@@ -123,6 +132,8 @@ export interface AgentResult {
   questions?: (string | { id?: string; text: string; blocker?: boolean; options?: string[] })[];
   /** ADR-0030: knowledge worth keeping; becomes `Proposed` KnowledgeEntries (never used before a human approves). */
   knowledge?: ProposedKnowledge[];
+  /** ADR-0066: findings; become `Proposed` IssueProposals (a human approves before anything reaches a tracker). */
+  issues?: ProposedIssue[];
   /** Executor-specific provenance (model used, prompt hash); merged by the AgentRun controller. */
   provenance?: Partial<RunProvenance>;
 }

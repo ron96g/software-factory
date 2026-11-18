@@ -36,7 +36,7 @@ spec:
               outputs: [{ artifactRef: { name: research-notes } }]
             - name: analyze-request
               agentRef: { name: support-engineer }
-              skillRefs: [{ name: service-request-analysis }, { name: human-clarification }, { name: knowledge-base }]
+              skillRefs: [{ name: service-request-analysis }, { name: human-clarification }, { name: knowledge-base }, { name: issue-proposal }]
               inputs:  [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
               outputs: [{ artifactRef: { name: support-analysis } }]
           gate:

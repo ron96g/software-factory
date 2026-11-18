@@ -186,6 +186,9 @@ flowchart LR
 | **Tool server** | An MCP server agents may use (`ToolServer`, `toolServerRefs`); only its `allowedTools` are offered, as `<server>__<tool>`. |
 | **CR catalog** | Operator-owned YAML allowlisting external Kubernetes `apiVersion`/`kind` pairs, resource plurals/scopes, permitted namespaces and directed reference relationships. Separate from factory definition kinds (ADR-0035). |
 | **CR hierarchy** | A bounded graph of live CRs reached through the catalog's configured object-reference fields; not necessarily Kubernetes ownership. Missing/forbidden nodes and truncated traversal are explicit. |
+| **Issue proposal** | A tracker issue (`IssueProposal`) proposed by an agent (a *finding*) or written by a human. A human approves it; the factory then creates it in GitHub or Jira at most once through the outbox (ADR-0066). Not an ADR-0039 follow-up WorkItem. |
+| **Issue target** | A `Source` whose `spec.writeBack.issues` permits creating issues (project, type, labels live there, never in code). |
+| **Mirror** | An issue proposal with purpose `mirror` that creates a tracker issue for a manual work item and links it back (`sourceRef`, `externalRef`) so the sync never imports it twice. |
 | **Knowledge entry** | Reusable knowledge (`KnowledgeEntry`) that an agent proposed while working: where something lives in the code, how a recurring request is resolved, a pitfall. `Proposed → Approved / Rejected → Retired`; only approved entries reach agents (ADR-0030). |
 | **Knowledge source** | External docs (`KnowledgeSource`) agents can search, e.g. product docs or runbooks. Maintained by humans. |
 | **Retrospective feedback** (ADR-0041) | An unverified observation about factory workflow friction, with factory-attached reporter identity, definition versions and historical evidence. Runtime kind `RetrospectiveFeedback`; not approved knowledge or monitoring feedback. |

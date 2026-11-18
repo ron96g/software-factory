@@ -1,6 +1,7 @@
 /**
  * Composition root (AGENTS.md rule 3). The ONLY file that knows concrete implementations.
  */
+import { CREATE_ISSUE_ACTION, createIssuePolicy } from "./issues/policy.ts";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -43,6 +44,9 @@ import { factoryTools } from "./exposed/factory-tools.ts";
 import { FilesKnowledgeSearch } from "./adapters/knowledge/files.ts";
 import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
 import { knowledgeProvider } from "./knowledge/context.ts";
+import { mirrorLinkChecker } from "./issues/mirror.ts";
+import { createIssueHandler } from "./issues/handler.ts";
+import { createIssueProposalController } from "./issues/controller.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
@@ -74,6 +78,7 @@ import { StoreOutbox, commentHandler, createClarificationSyncController, createO
 import { TicketActions } from "./tickets/actions.ts";
 import { CheckActions } from "./checks/actions.ts";
 import { checkRunValidator } from "./checks/admission.ts";
+import { issueProposalValidator } from "./issues/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
 import { GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
@@ -174,6 +179,7 @@ export async function createFactory(o: FactoryOptions) {
   admission.addValidator(requiredFieldsValidator("WorkItem", ["title", "sourceRef"]));
   admission.addValidator(checkRunValidator(scopes, recoveryCheckPort));
   admission.addValidator(retrospectiveValidator());
+  admission.addValidator(issueProposalValidator());
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
 
@@ -395,10 +401,12 @@ export async function createFactory(o: FactoryOptions) {
   });
   outboxHandlers.register(pr.action, pr);
   for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);
+  outboxHandlers.register("create-issue", createIssueHandler({ reader: store, connectors, redactor }));
   const sourcePolicies = new Registry<SourceWritePolicy>();
   sourcePolicies.register("comment", { check: (s) => s.spec.sync?.bidirectional ? undefined : "read-only (sync.bidirectional is not true)" });
   sourcePolicies.register("service-desk-reply", { check: (s) => Array.isArray(s.spec.writeBack?.replyVisibilities) && s.spec.writeBack.replyVisibilities.length ? undefined : "reviewed replies are not permitted" });
   sourcePolicies.register("ticket-transition", { check: (s) => s.spec.writeBack?.transitions === true ? undefined : "ticket transitions are not permitted" });
+  sourcePolicies.register(CREATE_ISSUE_ACTION, createIssuePolicy);
   const publicationGate = ticketPublicationGate({ reader: store, outbox, redactor });
   gates.register(publicationGate.type, publicationGate);
 
@@ -448,8 +456,9 @@ export async function createFactory(o: FactoryOptions) {
   });
   manager.register(conversationController);
   manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
+  manager.register(createIssueProposalController({ reader: store, status: store, events, clock, outbox, connectors, workItems: store }));
 
-  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events });
+  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, mirrors: mirrorLinkChecker({ reader: store }) });
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));
@@ -479,7 +488,7 @@ export async function createFactory(o: FactoryOptions) {
   });
 
   // ── MCP server (ADR-0034): what local agent harnesses may do; gates stay in the UI ──
-  const exposedTools = factoryTools({ items: app, answers: app, sources: app, knowledge: app, search: knowledge });
+  const exposedTools = factoryTools({ items: app, answers: app, sources: app, knowledge: app, issues: app, search: knowledge });
   const mcp = createMcpHttpHandler({
     tools: () => exposedTools,
     token: secrets.resolve({ name: "factory-mcp-token" }),

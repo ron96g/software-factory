@@ -13,6 +13,7 @@ spec:
     tier: coding
   skillRefs:
     - name: test-driven-development
+    - name: issue-proposal
   tools: [search_code, list_files, read_file, write_file, run, git_diff]   # sandbox tools (ADR-0019)
   humanCounterpart: { role: tech-lead }
 ---

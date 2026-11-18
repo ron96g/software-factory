@@ -38,6 +38,8 @@ spec:
     # Only your own labelled issues: the factory comments on imported issues (bidirectional).
     filter: { jql: "labels = factory AND reporter = currentUser() AND statusCategory != Done ORDER BY updated DESC" }
     bidirectional: true
+  writeBack:
+    issues: { project: DHEI, issueType: Task }   # ADR-0066: permits creating issues; the key lives only here
   mapping:
     title: fields.summary
     description: fields.description

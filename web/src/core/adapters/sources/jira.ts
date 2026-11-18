@@ -1,5 +1,6 @@
 import type { Source } from "../../model/kinds.ts";
-import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState } from "../../ports/index.ts";
+import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState, IssueCreator, IssueFinder, CreatedIssue, IssueDraft } from "../../ports/index.ts";
+import { markdownToAdf, markdownToWiki } from "./markdownToJira.ts";
 
 type Fetch = typeof fetch;
 type Adf = { type?: string; text?: string; content?: Adf[] };
@@ -29,6 +30,8 @@ interface JiraDialect {
   searchPath: string;
   auth(email: string | undefined, token: string | undefined): Record<string, string>;
   toBody(text: string): unknown;
+  /** Issue descriptions are authored as Markdown and rendered per dialect (comments stay plain). */
+  toIssueBody(markdown: string): unknown;
 }
 
 const DIALECTS: Record<string, JiraDialect> = {
@@ -37,12 +40,14 @@ const DIALECTS: Record<string, JiraDialect> = {
     searchPath: "/rest/api/3/search/jql",
     auth: (email, token): Record<string, string> => (email && token ? { authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}` } : {}),
     toBody: textToAdf,
+    toIssueBody: markdownToAdf,
   },
   datacenter: {
     api: "/rest/api/2",
     searchPath: "/rest/api/2/search",
     auth: (_email, token): Record<string, string> => (token ? { authorization: `Bearer ${token}` } : {}),
     toBody: (text) => text,
+    toIssueBody: markdownToWiki,
   },
 };
 
@@ -50,7 +55,7 @@ const DIALECTS: Record<string, JiraDialect> = {
  * Jira connector. `connection.deployment`: `cloud` (default) or `datacenter`. Token from `connection.secretRef` (ADR-0015).
  * Filter: `sync.filter.jql`.
  */
-export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter {
+export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, IssueCreator, IssueFinder {
   readonly type = "jira";
   private readonly secrets: SecretResolver;
   private readonly f: Fetch;
@@ -72,11 +77,11 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
     return base;
   }
 
-  private async call(source: Source, path: string, init: RequestInit = {}, permission: "comment" | "reply" | "transition" = "comment"): Promise<Response> {
+  private async call(source: Source, path: string, init: RequestInit = {}, permission: "comment" | "reply" | "transition" | "issue" = "comment"): Promise<Response> {
     const method = (init.method ?? "GET").toUpperCase();
     if (method !== "GET") {
       const allowed = permission === "comment" ? source.spec.sync?.bidirectional
-        : permission === "reply" ? Array.isArray(source.spec.writeBack?.replyVisibilities) && source.spec.writeBack.replyVisibilities.length > 0 : source.spec.writeBack?.transitions === true;
+        : permission === "reply" ? Array.isArray(source.spec.writeBack?.replyVisibilities) && source.spec.writeBack.replyVisibilities.length > 0 : permission === "issue" ? Boolean(source.spec.writeBack?.issues) : source.spec.writeBack?.transitions === true;
       if (!allowed) throw new Error(`source ${source.metadata.name} is read-only for ${permission}: refusing ${method} ${path}`);
     }
     const email = source.spec.connection?.email as string | undefined;
@@ -168,5 +173,40 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
     await this.call(source, `${this.dialect(source).api}/issue/${encodeURIComponent(externalId)}/transitions`, {
       method: "POST", body: JSON.stringify({ transition: { id: transitionId } }),
     }, "transition");
+  }
+
+  async createIssue(source: Source, draft: IssueDraft): Promise<CreatedIssue> {
+    const cfg = source.spec.writeBack?.issues;
+    const project = cfg?.project;
+    if (!project) throw new Error(`source ${source.metadata.name}: writeBack.issues.project is required`);
+    const d = this.dialect(source);
+    const labels = [...new Set([...(cfg.labels ?? []), ...(draft.labels ?? [])])];
+    const res = await this.call(source, `${d.api}/issue`, {
+      method: "POST",
+      body: JSON.stringify({ fields: {
+        ...(cfg.fields ?? {}),
+        project: { key: project },
+        summary: draft.title,
+        issuetype: { name: draft.issueType ?? cfg.issueType ?? "Task" },
+        description: d.toIssueBody(`${draft.body}\n\n${draft.marker}`),
+        ...(labels.length ? { labels } : {}),
+      } }),
+    }, "issue");
+    const created = await res.json() as { key?: string };
+    if (!created.key) throw new Error("Jira did not return an issue key; delivery outcome requires verification");
+    return { externalId: created.key, url: `${this.base(source)}/browse/${created.key}` };
+  }
+
+  async findCreatedIssues(source: Source, query: { marker: string; createdAfter: string }): Promise<CreatedIssue[]> {
+    const project = source.spec.writeBack?.issues?.project;
+    if (!project) throw new Error(`source ${source.metadata.name}: writeBack.issues.project is required`);
+    const since = new Date(query.createdAfter);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${since.getUTCFullYear()}/${pad(since.getUTCMonth() + 1)}/${pad(since.getUTCDate())} ${pad(since.getUTCHours())}:${pad(since.getUTCMinutes())}`;
+    const jql = `project = "${project}" AND reporter = currentUser() AND created >= "${stamp}" ORDER BY created DESC`;
+    const res = await this.call(source, `${this.dialect(source).searchPath}?jql=${encodeURIComponent(jql)}&maxResults=100&fields=description,created`);
+    const body = await res.json() as { issues: { key: string; fields: { description: Adf | string | null } }[] };
+    return body.issues.filter((i) => adfToText(i.fields.description).includes(query.marker))
+      .map((i) => ({ externalId: i.key, url: `${this.base(source)}/browse/${i.key}` }));
   }
 }
