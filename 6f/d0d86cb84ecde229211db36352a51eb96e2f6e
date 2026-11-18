@@ -1,0 +1,49 @@
+web/src/core/checks/admission.ts
+  s_02241409119ca7::t_0faa206d5f2604 8,83
+web/src/core/checks/controller.ts
+  s_02241409119ca7::t_173093b975c7a7 1,6,9,138,278,306-310,354
+web/src/core/checks/origin.ts
+  s_02241409119ca7::t_491809f9674ec0 9-11,24-25,59-60,74-75
+web/src/core/checks/scheduler.ts
+  s_02241409119ca7::t_060a239ff54b21 158,177
+web/src/core/evidence.test.ts
+  s_d358b457677c78::t_966836294680fd 1-16
+web/src/core/recovery/check-authorization.ts
+  s_02241409119ca7::t_d786dd15ececd9 71
+web/src/core/verification/evidence.ts
+  s_d358b457677c78::t_fa46f337f55f6b 1-11
+web/src/core/checks/recovery-authorization.test.ts
+  s_0ee096932fcdb2::t_8b3d53c20ac123 66-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6fd0d86cb84ecde229211db36352a51eb96e2f6e",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_0ee096932fcdb2": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "26f5d363-fcff-4f67-8eae-5925de2af735",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_d358b457677c78": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ec97f53b-9818-4731-abe4-a311d15b2398",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
