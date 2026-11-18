@@ -1,0 +1,21 @@
+AGENTS.md
+  s_02241409119ca7::t_de49cc25c7bac7 212
+docs/adr/0066-create-issues-in-trackers.md
+  s_02241409119ca7::t_4b4fc6c380dd85 1-279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "febc5aac8d636a12aee84f60210ba0f5ef6eaece",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
