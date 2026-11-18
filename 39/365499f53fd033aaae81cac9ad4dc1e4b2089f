@@ -1,0 +1,37 @@
+web/src/core/factory.ts
+  s_21ea354cd3aa8c::t_867c1e821d2362 41,279-280
+docs/adr/0035-mcp-search-execute-mode.md
+  s_21ea354cd3aa8c::t_629fa9fb83f3a7 1-42
+web/src/core/mcp.test.ts
+  s_21ea354cd3aa8c::t_be2fd4eeda5525 91-136
+docs/ai-dlc-glossary.md
+  s_21ea354cd3aa8c::t_7e6beeb07ee22e 160-161
+web/src/core/ports/tools.ts
+  s_21ea354cd3aa8c::t_fcb097382e0691 31-41
+web/src/core/exposed/search-execute.ts
+  s_21ea354cd3aa8c::t_cdee4bf11a947a 1,28,85
+  s_21ea354cd3aa8c::t_5db93cdc4ba697 2-27,29-84
+README.md
+  s_21ea354cd3aa8c::t_f6253194cbd8d5 102-104
+AGENTS.md
+  s_21ea354cd3aa8c::t_9d9cb56146b0db 179
+web/src/core/adapters/mcp/server.ts
+  s_21ea354cd3aa8c::t_cdc00d2c4e39d1 33
+  s_21ea354cd3aa8c::t_ed7d80a62c190e 5,12-13,18-21,23-25,54,56,66-70,74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "39365499f53fd033aaae81cac9ad4dc1e4b2089f",
+  "prompts": {},
+  "sessions": {
+    "s_21ea354cd3aa8c": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "1bf90186-7ef9-4360-8872-0eb306baa2ba",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
