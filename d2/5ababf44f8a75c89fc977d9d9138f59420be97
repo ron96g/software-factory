@@ -1,0 +1,19 @@
+web/src/app/resources/[plural]/[name]/page.tsx
+  s_02241409119ca7::t_a89fdcd7694906 10-11,48-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "d25ababf44f8a75c89fc977d9d9138f59420be97",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
