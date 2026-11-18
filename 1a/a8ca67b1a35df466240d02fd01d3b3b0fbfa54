@@ -1,0 +1,21 @@
+AGENTS.md
+  s_02241409119ca7::t_8b850907d8f53b 214
+docs/adr/0068-tracker-follow-ups-from-work-items.md
+  s_02241409119ca7::t_0de2061712c4d5 1-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1aa8ca67b1a35df466240d02fd01d3b3b0fbfa54",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
