@@ -1,0 +1,19 @@
+web/next.config.ts
+  s_02241409119ca7::t_42ed91bac28627 7-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0d527f0b78b773539b63bcd675092c48f225f21b",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
