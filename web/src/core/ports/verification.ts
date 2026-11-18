@@ -15,6 +15,11 @@ export interface CheckResultClassifier {
   failureEvidence?(result: ExecResult): { tests: string[] } | undefined;
 }
 
+/** ADR-0067: optional, separate from classify (ISP). Returns undefined when output is not comparable. */
+export interface FindingExtractor {
+  extractFindings(result: ExecResult): import("../model/kinds.ts").CheckFinding[] | undefined;
+}
+
 export interface ValidationPlan {
   criteria: { id: string; description: string; checks: string[] }[];
   checks: string[];

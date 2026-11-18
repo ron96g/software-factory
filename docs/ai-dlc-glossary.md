@@ -208,6 +208,7 @@ flowchart LR
 | **Candidate preparation** (ADR-0043) | Named approved-plan checks before AI and human candidate review, including reproducible generation. Successful execution may change the tree and remains NotVerified; the resulting tree needs fresh review and unchanged-tree final verification. |
 | **Affected-module verification** (ADR-0044) | Repository-controlled build/test scope: modules changed since the pinned workspace baseline plus transitive dependents from the CI graph. Shared/unknown changes retain full validation; immutable CheckRuns record resolved scope and command. |
 | **Verification waiver** (ADR-0042) | An explicit human exception to named missing evidence only where repository policy permits, with Principal/reason and exact plan/candidate/evidence binding. It remains Waived, never Passed, and does not authorize publication. |
+| **Policy waiver** (ADR-0067) | A `waiver` Approval created by the controller from `Repository.verification.autoWaive` when a comparable check's findings all exist on the base commit; decided by `policy:<repo>@<version>`, verify stage only, durably vetoable by a human. Recorded as a `PolicyWaiver` event ("decided automatically"). |
 | **Refine with the agent** | A conversation (purpose `refine-knowledge`) in which a human and the proposing agent improve an entry. The agent suggests drafts; the human applies them and decides on approval. |
 | **Customer response** | The reply to the requester, free of internal details, ready to post after human approval. |
 

@@ -155,7 +155,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       if (!policyChecks?.includes(request.check)) {
         throw new StoreError(`check "${request.check}" is not authorized for ${origin.purpose}`, "Invalid");
       }
-      if (origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness" && origin.agentRunRef) {
+      if ((origin.purpose === "diagnostic" || origin.purpose === "baseline" || origin.purpose === "unit-readiness") && origin.agentRunRef) {
         if (!this.d.recoveryChecks || !this.d.jobs) throw new StoreError("scoped recovery authorization and workspace serialization are required", "Invalid");
         const caller = agents.find((agent) => agent.metadata.name === origin.agentRunRef?.name);
         if (!caller) throw new StoreError("recovery check caller not found", "Invalid");
@@ -174,7 +174,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
         throw new SandboxUnavailableError(selected.health.runtime, selected.health.message ?? "execution runtime unavailable");
       }
       if ((origin.purpose === "diagnostic" || origin.purpose === "baseline") &&
-          (!canPrepareIsolated(selected.environment) || !selected.environment.isolatesCandidate)) {
+          (!canPrepareIsolated(selected.environment) || origin.purpose === "diagnostic" && !selected.environment.isolatesCandidate)) {
         throw new StoreError("diagnostic checks require an isolated snapshot-capable execution environment", "Invalid");
       }
       if (origin.purpose === "baseline" && workspace.status.baseCommit !== origin.baselineCommit) {

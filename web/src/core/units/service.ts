@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { countsAsPassed } from "../verification/evidence.ts";
 import { scopeSatisfies } from "../model/check-scope.ts";
 import { BARRIER_UNIT, LABEL_SUPERSEDED, type AgentRun, type Artifact, type CheckRun, type UnitAssignment, type WorkItem, type Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
@@ -22,8 +23,7 @@ const eligible = (r: { metadata: { labels?: Record<string, string> } }) =>
   !r.metadata.labels?.[LABEL_SUPERSEDED] && !r.metadata.labels?.["factory.ai-dlc.io/replay"];
 const active = (run: CheckRun) => !run.status || run.status.phase === "Running";
 const roundOf = (name: string) => Number(/-r(\d+)$/.exec(name)?.[1] ?? 0);
-const passed = (run: CheckRun) => run.status?.phase === "Completed" && run.status.outcome === "Passed" && !run.status.logsIncomplete &&
-  run.status.finalSnapshot === run.spec.snapshot;
+const passed = countsAsPassed;
 
 interface Deps {
   namespace: string;
@@ -290,7 +290,8 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
   }
 
   async recover(item: WorkItem, _stage: CompiledStage, run: AgentRun): Promise<GateDecision | undefined> {
-    if (!run.spec.assignment || !run.status?.interrupted) return undefined;
+    const exhausted = /did not finish within \d+ steps/.test(run.status?.message ?? "");
+    if (!run.spec.assignment || !(run.status?.interrupted || exhausted)) return undefined;
     let contract: ValidationContract;
     try { contract = await this.contract(item); }
     catch (e) {

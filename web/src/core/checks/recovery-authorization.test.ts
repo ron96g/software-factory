@@ -63,7 +63,8 @@ test("recovery check authorization binds caller and does not replenish a Unit bu
   const host = new HostEnvironment();
   const unisolated = new DefaultRecoveryCheckAuthorization({ reader, compiler, contracts,
     environments: { select: async () => ({ environment: host, health: { runtime: "host", available: true, isolation: "none" }, candidates: [] }), refresh: async () => {} } });
-  await assert.rejects(unisolated.authorize({ ...diagnosticInput, origin: baseline }), /trusted isolated adapter/i);
+  await unisolated.authorize({ ...diagnosticInput, origin: baseline });
+  await assert.rejects(unisolated.authorize(diagnosticInput), /trusted isolated adapter/i);
   const diagnosticJob = { metadata: { name: "diagnostic", uid: "diagnostic-uid" }, spec: { workItemUid: item.metadata.uid,
     workspaceUid: workspace.metadata.uid, workflow: diagnostic, repositoryRef: { name: "repo" }, check: "test" } } as CheckRun;
   const baselineJob = { metadata: { name: "baseline", uid: "baseline-uid" }, spec: { workItemUid: item.metadata.uid,

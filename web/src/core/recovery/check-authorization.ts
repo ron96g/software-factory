@@ -68,7 +68,7 @@ export class DefaultRecoveryCheckAuthorization implements RecoveryCheckAuthoriza
       }
       if (!this.d.environments) return fail("Isolated diagnostic runtime is unavailable.");
       const selected = await this.d.environments.select();
-      if (!selected.health.available || !canPrepareIsolated(selected.environment) || !selected.environment.isolatesCandidate) {
+      if (!selected.health.available || !canPrepareIsolated(selected.environment) || origin.purpose === "diagnostic" && !selected.environment.isolatesCandidate) {
         return fail("Diagnostic checks require a trusted isolated adapter.");
       }
       const all = await this.d.reader.list<CheckRun>("CheckRun", { namespace: ns,

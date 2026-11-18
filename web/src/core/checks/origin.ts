@@ -6,6 +6,9 @@ export const ORIGIN_PURPOSES: CheckWorkflowOrigin["purpose"][] = ["preflight", "
 
 const bounded = (value: unknown, max: number) => typeof value === "string" && !!value.trim() && value.length <= max;
 
+/** ADR-0067: a baseline submitted by the verification gate itself, with no diagnostic agent caller. */
+export const gateBaseline = (origin: CheckWorkflowOrigin) => origin.purpose === "baseline" && !origin.agentRunRef;
+
 export function validCallerName(item: WorkItem, origin: CheckWorkflowOrigin, caller: AgentRun): boolean {
   if (origin.purpose === "diagnostic" || origin.purpose === "baseline") {
     const recovery = caller.spec.recovery;
@@ -18,6 +21,8 @@ export function validCallerName(item: WorkItem, origin: CheckWorkflowOrigin, cal
 
 /** ADR-0047: Unit identity is required exactly for readiness jobs; a Unit job names its implementation attempt. */
 export function validUnitFields(origin: CheckWorkflowOrigin): boolean {
+  if (gateBaseline(origin)) return origin.unit === undefined && origin.unitRun === undefined && origin.recoveryEpisode === undefined &&
+    origin.agentRequestId === undefined && typeof origin.baselineCommit === "string" && /^[a-f0-9]{40,64}$/.test(origin.baselineCommit);
   if (origin.purpose === "diagnostic" || origin.purpose === "baseline") return bounded(origin.unit, 100) && origin.unit !== BARRIER_UNIT &&
     origin.unitRun === undefined && bounded(origin.recoveryEpisode, 200) && !!origin.agentRunRef && bounded(origin.agentRequestId, 200) &&
     (origin.purpose === "baseline" ? typeof origin.baselineCommit === "string" && /^[a-f0-9]{40,64}$/.test(origin.baselineCommit) : origin.baselineCommit === undefined);
@@ -51,7 +56,8 @@ export function originAuthorized(workflow: Workflow | null | undefined, origin: 
     }
     case "diagnostic": return !!workflow?.spec.recovery && !!workflow.spec.unitExecution &&
       policy.implementationStage === origin.stage;
-    case "baseline": return !!workflow?.spec.recovery && !!workflow.spec.unitExecution &&
+    case "baseline": if (gateBaseline(origin)) return policy.verifyStage === origin.stage;
+      return !!workflow?.spec.recovery && !!workflow.spec.unitExecution &&
       policy.implementationStage === origin.stage;
     default: return false;
   }
@@ -65,7 +71,8 @@ export function originChecks(repository: Repository, origin: CheckWorkflowOrigin
     case "diagnostic": return workflow?.spec.recovery?.diagnosticChecks
       .filter((name) => name.startsWith(`${repository.metadata.name}/`))
       .map((name) => name.slice(repository.metadata.name.length + 1));
-    case "baseline": return workflow?.spec.recovery?.diagnosticChecks
+    case "baseline": if (gateBaseline(origin)) return (repository.spec.verification?.autoWaive ?? []).map((entry) => entry.check);
+      return workflow?.spec.recovery?.diagnosticChecks
       .filter((name) => name.startsWith(`${repository.metadata.name}/`))
       .map((name) => name.slice(repository.metadata.name.length + 1));
     default: return Object.keys(repository.spec.checks ?? {});

@@ -382,6 +382,20 @@ test("an assigned attempt interrupted by a restart is not re-executed and gets a
   } finally { f.db.close(); }
 });
 
+test("AC-6: an assigned attempt that exhausted its step budget retries; unassigned runs are unchanged", async () => {
+  const f = await fixture();
+  try {
+    await f.approvePlan();
+    await f.reconcile();
+    const run = (await f.runs()).find((r) => r.spec.stage === "implement")!;
+    await f.store.updateStatus<AgentRun>({ ...run, status: { phase: "Failed", message: "tool loop did not finish within 30 steps" } });
+    await f.reconcile();
+    const item = await f.current();
+    assert.equal(item.status?.phase, "Running", "the item is not failed");
+    assert.equal(item.status?.retries?.["unit-exec:U0"], 1);
+  } finally { f.db.close(); }
+});
+
 test("restarting the barrier stage at an unchanged snapshot schedules fresh barrier jobs instead of waiting forever", async () => {
   const f = await fixture();
   try {

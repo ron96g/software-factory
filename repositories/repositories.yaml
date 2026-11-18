@@ -66,12 +66,14 @@ spec:
     unit-tests: cd web && npm test --silent
     integration-tests: cd web && npm run test:integration --silent      # composition-root suites (real store, controllers, definitions)
     acceptance-criteria: cd web && npm run test:acceptance --silent    # web/src/acceptance/*.acceptance.test.ts; fails when empty
-    security-scan: cd web && npm audit --omit=dev --audit-level=high
+    security-scan: { command: "cd web && npm audit --omit=dev --audit-level=high --json", resultFormat: npm-audit-json }
     preflight: node --version && npm --version && test -d web/node_modules
   verification:
     requiredChecks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
     preflightChecks: [preflight]
     waivableChecks: [integration-tests, acceptance-criteria, security-scan]
+    autoWaive:               # ADR-0067: pre-existing advisories on the base commit are waived by policy
+      - { check: security-scan, when: pre-existing, followUp: finding }
     readinessChecks: [build, unit-tests]   # ADR-0047: per-Unit construction readiness, never final verification
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
     setup:

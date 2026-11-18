@@ -1,6 +1,6 @@
 # ADR-0067: Self-resolving verification: auto-fix, policy waivers, no "retry" questions
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Deciders:** project owner
 - **Extends:** ADR-0042, ADR-0047, ADR-0058, ADR-0059, ADR-0061
