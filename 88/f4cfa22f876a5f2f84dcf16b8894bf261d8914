@@ -1,0 +1,22 @@
+AGENTS.md
+  s_02241409119ca7::t_dcac63b8abec01 213
+docs/adr/0067-self-resolving-verification.md
+  s_02241409119ca7::t_e3ac5cd2b96dff 1-42,46-61,69-75,90-92,101-127,138-171,174-193,197-200
+  s_02241409119ca7::t_94ecd6f2bf0e71 43-45,62-68,76-89,93-100,128-137,172-173,194-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "88f4cfa22f876a5f2f84dcf16b8894bf261d8914",
+  "prompts": {},
+  "sessions": {
+    "s_02241409119ca7": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "5959989c-3dde-48cb-acaf-a00e0eab18bc",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
