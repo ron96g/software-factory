@@ -49,7 +49,7 @@ async function exercise(review: Review, run: (f: Factory, name: string, wait: (p
     }) } }] });
   };
   const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:",
-    env: { OPENAI_API_KEY: "test-schema-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "test-schema-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
     fetch: fetchImpl, log: () => {} });
   await f.start();
   try {

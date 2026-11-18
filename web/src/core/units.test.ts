@@ -20,6 +20,7 @@ import { originAuthorized, validUnitFields } from "./checks/origin.ts";
 import { runScrubbed } from "./adapters/sandbox/process.ts";
 import { CompletedUnitAttempts } from "./units/history.ts";
 import { unitContext } from "./units/context.ts";
+import { checkDefinitionVersion } from "./checks/definition-version.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 32);
 const CRITERIA = [{ id: "AC-1", description: "Loader", checks: ["repo/build", "repo/test"] }, { id: "AC-2", description: "Reload", checks: ["repo/build", "repo/test"] }];
@@ -65,7 +66,7 @@ async function fixture() {
     submit: async (request) => store.create<CheckRun>({ apiVersion: API_VERSION, kind: "CheckRun",
       metadata: { name: `check-${hash(request.requestId)}`, namespace: "default", ownerReferences: [ownerRef(item)] },
       spec: { workItemRef: { name: "item" }, workItemUid: item.metadata.uid!, workspaceRef: { name: "ws" }, workspaceUid: workspace.metadata.uid!,
-        repositoryRef: { name: "repo" }, repositoryVersion: repo.metadata.resourceVersion!, check: request.check, command: request.check,
+        repositoryRef: { name: "repo" }, repositoryVersion: checkDefinitionVersion(repo), check: request.check, command: request.check,
         timeoutMs: 1000, snapshot: tree, environment: { runtime: "fake", version: "1", profileVersion: "default" }, requestedBy: request.requestedBy,
         requestFingerprint: request.requestId, workflow: request.workflow } }),
   };

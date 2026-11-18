@@ -20,7 +20,7 @@ A **software factory** that implements the **AI-DLC** (AI-Driven Development Lif
   **transcripts** are stored separately in an append-only log (ADR-0012).
 - **Factory loop** (diagram: `docs/ai-dlc-glossary.md`):
   input (manual | Jira | GitHub | monitoring) → classify → triage → spec → spec-review [human] → implement →
-  code-review [human] → verify → ship [human] → monitor → repeat
+  code-review [human] → verify → ship (draft PR) [human]; monitor → repeat returns with v0.6 (ADR-0065)
 - **UI:** a dashboard (table) of WorkItems. You can create items manually, sync them from sources, answer clarifications
   (which unblocks items), and approve or reject gates.
 - **code-researcher:** a shared, read-only agent that any agent (mainly the triager and the SRE) can delegate to.
@@ -73,7 +73,8 @@ Required reading:
     `ModelProvider` definitions resolved through `ModelResolver`.
 18. **No free-form execution on the host (ADR-0016, ADR-0019, ADR-0022).** Shell, file writes, and code execution only run inside an
     `ExecutionEnvironment` sandbox (read/search of the workspace doesn't need one). Without a sandbox runtime, such agents fall back to simulation with a visible reason, or wait for one
-    with `FACTORY_SIMULATION=wait` (ADR-0029).
+    with `FACTORY_SIMULATION=wait` (ADR-0029). The OpenCode agent runtime (ADR-0060) follows the same rule: it writes
+    and executes only on the `host` runtime, with deny-by-default permissions and a scrubbed command environment.
 
 ---
 
@@ -202,6 +203,12 @@ only because sandboxes never receive factory secrets (ADR-0019 §7).
 | X37 | Accessible tools, grounded reviews | Cited code resolved into context before the first step, harness-rendered tool guide, citable read tools, output validated in-loop at `finish`, code evidence and investigated research gaps in `planning-review` v2, tool-use provenance (ADR-0057) | Cited claims are visible to agents without tool calls; output mistakes are corrected in the same run, reruns stay the exception; research gaps show what was checked; agent definitions unchanged | ✅ |
 | X38 | Graceful step budget | Budget stated in the tool guide, recorded wrap-up warnings near the end, a finish-only last step whose result is marked and reviewed normally (ADR-0058) | A run out of budget reports its work instead of failing the item; runs that never finish still fail | ✅ |
 | X39 | Autonomous technical recovery | Retained completed-attempt evidence, schema-backed diagnostics, bounded evidence-driven recovery and harness-offered scoped readiness checks (ADR-0059); production diagnostic isolation and authenticated operator allocation remain unavailable | Routine technical failures recover without human questions; unchanged failures cannot loop indefinitely; genuine human-only needs are consolidated; completeness, approvals and publication guards remain intact | In progress |
+| X40 | OpenCode agent runtime | Embedded OpenCode v2 (`@opencode/sdk`) runs every LLM AgentRun: factory-controlled models only, deny-by-default permissions from agent tools, repository skills and sub-agents, factory tools and ToolServers as plugin tools, in-loop `finish` validation, step budget and wrap-up, quota waits, full transcript; `FACTORY_AGENT_RUNTIME=tool-loop` opts out; isolated sandboxes fall back to the tool loop until a workspace driver exists (ADR-0060) | An item runs end to end on OpenCode with every step recorded; read-only agents cannot write; commands never see factory secrets; the tool loop is removed once parity is shown on real items | In progress |
+| X41 | Verification tiers, side-effect-free checks | (a) tiers set check scope (`readiness`: changed, `preparation`/`verification`: affected, `publication`: full), evidence identity includes the tier, `minScope`, legacy `moduleScoped` unchanged; (b) no check may modify the candidate, writing checks run on isolated candidate copies; (c) declared caches, result caches partitioned per item and tier, never reused by verification; (d) publication tier (ADR-0061) | Per-Unit readiness runs only changed modules; narrower evidence can never satisfy a gate; a readiness run cannot seed verification results | In progress (a ✅) |
+| X42 | Check worker | (a) store-backed change feed for all controllers and SSE; (b) store-backed workspace lock; (c) separate check worker with fenced CheckRun leases, reaper, concurrency limits (ADR-0062) | A web restart doesn't interrupt checks; a stale worker can't write results; agent mutations and checks never overlap across processes | Planned |
+| X43 | Evidence before the verifier | Entering the verify stage collects the plan's checks before the verifier runs; the verifier evaluates them (no `run_check`); the gate only confirms (ADR-0063) | The verification report describes the evidence the human approves; no authoritative check runs twice because an agent ended | ✅ |
+| X44 | Check definition version | Plans and check evidence bind to the repository's check definition (`local`, `workspace`, `sandboxRef`, `checks`, `moduleScope`, `verification`), not the whole Repository; a stale preflight is rerun in place before publication (ADR-0064) | Adding `git:` to a repository in flight needs no plan re-confirmation and no new checks | ✅ |
+| X45 | Ship publishes only | `ship` has no agent steps: it opens the draft PR and a human confirms it; `release` step, `monitor` stage and the monitor → classify loop are removed until v0.6 (ADR-0065) | An item is Done after its PR is confirmed; nothing waits on unavailable release tools | ✅ |
 
 #### Later increments
 | Version | Increment | Highlights |

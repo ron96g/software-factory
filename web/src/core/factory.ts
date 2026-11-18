@@ -64,9 +64,11 @@ import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { ToolLoopExecutor } from "./agents/tool-loop.ts";
+import { OpenCodeHost } from "./adapters/opencode/host.ts";
+import { OpenCodeExecutor } from "./adapters/opencode/executor.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
-import type { ConversationTurnRunner } from "./ports/index.ts";
+import type { ConversationTurnRunner, FinishValidator } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 import { TicketActions } from "./tickets/actions.ts";
@@ -140,6 +142,8 @@ export interface FactoryOptions {
   mcpTransportFor?: McpToolProviderDeps["transportFor"];
   /** SQLite file, or ":memory:". */
   databasePath: string;
+  /** OpenCode agent runtime state (ADR-0060). Default: next to the database (a temp dir for ":memory:"). */
+  agentRuntimeDir?: string;
   env?: Record<string, string | undefined>;
   fetch?: typeof fetch;
   clock?: Clock;
@@ -305,7 +309,33 @@ export async function createFactory(o: FactoryOptions) {
   const toolProvider = new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor });
   const outputFinish = new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders });
   const checkFinish = new ActiveCheckFinishValidator(store);
+  // ADR-0060: OpenCode is the default agent runtime; the tool loop stays behind it until parity is shown.
+  const agentRuntime = env.FACTORY_AGENT_RUNTIME ?? "opencode";
+  if (agentRuntime !== "opencode" && agentRuntime !== "tool-loop") throw new Error(`FACTORY_AGENT_RUNTIME must be "opencode" or "tool-loop", got "${agentRuntime}"`);
+  const agentRuntimeDir = o.agentRuntimeDir ?? env.FACTORY_AGENT_RUNTIME_DIR ??
+    (o.databasePath === ":memory:" ? join(tmpdir(), `factory-opencode-${process.pid}`) : join(dirname(o.databasePath), "opencode"));
+  const opencode = agentRuntime === "opencode"
+    ? new OpenCodeHost({ dataDir: agentRuntimeDir, fetch: o.fetch, log: (msg) => (o.log ?? console.error)(msg) })
+    : undefined;
+  const finishValidator: FinishValidator = { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] };
   const realExecutors = [
+    ...(opencode ? [new OpenCodeExecutor({
+      host: opencode,
+      reader: store,
+      prompts,
+      tools,
+      environments,
+      readers: workspaceReaders,
+      scratchDir: join(agentRuntimeDir, "scratch"),
+      knowledge,
+      toolProvider,
+      checks: verification,
+      baseline: verification,
+      offerings: [verification],
+      checkLogs: verification,
+      jobs,
+      finish: finishValidator,
+    })] : []),
     new ToolLoopExecutor({
       reader: store,
       prompts,
@@ -320,7 +350,7 @@ export async function createFactory(o: FactoryOptions) {
       offerings: [verification],
       checkLogs: verification,
       jobs,
-      finish: { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] },
+      finish: finishValidator,
     }),
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
@@ -479,6 +509,7 @@ export async function createFactory(o: FactoryOptions) {
     async stop() {
       await manager.stop();
       await Promise.all([agentRunController.stop(), conversationController.stop(), checkRunController.stop()]);
+      await opencode?.close();
       db.close();
     },
   };

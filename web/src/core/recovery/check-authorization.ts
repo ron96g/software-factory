@@ -3,6 +3,7 @@ import { nsOf } from "../model/meta.ts";
 import { unitChecks } from "../model/units.ts";
 import { canPrepareIsolated, StoreError, type ExecutionEnvironmentSelector, type RecoveryCheckAuthorization, type ResourceReader, type VerificationContracts, type WorkflowCompiler } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 /** Revalidates scheduler and controller callers against persisted resources and approved Unit scope. */
 export class DefaultRecoveryCheckAuthorization implements RecoveryCheckAuthorization {
@@ -42,7 +43,7 @@ export class DefaultRecoveryCheckAuthorization implements RecoveryCheckAuthoriza
     const contract = await this.d.contracts.plan(item, true);
     const approvedRepository = contract.repositories.find((r) => r.metadata.name === repository.metadata.name);
     if (!approvedRepository || approvedRepository.metadata.uid !== repository.metadata.uid ||
-        approvedRepository.metadata.resourceVersion !== repository.metadata.resourceVersion) return fail("Repository policy changed.");
+        checkDefinitionVersion(approvedRepository) !== checkDefinitionVersion(repository)) return fail("Repository policy changed.");
     const assignment = caller.spec.assignment;
     if (!assignment || assignment.kind !== "unit" || assignment.planFingerprint !== contract.fingerprint ||
         origin.planFingerprint !== contract.fingerprint || origin.unit !== assignment.unit ||

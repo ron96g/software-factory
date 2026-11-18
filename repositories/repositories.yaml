@@ -89,8 +89,12 @@ spec:
   local:
     # Dedicated clone for the factory (it adds git worktrees and factory/* branches there), outside the factory root.
     path: ~/git/personal/software-factory-repos/controlplane
-  # No `git:` on purpose: without it the factory never pushes branches or opens PRs on the public
-  # telekom/controlplane repository (ADR-0023). Add `git: { url, defaultBranch: main, secretRef }` to enable that.
+  # ADR-0023: when an item enters its publish stage (after verification), its factory/* branch is pushed to the
+  # public repository and a draft PR is opened.
+  git:
+    url: https://github.com/telekom/controlplane.git
+    defaultBranch: main
+    secretRef: { name: github-token }
   index:
     enabled: true
     type: ripgrep
@@ -103,10 +107,11 @@ spec:
     graph: .github/ci/module-graph.json
     sharedPaths: [Makefile, "hack/**", ".github/**", ".golangci.yml", ".ko.yaml", "**/go.mod", "**/go.sum", "go.work*"]
     nonBuildPaths: ["docs/**"]
-  checks:                    # Affected modules + transitive dependents; shared/unknown changes retain full validation.
-    build: { command: make build-all, timeoutMs: 1800000, moduleScoped: true }
-    unit-tests: { command: make test-all, timeoutMs: 3600000, moduleScoped: true }
-    focused-tests: { command: make test-all, timeoutMs: 900000, moduleScoped: true }
+  checks:                    # ADR-0061: scoped checks follow the tier (readiness: changed modules; preparation/verification:
+                             # changed + transitive dependents); shared/unknown changes always run full validation.
+    build: { command: make build-all, timeoutMs: 1800000, scoped: true }
+    unit-tests: { command: make test-all, timeoutMs: 3600000, scoped: true }
+    focused-tests: { command: make test-all, timeoutMs: 900000, scoped: true }
     full-build: { command: make build-all, timeoutMs: 1800000 }
     full-tests: { command: make test-all, timeoutMs: 3600000 }
     preflight:

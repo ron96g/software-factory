@@ -19,7 +19,7 @@ test("factory shutdown waits for a newly started background agent before closing
   const hold = new Promise<void>((r) => { release = r; });
   let requested!: () => void;
   const request = new Promise<void>((r) => { requested = r; });
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-shutdown-fixture" },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-shutdown-fixture" },
     fetch: async () => { requested(); await hold; return Response.json({ choices: [{ message: { content: '{"summary":"done","artifacts":[],"questions":[]}' } }] }); } });
   let stopping: Promise<void> | undefined;
   try {
@@ -47,7 +47,7 @@ async function awaiting(f: Factory, name: string) {
 }
 
 test("follow-up: synced origin stays unchanged; selected workflow gets separate instructions and historical evidence", async () => {
-  const env: Record<string, string | undefined> = {};
+  const env: Record<string, string | undefined> = { FACTORY_AGENT_RUNTIME: "tool-loop" };
   const prompts: string[] = [];
   const writes: string[] = [];
   const mock: typeof fetch = async (url, init) => {

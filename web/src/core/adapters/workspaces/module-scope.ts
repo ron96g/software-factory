@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, matchesGlob, relative } from "node:path";
 import { promisify } from "node:util";
-import type { ModuleCheckScope, Repository, Workspace } from "../../model/kinds.ts";
+import type { ModuleCheckScope, ModuleScopeMode, Repository, Workspace } from "../../model/kinds.ts";
 import { StoreError, type ModuleScopePlanner } from "../../ports/index.ts";
 
 const exec = promisify(execFile);
@@ -39,7 +39,7 @@ function moduleGraph(text: string): Record<string, Module> {
 
 /** Reuse the repository's CI graph; Git reads include the full candidate, not just its last commit. */
 export class GitModuleScopePlanner implements ModuleScopePlanner {
-  async plan(workspace: Workspace, repository: Repository): Promise<ModuleCheckScope> {
+  async plan(workspace: Workspace, repository: Repository, selection: ModuleScopeMode = "affected"): Promise<ModuleCheckScope> {
     const policy = repository.spec.moduleScope;
     const cwd = workspace.status?.path;
     const baseCommit = workspace.status?.baseCommit;
@@ -70,6 +70,7 @@ export class GitModuleScopePlanner implements ModuleScopePlanner {
       modules: Object.values(graph).map((module) => module.path).sort(),
     };
     const full = (reason: string): ModuleCheckScope => ({ ...scope, mode: "full", reason });
+    if (selection === "full") return full("Verification policy requires full scope for this check.");
     if (!changed.length) return full("No candidate changes; validate the full baseline.");
     if (changed.some((path) => path === policy.graph || policy.sharedPaths.some((pattern) => matchesGlob(path, pattern)))) {
       return full("Shared tooling, dependency or graph changes require full validation.");
@@ -82,6 +83,9 @@ export class GitModuleScopePlanner implements ModuleScopePlanner {
       const owner = owners.find(([, module]) => path === module.path || path.startsWith(`${module.path}/`));
       if (!owner) return full("Changes outside known modules require full validation.");
       selected.add(owner[0]);
+    }
+    if (selection === "changed") {
+      return { ...scope, mode: "changed", modules: [...selected].map((name) => graph[name].path).sort(), reason: "Changed modules only (readiness tier)." };
     }
     let size;
     do {

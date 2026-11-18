@@ -1,4 +1,4 @@
-import type { CheckRun, ModuleCheckScope, Repository, WorkItem, Workspace } from "../model/kinds.ts";
+import type { CheckRun, ModuleCheckScope, ModuleScopeMode, Repository, WorkItem, Workspace } from "../model/kinds.ts";
 import type { ExecutionContext } from "./agents.ts";
 import type { Principal } from "./app.ts";
 import type { ExecResult } from "./sandbox.ts";
@@ -9,7 +9,11 @@ export interface WorkspaceSnapshotter {
 }
 
 export interface ModuleScopePlanner {
-  plan(workspace: Workspace, repository: Repository): Promise<ModuleCheckScope>;
+  /**
+   * `selection` is the scope requested by the verification tier (ADR-0061, default `affected`). Shared, unknown or
+   * empty changes still return `full` with a reason (ADR-0044); the result is never narrower than requested.
+   */
+  plan(workspace: Workspace, repository: Repository, selection?: ModuleScopeMode): Promise<ModuleCheckScope>;
 }
 
 export interface CheckExecutionRunner {

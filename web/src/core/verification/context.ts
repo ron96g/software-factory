@@ -4,6 +4,7 @@ import { nsOf } from "../model/meta.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { gapId, verificationPolicyGaps } from "../model/verification-policy.ts";
 import { StoreError, type ContextProvider, type Redactor, type ResourceReader, type TranscriptReader, type WorkflowCompiler } from "../ports/index.ts";
+import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 export function verificationContext(d: { reader: ResourceReader; logs: TranscriptReader; compiler: WorkflowCompiler; redactor: Redactor }): ContextProvider {
   return {
@@ -27,7 +28,7 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
         source: "verification-contract",
         content: JSON.stringify({
           workflowVersions: compiled.versions, policy: compiled.verification,
-          repositories: ctx.repositories.map((repo) => ({ name: repo.metadata.name, resourceVersion: repo.metadata.resourceVersion,
+          repositories: ctx.repositories.map((repo) => ({ name: repo.metadata.name, checkDefinitionVersion: checkDefinitionVersion(repo),
             checks: repo.spec.checks, moduleScope: repo.spec.moduleScope, verification: repo.spec.verification })),
           workspaces: ctx.workspaces.map((workspace) => ({ workspace: workspace.metadata.name, repositoryAlias: workspace.spec.repositoryRef.name,
             checkSyntax: `${workspace.spec.repositoryRef.name}/<configured-check>` })),
@@ -38,7 +39,7 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
             ...(compiled.unitExecution ? { units: [{ id: "U1", title: "Stable Unit from units-of-work", dependsOn: [], criteria: ["AC-1"],
               obligations: [{ id: "U1-O1", description: "Concrete deliverable", checks: ["repository/<readiness check>"] }] }] } : {}) },
           ...(compiled.unitExecution ? { unitInstructions: "Unit execution is enabled (ADR-0047): units[] is required. Every criterion needs a delivering Unit; obligations name readiness checks from repository readinessChecks that are also in checks[]; dependencies are acyclic and use units-of-work IDs. Units are implemented one at a time and review starts only once all are ready." } : {}),
-          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. moduleScoped checks deterministically select changed modules plus transitive dependents from the pinned workspace baseline, including committed and dirty changes; shared/unknown changes require full validation. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence.",
+          instructions: "The validation-plan artifact must contain only JSON matching planFormat. Map every acceptance criterion. Include all mandatory policy checks and preflights. Module-scoped checks deterministically select modules from the pinned workspace baseline, including committed and dirty changes: legacy moduleScoped checks always run changed modules plus transitive dependents; scoped checks run changed modules only as readiness evidence and changed modules plus dependents (or more, per verification.minScope) as preparation/verification evidence; shared/unknown changes require full validation in every tier. Readiness results never count as verification evidence. Do not duplicate them with full-suite shell runs. Include explicit full checks when acceptance requires broader coverage. No invented commands or reduced scope. Unsupported requirements remain NotVerified and need explicit permitted human waivers. General shell runs and model opinions are not authoritative evidence.",
         }, null, 2),
       }];
       const gaps = ctx.repositories.flatMap(verificationPolicyGaps);
@@ -56,6 +57,18 @@ export function verificationContext(d: { reader: ResourceReader; logs: Transcrip
           JSON.stringify(prepared.map((run) => ({ checkRun: run.metadata.name, check: run.spec.check, command: run.spec.command,
             scope: run.spec.scope, before: run.spec.snapshot, after: run.status?.finalSnapshot, executionOutcome: run.status?.executionOutcome,
             outcome: run.status?.outcome, logRef: run.status?.logRef })), null, 2) });
+      // ADR-0063: at the verify stage the plan's checks ran before this run; the verifier evaluates them, it doesn't rerun them.
+      if (ctx.run.spec.stage === compiled.verification?.verifyStage) {
+        const latest = new Map<string, CheckRun>();
+        for (const run of allRuns.filter((r) => r.spec.workflow?.purpose === "verification" && r.spec.workflow.stage === ctx.run.spec.stage &&
+          r.spec.workflow.round === ctx.workItem.status?.round && r.status?.phase === "Completed")) latest.set(`${run.spec.repositoryRef.name}/${run.spec.check}`, run);
+        sections.push({ title: "Current verification evidence (authoritative CheckRuns for this candidate)", source: "verification-contract",
+          content: "The factory ran the approved plan's checks before this run. Evaluate this evidence against the specification and the " +
+            "validation plan; do not rerun these checks. A check without an entry here has no configured command or no result and counts as missing evidence.\n" +
+            JSON.stringify([...latest].map(([id, run]) => ({ check: id, checkRun: run.metadata.name, outcome: run.status?.outcome,
+              message: d.redactor.redact(run.status?.message ?? ""), scope: run.spec.scope, command: run.spec.command, snapshot: run.spec.snapshot,
+              finishedAt: run.status?.finishedAt, logRef: run.status?.logRef, logsIncomplete: run.status?.logsIncomplete })), null, 2) });
+      }
       const runs = allRuns.filter((r) => r.spec.workflow?.purpose !== "preparation" && r.status?.outcome && r.status.outcome !== "Passed").slice(-6);
       const historical = (await d.reader.list<FactoryEvent>("Event", { namespace: nsOf(ctx.workItem),
         labelSelector: { "factory.ai-dlc.io/workitem": ctx.workItem.metadata.name } })).filter((event) =>

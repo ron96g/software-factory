@@ -111,6 +111,10 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Plan re-confirmation** | A human Approval that carries an approved plan forward after only workflow or repository definitions changed (specification and validation plan unchanged). Existing evidence stays valid; rejecting returns to planning (ADR-0054). |
 | **Update pull request** | Re-publishing an item from its publish stage so a published PR whose base moved on is merged, resolved, reviewed and pushed to the same branch again (ADR-0054). |
 | **Tool loop** | The agent loop in which the LLM calls tools (read/write files, run commands) inside a sandbox until it calls `finish`. Every turn, call and result is recorded. |
+| **Agent runtime** | The harness an AgentRun executes in. By default the embedded OpenCode v2 host (ADR-0060): one session per run, factory-controlled model, deny-by-default permissions, repository skills and sub-agents, ending with `finish`. The factory's own tool loop is the fallback. |
+| **Verification tier** | When a check runs and how much it covers (ADR-0061): `readiness` after each Unit (changed modules), `preparation` and `verification` per candidate (affected modules), `publication` before publishing (full). Lower-tier evidence never satisfies a higher tier, whatever its scope. |
+| **Check scope** | The modules a scoped check covers: `changed`, `affected` (changed plus transitive dependents, ADR-0044) or `full`. Chosen by the tier (policy may raise it with `minScope`), widened to `full` for shared or unknown paths. |
+| **Check worker** | The process that executes CheckRuns outside the web server, claiming them with fenced leases and limiting concurrency (ADR-0062). |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
 | **Gate evidence** | What a human sees at a gate: structured verdicts (e.g. verifier pass/partial/fail), check results, open questions. Graded ok/warning/blocking (ADR-0027). |
 | **Delegation (at a gate)** | "Approve & let agents decide": open decisions are resolved by agents with the recommended/conservative default, documented under "Decisions taken". Gate comments are input for later agents. |
@@ -147,8 +151,7 @@ flowchart LR
     codeReview -- reject --> implement
     verify -- fail --> implement
   end
-  verify --> ship{{"ship<br/>HUMAN"}} --> monitor
-  monitor -- "repeat (signal)" --> feedback
+  verify --> ship{{"ship: draft PR<br/>HUMAN"}} --> done([Done])
 ```
 
 | Stage | AI-DLC phase | Agent | Skill | Output artifact | Gate |
@@ -160,9 +163,8 @@ flowchart LR
 | **implement** | Construction (Bolt) | architect, developer | domain-driven-design, test-driven-development | `domain-model`, `source-code` | – |
 | **code-review** | Construction (Mob Construction) | reviewer | code-review | `review-report` | **human**: tech lead, reject → implement |
 | **verify** | Construction | verifier | verification | `verification-report` | automated: tests, acceptance criteria, security; fail → implement |
-| **ship** | Operations | release-manager | release-management | `release` | **human**: ops lead |
-| **monitor** | Operations | sre | observability | `signal` | automated: SLOs, error budget; fail → rollback + feedback |
-| **repeat** | – | – | – | `signal` (source: feedback) | – |
+| **ship** | Operations | – (publishes the draft PR) | – | pull request | **human**: ops lead confirms the PR, reject → implement (ADR-0065) |
+| **monitor**, **repeat** | Operations | sre | observability | `signal` | planned for v0.6; not in the current workflows (ADR-0065) |
 
 | Term | Definition |
 |---|---|
@@ -172,7 +174,7 @@ flowchart LR
 | **Review report** | Findings marked as blocking or non-blocking. The AI pre-reviews, and a human decides. |
 | **Verification report** | A trace from each acceptance criterion to a test and its result. |
 | **Release** | A version, changelog, rollout plan, and rollback plan. |
-| **Feedback** | A signal emitted by monitor. It closes the loop. |
+| **Feedback** | A signal emitted by monitor. It closes the loop (v0.6; until then `monitoring-feedback` items are created by sync or by hand). |
 | **Service desk workflow** | `servicedesk`: classify → investigate (code research + `support-analysis`) → respond (`customer-response`) → response-review (**human**) → publish-response (**fresh human visibility review**, then delivery). Reject returns to respond; automatic ticket synchronization stays read-only (ADR-0040). |
 | **Publication review** | A fresh Approval of exact ticket response evidence, public/internal visibility and an optional Jira transition. Earlier response approval alone never authorizes publication. |
 | **Ticket transition** | A Jira-permitted action ID moving the current ticket to a target status. Humans confirm it independently or after reply delivery; status names are not guessed or hardcoded. |
@@ -202,6 +204,7 @@ flowchart LR
 | **Policy gap** (ADR-0042 addendum) | A check that repository verification policy requires (or uses for preflight, preparation or readiness) but that has no configured command, so it can never pass. Detected deterministically by `validate.py`, system health and plan review; agents report only undetected gaps, as `missing-check-command` feedback. |
 | **CheckRun** (ADR-0042) | A durable runtime job for a named repository check against a pinned workspace tree/environment. Standalone checks and verified gates/tools share results with typed outcomes and redacted, possibly incomplete logs; workflow jobs also pin plan, stage, round and attempt. |
 | **Preflight** (ADR-0042) | Named prerequisite checks in the actual execution environment before construction. Setup failures use bounded execution recovery and durable human attention, not speculative code edits. |
+| **Check definition version** (ADR-0064) | Digest of the Repository fields that decide what a check runs and where (`local`, `workspace`, `sandboxRef`, `checks`, `moduleScope`, `verification`). Validation plans and CheckRuns bind to it, so publication, search or context edits keep evidence current. |
 | **Candidate preparation** (ADR-0043) | Named approved-plan checks before AI and human candidate review, including reproducible generation. Successful execution may change the tree and remains NotVerified; the resulting tree needs fresh review and unchanged-tree final verification. |
 | **Affected-module verification** (ADR-0044) | Repository-controlled build/test scope: modules changed since the pinned workspace baseline plus transitive dependents from the CI graph. Shared/unknown changes retain full validation; immutable CheckRuns record resolved scope and command. |
 | **Verification waiver** (ADR-0042) | An explicit human exception to named missing evidence only where repository policy permits, with Principal/reason and exact plan/candidate/evidence binding. It remains Waived, never Passed, and does not authorize publication. |

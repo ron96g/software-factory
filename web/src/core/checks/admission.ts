@@ -6,6 +6,7 @@ import type { ModuleScopePlanner, RecoveryCheckAuthorization, ResourceReader, Va
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
+import { checkDefinitionVersion } from "./definition-version.ts";
 
 function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; ownerReferences?: { kind: string; name: string; uid: string }[] } }): boolean {
   const owners = candidate.metadata.ownerReferences ?? [];
@@ -132,11 +133,11 @@ export function checkRunValidator(scopes?: ModuleScopePlanner, recoveryChecks?: 
         : null;
       if (!repository || repository.metadata.name !== spec.repositoryRef?.name ||
           (spec.repositoryRef?.namespace && spec.repositoryRef.namespace !== nsOf(repository)) ||
-          repository.metadata.resourceVersion !== spec.repositoryVersion) {
+          checkDefinitionVersion(repository) !== spec.repositoryVersion) {
         errors.push("CheckRun repository reference/version is not current");
       } else {
         try {
-          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes);
+          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes, spec.workflow?.purpose);
           if (!config) throw new Error("check workspace is unavailable");
           if (config.command !== spec.command || config.timeoutMs !== spec.timeoutMs ||
               config.resultFormat !== spec.resultFormat || JSON.stringify(config.scope) !== JSON.stringify(spec.scope)) {

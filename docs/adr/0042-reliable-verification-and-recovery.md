@@ -1,6 +1,7 @@
 # ADR-0042: Reliable verification and evidence-driven recovery
 
 - **Status:** Superseded in part by ADR-0044 (Controlplane check scope only; other decisions remain Accepted)
+- **Amended by:** ADR-0061, ADR-0062, ADR-0064
 - **Date:** 2026-11-13
 - **Deciders:** project owner
 - **Extends:** ADR-0005, ADR-0006, ADR-0012, ADR-0019, ADR-0027

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { originAuthorized } from "./checks/origin.ts";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentRun, Approval, Artifact, CheckOutcome, CheckRun, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
@@ -14,6 +15,7 @@ import { createWorkItemController } from "./runtime/controllers/workitem.ts";
 import { createAgentRunController } from "./runtime/controllers/agentrun.ts";
 import { Registry } from "./registry/registry.ts";
 import type { GateEvaluator } from "./ports/index.ts";
+import { checkDefinitionVersion } from "./checks/definition-version.ts";
 
 async function fixture(preparation = false) {
   const db = new DatabaseSync(":memory:");
@@ -55,7 +57,7 @@ async function fixture(preparation = false) {
     submit: async (request) => store.create<CheckRun>({ apiVersion: API_VERSION, kind: "CheckRun",
       metadata: { name: `check-${request.workflow.stage}-${request.check}-${request.workflow.attempt}`, namespace: "default", ownerReferences: [ownerRef(item)] },
       spec: { workItemRef: { name: "item" }, workItemUid: item.metadata.uid!, workspaceRef: { name: "ws" }, workspaceUid: workspace.metadata.uid!,
-        repositoryRef: { name: "repo" }, repositoryVersion: repo.metadata.resourceVersion!, check: request.check, command: request.check,
+        repositoryRef: { name: "repo" }, repositoryVersion: checkDefinitionVersion(repo), check: request.check, command: request.check,
         timeoutMs: 1000, snapshot: tree, environment: { runtime: "fake", version: "1", profileVersion: "default" }, requestedBy: "gate",
         requestFingerprint: request.requestId, workflow: request.workflow } }),
   };
@@ -382,8 +384,10 @@ test("stage entry cannot bypass human plan review or current same-environment pr
     const stage = (await f.context("implement")).stage;
     assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "block");
     await f.approve("spec-review");
-    assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "block");
-    await f.seedPass("preflight", "preflight", "preflight");
+    assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "wait", "a missing preflight is run, never skipped");
+    const preflight = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(preflight.spec.workflow?.purpose, "preflight");
+    await f.finish(preflight, "Passed");
     assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "advance");
     const profileChangedRepo = await f.store.update({ ...f.repo, spec: { ...f.repo.spec, checks: { ...f.repo.spec.checks, preflight: "new prerequisites" } } });
     assert.ok(profileChangedRepo.metadata.resourceVersion !== f.repo.metadata.resourceVersion);
@@ -535,4 +539,112 @@ test("plan review shows required checks without a command as known evidence gaps
       .map((g) => [g.check, g.role, g.waivable]), [["manual-acceptance", "required", false], ["lint", "readiness", false]]);
     assert.match(gapCriterion([{ repository: "repo", check: "manual-acceptance", role: "required", waivable: false }])[0], /Unpassable checks/);
   } finally { f.db.close(); }
+});
+
+test("ADR-0063: entering verify collects the plan's checks before the verifier runs; the gate then only confirms", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    const verify = (await f.context("verify")).stage;
+    const checks = async () => (await f.store.list<CheckRun>("CheckRun")).filter((r) => r.spec.workflow?.purpose === "verification");
+
+    await f.service.check(await f.current());
+    await f.service.recover(await f.current());
+    assert.equal((await checks()).length, 0, "a permission check never submits checks");
+
+    for (const check of ["build", "test"]) {
+      assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait", `entry waits for ${check}`);
+      const submitted = (await checks()).at(-1)!;
+      assert.equal(submitted.spec.check, check);
+      assert.equal(submitted.spec.requestedBy, "gate");
+      assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait", "an active check keeps the stage waiting");
+      await f.finish(submitted, "Passed");
+    }
+    assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "advance", "the verifier may start once evidence is complete");
+    const before = (await checks()).length;
+    const decision = await f.runStage("verify");
+    assert.equal(decision.action, "await-approval", "only the unconfigured manual check needs a waiver");
+    assert.equal((await checks()).length, before, "the gate reuses the evidence collected at entry");
+  } finally { f.db.close(); }
+});
+
+test("ADR-0042 §4: entering a later stage with a stale preflight reruns it in place instead of asking for a restart", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    const old = await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    await f.store.update<CheckRun>({ ...old, metadata: { ...old.metadata, labels: { "factory.ai-dlc.io/superseded": "definition-change" } } });
+    const verify = (await f.context("verify")).stage;
+
+    assert.equal((await f.service.beforeStage(await f.current(), verify)).action, "wait");
+    const refreshed = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(refreshed.spec.workflow?.purpose, "preflight");
+    assert.equal(refreshed.spec.workflow?.stage, "verify", "rerun at the current stage, nothing after preflight is discarded");
+    await f.finish(refreshed, "Passed");
+    const next = await f.service.beforeStage(await f.current(), verify);
+    assert.equal(next.action, "wait");
+    assert.equal((await f.store.list<CheckRun>("CheckRun")).at(-1)!.spec.workflow?.purpose, "verification", "then the verification evidence is collected");
+
+  } finally { f.db.close(); }
+});
+
+test("ADR-0064: editing publication, code search or agent context keeps the approved plan and check evidence current", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+    const approved = (await f.service.plan(await f.current(), true)).fingerprint;
+    const repo = (await f.store.get<Repository>("Repository", "factory-system", "repo"))!;
+    const published = await f.store.update<Repository>({ ...repo, metadata: { ...repo.metadata, labels: { team: "x" } },
+      spec: { ...repo.spec, git: { url: "https://example.test/repo.git", defaultBranch: "main" }, index: { enabled: true }, context: { docs: ["docs"] } } });
+
+    assert.equal((await f.service.plan(await f.current(), true)).fingerprint, approved, "no plan re-confirmation");
+    assert.equal((await f.service.beforeStage(await f.current(), (await f.context("verify")).stage)).action, "wait");
+    assert.deepEqual((await f.store.list<CheckRun>("CheckRun")).map((r) => r.spec.workflow?.purpose), ["preflight", "verification"],
+      "the earlier preflight still counts; only the verification checks are collected");
+
+    await f.store.update<Repository>({ ...published, spec: { ...published.spec, checks: { ...published.spec.checks, preflight: "prepare --strict" } } });
+    assert.notEqual((await f.service.plan(await f.current(), false)).fingerprint, approved, "a changed check definition needs the plan re-confirmed");
+  } finally { f.db.close(); }
+});
+
+test("ADR-0064: a stale preflight at the publish stage is rerun in place before publication instead of blocking", async () => {
+  const f = await fixture();
+  try {
+    await f.approve("spec-review");
+    const old = await f.seedPass("preflight", "preflight", "preflight");
+    await f.approve("code-review");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "ship" } });
+    await f.store.update<CheckRun>({ ...old, metadata: { ...old.metadata, labels: { "factory.ai-dlc.io/superseded": "definition-change" } } });
+
+    assert.match((await f.service.check(await f.current()))!, /preflight repo\/preflight is missing or stale/);
+    assert.equal((await f.service.recover(await f.current()))?.action, "wait");
+    assert.equal((await f.service.recover(await f.current()))?.action, "wait", "an active refresh keeps publication waiting");
+    assert.equal((await f.store.list<CheckRun>("CheckRun")).length, 2, "repeated reconciles submit the refresh once");
+    const refreshed = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+    assert.equal(refreshed.spec.workflow?.purpose, "preflight");
+    assert.equal(refreshed.spec.workflow?.stage, "ship");
+  } finally { f.db.close(); }
+});
+
+test("preflight checks are authorized at the preflight stage and later stages only", () => {
+  const workflow = { spec: { verification: { planningStage: "plan", reviewStage: "review", preflightStage: "preflight", verifyStage: "verify",
+    implementationStage: "implement", maxCodeAttempts: 1, maxExecutionAttempts: 1, retryDelayMs: 1 },
+    phases: [{ name: "p", stages: [{ name: "plan" }, { name: "review" }, { name: "preflight" }, { name: "implement" }, { name: "verify" }] }] } } as unknown as Workflow;
+  const origin = (stage: string) => ({ stage, round: 1, purpose: "preflight" as const, planFingerprint: "x", attempt: 1 });
+  assert.equal(originAuthorized(workflow, origin("preflight")), true);
+  assert.equal(originAuthorized(workflow, origin("verify")), true);
+  assert.equal(originAuthorized(workflow, origin("review")), false, "never before the plan is approved");
+  assert.equal(originAuthorized(workflow, origin("unknown")), false);
 });

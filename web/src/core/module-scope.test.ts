@@ -13,6 +13,7 @@ import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
 import { InMemorySandboxEnvironment, NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { resolveCheckConfig } from "./checks/config.ts";
+import { scopeSatisfies } from "./model/check-scope.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { CheckActions } from "./checks/actions.ts";
 import { createCheckRunController } from "./checks/controller.ts";
@@ -279,4 +280,111 @@ test("preparation, gate, agent and standalone jobs pin and revalidate the same s
         assert.equal(executed.length, 4);
         assert.deepEqual(errors, []);
       } finally { await controller.stop(); db.close(); await f.cleanup(); }
+});
+
+test("ADR-0061: the planner selects changed modules without dependents, or full on request, and still widens shared changes", async () => {
+  const f = await fixture();
+  try {
+    await f.put("api/source.go", "changed");
+    const changed = await f.scopes.plan(f.workspace, f.repository, "changed");
+    assert.equal(changed.mode, "changed");
+    assert.deepEqual(changed.modules, ["api"]);
+    assert.deepEqual((await f.scopes.plan(f.workspace, f.repository, "affected")).modules, ["api", "client"]);
+    const full = await f.scopes.plan(f.workspace, f.repository, "full");
+    assert.equal(full.mode, "full");
+    assert.match(full.reason, /requires full scope/);
+    await f.put("shared/go.mod", "module shared");
+    assert.equal((await f.scopes.plan(f.workspace, f.repository, "changed")).mode, "full", "shared paths widen every tier");
+  } finally { await f.cleanup(); }
+});
+
+test("ADR-0061: tiers decide a scoped check's scope; minScope raises it; legacy moduleScoped stays affected", async () => {
+  const f = await fixture();
+  try {
+    await f.put("api/source.go", "changed");
+    const repository: Repository = { ...f.repository, spec: { ...f.repository.spec,
+      checks: { ...f.repository.spec.checks, tests: { command: "make test-all", scoped: true } },
+      verification: { requiredChecks: ["tests"], preflightChecks: [], readinessChecks: ["tests", "build"] } } };
+    const resolve = (check: string, purpose?: Parameters<typeof resolveCheckConfig>[4], repo = repository) =>
+      resolveCheckConfig(repo, check, f.workspace, f.scopes, purpose);
+
+    assert.equal((await resolve("tests", "unit-readiness")).command, "make test-all MODULES='api'");
+    assert.equal((await resolve("tests", "preparation")).command, "make test-all MODULES='api client'");
+    assert.equal((await resolve("tests", "verification")).command, "make test-all MODULES='api client'");
+    assert.equal((await resolve("tests")).command, "make test-all MODULES='api client'", "standalone checks keep affected scope");
+    assert.equal((await resolve("build", "unit-readiness")).command, "make build-all MODULES='api client'", "legacy keeps affected in readiness");
+
+    const raised = { ...repository, spec: { ...repository.spec, verification: { ...repository.spec.verification!,
+      minScope: { verification: { tests: "full" as const }, readiness: { tests: "affected" as const } } } } };
+    const verification = await resolve("tests", "verification", raised);
+    assert.equal(verification.command, "make test-all");
+    assert.equal(verification.scope?.mode, "full");
+    assert.equal((await resolve("tests", "unit-readiness", raised)).command, "make test-all MODULES='api client'");
+
+    for (const [minScope, error] of [
+      [{ verification: { build: "full" } }, /legacy moduleScoped/],
+      [{ verification: { full: "full" } }, /only scoped checks/],
+      [{ publication: { tests: "full" } }, /unknown tier/],
+      [{ verification: { tests: "changed" } }, /must be "affected" or "full"/],
+    ] as const) {
+      const invalid = { ...repository, spec: { ...repository.spec, verification: { ...repository.spec.verification!, minScope } } } as unknown as Repository;
+      await assert.rejects(resolve("tests", "verification", invalid), error);
+    }
+    const both = { ...repository, spec: { ...repository.spec, checks: { ...repository.spec.checks, tests: { command: "make test-all", scoped: true, moduleScoped: true } } } };
+    await assert.rejects(resolve("tests", "verification", both), /both scoped and the legacy moduleScoped/);
+  } finally { await f.cleanup(); }
+});
+
+test("ADR-0061: a verification check is pinned to its tier's scope; a readiness-scoped run is rejected", async () => {
+  const f = await fixture();
+  const db = new DatabaseSync(":memory:");
+  try {
+    const clock = { now: () => new Date() };
+    const store = new SqliteStore(db, clock);
+    const snapshots = new GitWorkspaceSnapshotter();
+    const runtimes = new Registry<ExecutionEnvironment>();
+    runtimes.register("in-memory", new InMemorySandboxEnvironment());
+    runtimes.register("none", new NoSandboxEnvironment());
+    const environments = new DefaultEnvironmentSelector(runtimes, "in-memory", []);
+    await f.put("api/source.go", "changed");
+    const repository = await store.create<Repository>({ ...f.repository, spec: { ...f.repository.spec,
+      checks: { ...f.repository.spec.checks, tests: { command: "make test-all", scoped: true } },
+      verification: { requiredChecks: ["tests"], preflightChecks: [] } } });
+    const workflow = await store.create<Workflow>({
+      apiVersion: API_VERSION, kind: "Workflow", metadata: { name: "workflow", namespace: "default" },
+      spec: { phases: [], verification: { planningStage: "plan", reviewStage: "review", preflightStage: "preflight",
+        preparationStage: "code-review", verifyStage: "verify", implementationStage: "implement",
+        maxCodeAttempts: 2, maxExecutionAttempts: 2, retryDelayMs: 1 } },
+    });
+    const item = await store.create<WorkItem>({ ...f.item, spec: { ...f.item.spec, workflowRef: { name: workflow.metadata.name } } });
+    const workspace = await store.create<Workspace>({ ...f.workspace, metadata: { ...f.workspace.metadata, ownerReferences: [ownerRef(item)] } });
+    const scheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor: { redact: (t: string) => t }, scopes: f.scopes });
+    const run = await scheduler.submit({ workItem: item, workspace, repository, check: "tests", requestId: "gate", requestedBy: "gate",
+      workflow: { purpose: "verification", stage: "verify", round: 1, attempt: 1, planFingerprint: "approved-plan" } });
+    assert.equal(run.spec.scope?.mode, "affected");
+    assert.deepEqual(run.spec.scope?.modules, ["api", "client"]);
+    const validator = checkRunValidator(f.scopes);
+    assert.deepEqual(await validator.validate(run, { operation: "CREATE", reader: store }), []);
+    const readinessScope = await f.scopes.plan(workspace, repository, "changed");
+    const forged = { ...run, spec: { ...run.spec, scope: readinessScope, command: "make test-all MODULES='api'" } };
+    assert.ok((await validator.validate(forged, { operation: "CREATE", reader: store })).some((e) => e.includes("scope")));
+  } finally { db.close(); await f.cleanup(); }
+});
+
+test("ADR-0061: evidence counts only for its exact purpose and with at least that purpose's scope", () => {
+  const repository = { metadata: { name: "repo" }, spec: {
+    moduleScope: { graph: "g.json", sharedPaths: [] },
+    checks: { tests: { command: "make test-all", scoped: true }, legacy: { command: "make test-all", moduleScoped: true }, plain: "npm test" },
+    verification: { requiredChecks: ["tests"], preflightChecks: [], minScope: { verification: { tests: "full" as const } } } } } as unknown as Repository;
+  const run = (purpose: "unit-readiness" | "verification", mode?: "changed" | "affected" | "full") =>
+    ({ spec: { workflow: { purpose }, ...(mode ? { scope: { mode } } : {}) } }) as unknown as CheckRun;
+
+  assert.equal(scopeSatisfies(repository, "tests", run("unit-readiness", "full"), "verification"), false, "lower-tier evidence never counts, even in full scope");
+  assert.equal(scopeSatisfies(repository, "tests", run("verification", "affected"), "verification"), false, "same tier, narrower than minScope");
+  assert.equal(scopeSatisfies(repository, "tests", run("verification", "full"), "verification"), true);
+  assert.equal(scopeSatisfies(repository, "tests", run("unit-readiness", "changed"), "unit-readiness"), true);
+  assert.equal(scopeSatisfies(repository, "tests", run("unit-readiness"), "unit-readiness"), false, "a scoped check without a recorded scope");
+  assert.equal(scopeSatisfies(repository, "legacy", run("unit-readiness", "changed"), "unit-readiness"), false, "legacy checks require affected");
+  assert.equal(scopeSatisfies(repository, "legacy", run("unit-readiness", "affected"), "unit-readiness"), true);
+  assert.equal(scopeSatisfies(repository, "plain", run("verification"), "verification"), true);
 });

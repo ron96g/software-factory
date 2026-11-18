@@ -17,6 +17,7 @@ import { createWorkItemController } from "../core/runtime/controllers/workitem.t
 import { SqliteStore } from "../core/store/sqlite-store.ts";
 import { UnitExecutionService } from "../core/units/service.ts";
 import { humanApprovalGate } from "../core/workflow/gates.ts";
+import { checkDefinitionVersion } from "../core/checks/definition-version.ts";
 
 test("AC-39-3: partial Unit is diagnosed, repaired and checked before its normal human gate", async () => {
   const db = new DatabaseSync(":memory:");
@@ -54,7 +55,7 @@ test("AC-39-3: partial Unit is diagnosed, repaired and checked before its normal
     const checks: CheckRunScheduler = { submit: async (request) => store.create<CheckRun>({ apiVersion: API_VERSION, kind: "CheckRun",
       metadata: { name: "readiness", namespace: "default", ownerReferences: [ownerRef(item)] },
       spec: { workItemRef: { name: "item" }, workItemUid: item.metadata.uid!, workspaceRef: { name: "ws" }, workspaceUid: workspace.metadata.uid!,
-        repositoryRef: { name: "repo" }, repositoryVersion: repo.metadata.resourceVersion!, check: request.check, command: "test", timeoutMs: 1000,
+        repositoryRef: { name: "repo" }, repositoryVersion: checkDefinitionVersion(repo), check: request.check, command: "test", timeoutMs: 1000,
         snapshot: "tree", environment: { runtime: "fake", profileVersion: "default" }, requestedBy: "test", requestFingerprint: "readiness", workflow: request.workflow },
       status: { phase: "Completed", outcome: "Passed", finalSnapshot: "tree" } }) };
     const events = new StoreEventRecorder(store);

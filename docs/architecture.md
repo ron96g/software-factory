@@ -100,6 +100,11 @@ stateDiagram-v2
 Actions: **New item** (manual), **Sync now** (per source), **Answer** (unblocks an item), **Approve / Reject** (gates),
 **Create follow-up** (independent item with inherited evidence).
 
+On the item page, every stage chip opens a **stage view**: the stage's steps and their runs, its checks, its
+pull-request publication, and the human input it waits on. Above the chips, the active stage says what it waits for (a
+running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
+agent tools that no sandbox provides, or a pull request that failed to deliver.
+
 ## Planning workspace (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
 The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.
@@ -209,6 +214,35 @@ use and cited-code counts for observability only.
 
 The tool guide also states the run's step budget. Near the end the harness tells the agent to wrap up, and the last
 step only offers `finish`, so a run out of budget reports what it completed instead of failing (ADR-0058).
+
+### Agent runtime: OpenCode v2 (ADR-0060)
+
+Model-backed AgentRuns run in an OpenCode v2 host embedded in the factory process (`@opencode/sdk`), one session
+per run. The same factory rules as the tool loop apply, through shared harness code: tool selection, guarded and
+serialized workspace mutations, in-loop `finish` validation, step budget and wrap-up, `source-code` diffs. OpenCode
+adds precise edit tools, a real shell, compaction, the repository's own skills and `AGENTS.md`, and background
+sub-agents.
+
+```mermaid
+flowchart LR
+  Ctx[ExecutionContext] --> Exec[OpenCodeExecutor]
+  Exec -->|SessionSpec: prompt, permissions, tools, model| Host[OpenCodeHost]
+  Host --> Plugin[factory plugin]
+  Plugin -->|providers| Model[(factory ModelProvider only)]
+  Plugin -->|tools| FT[finish, factory tools, ToolServer tools]
+  Plugin -->|hooks| Guard[step budget, tool filter, mutation guard, scrubbed shell env, no quota retries]
+  Host -->|events + tool hooks| Transcript[(run transcript)]
+```
+
+- Only the factory's resolved model is available; OpenCode's bundled providers, the public model catalogue, user and
+  repository configuration and plugins are never loaded. The key stays in-process.
+- Sessions start from "deny everything"; the agent's tools grant `read`/`glob`/`grep`, `edit`/`write` (never `.git`)
+  or `shell`. `skill` and `subagent` are always allowed; sub-agents inherit the rules, cannot delegate further and
+  cannot call `finish`. Web access, Code Mode and the interactive `question` tool are hidden.
+- Agents that write or execute use OpenCode only on the `host` sandbox runtime; with an isolated runtime they fall
+  back to the tool loop. Commands get the scrubbed environment plus the sandbox profile's `env`.
+- A 429/503/529 is not retried inside OpenCode: the run waits (ADR-0031). `FACTORY_AGENT_RUNTIME=tool-loop` disables
+  the runtime.
 
 ### In progress: autonomous technical recovery (proposed ADR-0059)
 
@@ -361,7 +395,11 @@ generic UnknownFailure. Standalone evidence does not advance/restart items or sa
 X23b/c add the explicitly selected `factory-verified` workflow. Its architect writes a JSON `validation-plan` mapping
 every acceptance criterion to named policy checks. Human spec-review approves its exact artifact/specification,
 workflow versions and repository policy, then same-environment preflight runs before construction. Restarting directly
-into implementation cannot bypass this policy. Human code-review binds the candidate tree and environment; generation
+into implementation cannot bypass this policy: entering any later stage with missing or stale preflight evidence (e.g.
+after a definition change and plan re-confirmation) reruns preflight in place, within its budgets, instead of asking a
+human to restart preflight and discard later work (ADR-0042 §4). A restart marks the restarted stages' open
+Clarifications and undecided Approvals as superseded, like their runs, artifacts and CheckRuns; they can't be acted on
+and are no longer polled on synced tickets. Human code-review binds the candidate tree and environment; generation
 or formatting during a later check invalidates the review instead of silently publishing changed code.
 
 [ADR-0043](adr/0043-candidate-preparation-and-drift-recovery.md) adds optional named **candidate preparation** checks
@@ -374,7 +412,9 @@ returns to fresh code-review through a separate bounded recovery counter, not a 
 Budget exhaustion requests human attention; an answer is not approval. `run_check` accepts workspace resource names
 or unique repository aliases, and bare or `repository/check` identifiers, normalized before idempotent scheduling.
 
-The registered `verified-checks` gate and verifier's recorded `run_check` tool share CheckRun scheduling. Checks
+Entering the verify stage collects the approved plan's checks for the approved candidate **before** the verifier runs
+(ADR-0063); the verifier evaluates that evidence ("Current verification evidence") and no longer has `run_check`. The
+`verified-checks` gate shares the same collection code and afterwards only confirms the evidence is current. Checks
 serialize on a WorkItem's workspace. Only typed AssertionFailed enters the code-fix budget; timeout, cancellation,
 setup and unknown failures use a separate bounded execution budget, then a durable Clarification with check/log
 references. Retry timing and attempts derive from persisted jobs. Developer prompts receive redacted structured
@@ -413,6 +453,23 @@ and exact commands; legacy events explain full-scope selection. Controlplane def
 affected-module coverage; `full-build` and `full-tests` remain available when acceptance requires broader evidence.
 Changing repository policy invalidates existing approved contracts and requires fresh human plan review.
 See [ADR-0044](adr/0044-affected-module-verification.md).
+
+### Verification tiers (ADR-0061)
+Checks declared with `scoped: true` take their scope from the **tier** of the CheckRun's purpose instead of a per-check
+flag. The tier table is data (`model/check-scope.ts`), and the planner receives the requested selection:
+
+| Purpose (tier) | Default scope |
+|---|---|
+| `unit-readiness` (readiness) | `changed`: changed modules only |
+| `preparation`, `verification` | `affected`: changed modules plus transitive dependents |
+| standalone, preflight, diagnostic | `affected` (unchanged) |
+
+`verification.minScope` raises a scoped check's scope per tier (e.g. `minScope: { verification: { tests: full } }`); it never
+lowers it. Shared, unknown or empty changes still select `full` in every tier. Legacy `moduleScoped: true` checks keep
+`affected` everywhere, and `validate.py` warns about them. Evidence counts only for its exact purpose and only with at least that purpose's scope (`scopeSatisfies`), so
+readiness results never count as verification evidence. Admission and execution re-resolve the scope with the run's purpose, so a
+CheckRun cannot carry another tier's scope. Side-effect-free checks, caches and the publication tier follow
+(X41b–d); the check worker is ADR-0062.
 
 ## Direct agent conversations (ADR-0036)
 
@@ -480,3 +537,7 @@ flowchart LR
 - An already published PR is brought up to date with "Update pull request" (ADR-0054): a restart from the publish stage
   that goes through the same conflict resolution and pushes to the same branch. A plan approval made stale only by
   workflow/repository definition edits is re-confirmed in place through an Approval instead of restarting plan review.
+- A repository without `spec.git.url` is never published: its changes stay in the workspace, and the publish stage
+  shows the publication as "not configured" instead of retrying a delivery that can't succeed. Adding `git:` later
+  keeps the item's plan and check evidence (they bind to the check definition version, ADR-0064); a preflight made
+  stale by a check-definition change is rerun in place before publication.

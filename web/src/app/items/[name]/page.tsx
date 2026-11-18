@@ -1,4 +1,5 @@
 "use client";
+import { CurrentStageSummary, StageDrawer, useItemCheckRuns } from "@/ui/stage-drawer.tsx";
 import {
   Accordion,
   Alert,
@@ -59,6 +60,8 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const planning = useLive<PlanningWorkspaceData>(`/api/workitems/${encodeURIComponent(name)}/planning`, (n) =>
     n.workItem === name || n.name === name || ["Workflow", "Repository"].includes(n.kind ?? ""));
   const [openRun, setOpenRun] = useState<string | null>(null);
+  const [openStage, setOpenStage] = useState<string | null>(null);
+  const checkRuns = useItemCheckRuns(name);
   const [askOpen, setAskOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
@@ -154,7 +157,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Group>
       </Group>
 
-      <StageProgress d={d} />
+      <StageProgress d={d} onOpen={setOpenStage} />
+      <CurrentStageSummary d={d} checks={checkRuns} onOpen={setOpenStage} />
+      <StageDrawer d={d} checks={checkRuns} stage={openStage} onClose={() => setOpenStage(null)} onOpenRun={(r) => { setOpenStage(null); setOpenRun(r); }} />
       {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
       <Modal opened={deleteOpen} onClose={() => { if (!deleting) setDeleteOpen(false); }} title="Delete work item?" centered>
         <Stack>
@@ -520,7 +525,7 @@ function RestartMenu({ d }: { d: WorkItemDetail }) {
   );
 }
 
-function StageProgress({ d }: { d: WorkItemDetail }) {
+function StageProgress({ d, onOpen }: { d: WorkItemDetail; onOpen: (stage: string) => void }) {
   const st = d.workItem.status;
   const idx = d.stages.findIndex((s) => s.name === st?.stage);
   const done = st?.phase === "Done";
@@ -533,15 +538,17 @@ function StageProgress({ d }: { d: WorkItemDetail }) {
           const verdict = d.evidence.items.find((i) => i.stage === s.name && i.severity !== "ok");
           const color = verdict?.severity === "blocking" ? "red" : verdict?.severity === "warning" ? "yellow" : (PHASE_COLOR[s.lifecyclePhase] ?? "gray");
           return (
-            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}${verdict ? ` · ${verdict.label}` : ""}`}>
+            <Tooltip key={s.name} label={`${s.lifecyclePhase}${s.gate ? ` · gate: ${s.gate}` : ""}${verdict ? ` · ${verdict.label}` : ""} · click for details`}>
               <Badge
+                component="button"
+                onClick={() => onOpen(s.name)}
                 size="lg"
                 color={current && st?.phase === "Blocked" ? "orange" : current && st?.phase === "AwaitingApproval" ? "yellow" : color}
                 variant={current ? "filled" : passed ? "light" : "outline"}
                 leftSection={
                   verdict?.severity === "blocking" ? <IconX size={12} /> : passed ? <IconCheck size={12} /> : s.gate === "human-approval" ? <IconHandStop size={12} /> : undefined
                 }
-                style={{ opacity: passed || current ? 1 : 0.55 }}
+                style={{ opacity: passed || current ? 1 : 0.55, cursor: "pointer" }}
               >
                 {s.name}
               </Badge>
@@ -956,7 +963,9 @@ function HumanHistory({ clarifications, approvals }: { clarifications: Clarifica
             <Text size="sm" fw={600}>
               Clarification · {c.spec.stage}
             </Text>
-            <Badge color={c.spec.answers?.length ? "teal" : "orange"}>{c.spec.answers?.length ? "answered" : "open"}</Badge>
+            <Badge color={c.spec.answers?.length ? "teal" : c.metadata.labels?.[LABEL_SUPERSEDED] ? "gray" : "orange"}>
+              {c.spec.answers?.length ? "answered" : c.metadata.labels?.[LABEL_SUPERSEDED] ? "superseded by restart" : "open"}
+            </Badge>
           </Group>
           {c.spec.questions.map((q, i) => (
             <Text key={i} size="sm" mt={4}>
@@ -977,7 +986,9 @@ function HumanHistory({ clarifications, approvals }: { clarifications: Clarifica
             <Text size="sm" fw={600}>
               Approval · {a.spec.stage}
             </Text>
-            <Badge color={a.spec.decision === "approve" ? "teal" : a.spec.decision === "reject" ? "red" : "yellow"}>{a.spec.decision ?? "pending"}</Badge>
+            <Badge color={a.spec.decision === "approve" ? "teal" : a.spec.decision === "reject" ? "red" : a.metadata.labels?.[LABEL_SUPERSEDED] ? "gray" : "yellow"}>
+              {a.spec.decision ?? (a.metadata.labels?.[LABEL_SUPERSEDED] ? "superseded by restart" : "pending")}
+            </Badge>
           </Group>
           {a.spec.comment && <Text size="sm">{a.spec.comment}</Text>}
           {a.spec.decidedBy && (

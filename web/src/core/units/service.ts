@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { scopeSatisfies } from "../model/check-scope.ts";
 import { BARRIER_UNIT, LABEL_SUPERSEDED, type AgentRun, type Artifact, type CheckRun, type UnitAssignment, type WorkItem, type Workspace } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
 import { allUnitChecks, nextUnit, unitChecks, type PlannedUnit } from "../model/units.ts";
@@ -9,6 +10,7 @@ import {
   type RunFailurePolicy, type StepAssignmentPolicy, type UnitLedgerReader, type UnitProgress, type UnitProgressQueries, type UnitProgressView,
   type ValidationContract, type VerificationContracts, type WorkflowCompiler, type WorkspaceReaderFactory,
 } from "../ports/index.ts";
+import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 export const UNIT_PROGRESS_GATE = "unit-progress";
 export const UNIT_RESULT_ARTIFACT = "unit-result";
@@ -307,7 +309,8 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     const repository = run.spec.repositoryRef.name;
     const repo = contract.repositories.find((r) => r.metadata.name === repository);
     const workspace = state.workspaces.find((w) => w.spec.repositoryRef.name === repository);
-    return !!repo && !!workspace && run.spec.workspaceUid === workspace.metadata.uid && run.spec.repositoryVersion === repo.metadata.resourceVersion &&
+    return !!repo && !!workspace && run.spec.workspaceUid === workspace.metadata.uid && run.spec.repositoryVersion === checkDefinitionVersion(repo) &&
+      scopeSatisfies(repo, run.spec.check, run, "unit-readiness") &&
       run.spec.snapshot === state.snapshots[workspace.metadata.name] && run.spec.environment.runtime === state.health.runtime &&
       run.spec.environment.version === state.health.version && run.spec.environment.profileVersion === state.profiles[repository];
   }

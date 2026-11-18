@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-11
+- **Amended by:** ADR-0065
 
 ## Context
 AI-DLC defines Inception, Construction, and Operations, with human oversight. We need a concrete, operable loop.

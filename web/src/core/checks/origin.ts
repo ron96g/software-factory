@@ -29,11 +29,19 @@ export function validUnitFields(origin: CheckWorkflowOrigin): boolean {
     (origin.recoveryEpisode === undefined || !!origin.agentRunRef && bounded(origin.recoveryEpisode, 200));
 }
 
+/** Stages after `stage` in workflow order. */
+function stagesAfter(workflow: Workflow, stage: string): string[] {
+  const names = workflow.spec.phases.flatMap((phase) => phase.stages.map((s) => s.name));
+  const index = names.indexOf(stage);
+  return index < 0 ? [] : names.slice(index + 1);
+}
+
 export function originAuthorized(workflow: Workflow | null | undefined, origin: CheckWorkflowOrigin): boolean {
   const policy = workflow?.spec.verification;
   if (!policy) return false;
   switch (origin.purpose) {
-    case "preflight": return policy.preflightStage === origin.stage;
+    // ADR-0042 §4: prerequisites are rechecked when definitions or the environment change, at entry of any later stage.
+    case "preflight": return policy.preflightStage === origin.stage || stagesAfter(workflow!, policy.preflightStage).includes(origin.stage);
     case "preparation": return policy.preparationStage === origin.stage;
     case "verification": return policy.verifyStage === origin.stage;
     case "unit-readiness": {

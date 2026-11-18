@@ -5,7 +5,7 @@ metadata:
   annotations:
     description: >
       Continuous AI-DLC loop:
-      input → triage → spec → spec-review → implement → code-review → verify → ship → monitor → (repeat)
+      input → triage → spec → spec-review → implement → code-review → verify → ship (draft PR)
 spec:
   # ── Input: WorkItems are created by these Sources ───────────────────
   trigger:
@@ -13,7 +13,7 @@ spec:
       - name: manual
       - name: github-issues
       - name: jira-main
-      - name: monitoring-feedback      # closes the loop
+      - name: monitoring-feedback
     output: { artifactRef: { name: signal } }
 
   phases:
@@ -91,34 +91,15 @@ spec:
     - name: operations
       stages:
         - name: ship
+          # ADR-0065: ship only publishes; monitoring returns with v0.6 (Operations).
           publish:                 # ADR-0023: commit + push factory/<item>, open a draft PR (via the outbox)
             pullRequest:
               draft: true
               onConflict: { next: implement, maxAttempts: 2 }   # ADR-0053: merge the new base, the developer resolves
-          steps:
-            - name: release
-              agentRef: { name: release-manager }
-              skillRefs: [{ name: release-management }]
-              inputs:  [{ artifactRef: { name: verification-report } }, { artifactRef: { name: source-code } }]
-              outputs: [{ artifactRef: { name: release } }]
           gate:
             type: human-approval
             approvers: [{ role: ops-lead }]
             onReject: { next: implement }   # the reject reason reaches the developer as a "Human gate decision"
-
-        - name: monitor
-          steps:
-            - name: observe
-              agentRef: { name: sre }
-              skillRefs: [{ name: observability }]
-              inputs:  [{ artifactRef: { name: release } }]
-              outputs: [{ artifactRef: { name: signal } }]
-          gate:
-            type: automated
-            checks: [slo-healthy, error-budget]
-            onFailure:
-              rollback: true
-              emit: { sourceRef: { name: monitoring-feedback } }   # new WorkItem incl. research-notes
 
   # ── Blocking: available to every stage ───────────────────────────────
   # Any step may raise this gate (via the human-clarification skill).
@@ -127,9 +108,3 @@ spec:
     channels: [ui, source]             # source = comment back to Jira/GitHub if bidirectional
     resume: { stage: current, appendTo: context }
     escalation: { after: 48h, to: { role: product-owner } }
-
-  # ── Repeat ───────────────────────────────────────────────────────────
-  loop:
-    from: monitor
-    to: classify
-    via: { sourceRef: { name: monitoring-feedback } }

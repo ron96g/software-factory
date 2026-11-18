@@ -60,7 +60,7 @@ test("S3: developer agent fixes code and runs tests in the sandbox via the tool 
   const f = await createFactory({
     definitionsRoot: ROOT,
     databasePath: ":memory:",
-    env: { OPENAI_API_KEY: "sk-test-abcdef", FACTORY_SANDBOX_RUNTIME: "in-memory" },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-abcdef", FACTORY_SANDBOX_RUNTIME: "in-memory" },
     fetch: llm.fetchImpl,
     sandboxes: [sandboxes],
     log: () => {},
@@ -146,7 +146,7 @@ test("ADR-0033: a repository's sandbox profile wins over the agent's default (Go
   const f = await createFactory({
     definitionsRoot: ROOT,
     databasePath: ":memory:",
-    env: { OPENAI_API_KEY: "sk-test-abcdef", FACTORY_SANDBOX_RUNTIME: "in-memory" },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-abcdef", FACTORY_SANDBOX_RUNTIME: "in-memory" },
     fetch: fetchImpl,
     sandboxes: [new Recording()],
     workspaceBackend: backend,

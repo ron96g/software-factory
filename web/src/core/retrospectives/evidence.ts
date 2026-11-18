@@ -38,7 +38,7 @@ export function exclusions(f: RetrospectiveFeedback, policy: RetrospectivePolicy
   if (s.observation.stance !== "support") reasons.push(s.observation.stance);
   if (s.replay || run?.spec.replayOf) reasons.push("Replay");
   if (s.superseded || run?.metadata.labels?.[LABEL_SUPERSEDED]) reasons.push("Superseded");
-  if (!["llm", "tool-loop"].includes(s.executor)) reasons.push("Simulated or non-model execution");
+  if (!["llm", "tool-loop", "opencode"].includes(s.executor)) reasons.push("Simulated or non-model execution");
   if (s.review?.disposition === "dismissed") reasons.push("Dismissed by human");
   if (Object.keys(s.target.workflowVersions).some((key) => key.endsWith(`/${RETROSPECTIVE_WORKFLOW}`)) || item?.spec.retrospective) reasons.push("Retrospective run");
   if (!run || run.metadata.uid !== s.origin.agentRunUid || !item || item.metadata.uid !== s.origin.workItemUid) reasons.push("Origin missing or replaced");

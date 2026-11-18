@@ -256,7 +256,7 @@ test("X22 end to end: recorded feedback -> manual investigation -> independent r
     }) } }] });
   };
   const directory = mkdtempSync(join(tmpdir(), "retrospective-test-"));
-  const options = { definitionsRoot: ROOT, databasePath: join(directory, "factory.db"), env: { OPENAI_API_KEY: "sk-retrospective-fixture" }, fetch: fake };
+  const options = { definitionsRoot: ROOT, databasePath: join(directory, "factory.db"), env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-retrospective-fixture" }, fetch: fake };
   let f: Factory = await createFactory(options);
   try {
     await f.start();

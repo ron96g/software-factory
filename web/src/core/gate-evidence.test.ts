@@ -105,7 +105,7 @@ test("X5: a failed verification can't be approved by accident (server-enforced o
       : { summary: "ok", outcome: system.includes("## Skill: code-review") ? "approve" : "accept", artifacts: [], questions: [] };
     return Response.json({ choices: [{ message: { content: JSON.stringify(out) } }] });
   }) as typeof fetch;
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: { OPENAI_API_KEY: "sk-test-123456", FACTORY_SANDBOX_RUNTIME: "in-memory" }, fetch: fetchImpl, sandboxes: [new InMemorySandboxEnvironment()], log: () => {} });
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_SANDBOX_RUNTIME: "in-memory" }, fetch: fetchImpl, sandboxes: [new InMemorySandboxEnvironment()], log: () => {} });
   await f.start();
   const p = ANONYMOUS;
   try {

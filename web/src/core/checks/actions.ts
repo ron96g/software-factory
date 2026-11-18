@@ -5,6 +5,7 @@ import { nsOf, ownerRef } from "../model/meta.ts";
 import { StoreError, isStoreError, type CheckRunCommands, type CheckRunQueries, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Principal, type Redactor, type ResourceReader, type ResourceWriter, type TranscriptReader, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { checkConfig, resolveCheckConfig } from "./config.ts";
+import { checkDefinitionVersion } from "./definition-version.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stopped = (item: WorkItem) => ["Failed", "Done", "Closed"].includes(item.status?.phase ?? "") &&
@@ -110,7 +111,7 @@ export class CheckActions implements CheckRunCommands, CheckRunQueries {
         spec: {
           workItemRef: { name }, workItemUid: item.metadata.uid!,
           workspaceRef: { name: workspace.metadata.name }, workspaceUid: workspace.metadata.uid!,
-          repositoryRef: { name: repo.metadata.name, namespace: nsOf(repo) === nsOf(item) ? undefined : nsOf(repo) }, repositoryVersion: repo.metadata.resourceVersion!,
+          repositoryRef: { name: repo.metadata.name, namespace: nsOf(repo) === nsOf(item) ? undefined : nsOf(repo) }, repositoryVersion: checkDefinitionVersion(repo),
           check: input.check, ...config, snapshot,
           environment: { runtime: health.runtime, version: health.version, profileVersion: profile?.metadata.resourceVersion ?? "default" },
           requestedBy: p.id, requestFingerprint: fingerprint,
