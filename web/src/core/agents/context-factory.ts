@@ -1,4 +1,5 @@
-import type { Agent, AgentRun, Approval, Artifact, Clarification, Repository, WorkItem, Workspace } from "../model/kinds.ts";
+import type { Agent, AgentRun, Approval, Artifact, Clarification, InlineFeedback, Repository, WorkItem, Workspace } from "../model/kinds.ts";
+import { pendingFeedbackFor } from "../model/feedback.ts";
 import { nsOf } from "../model/meta.ts";
 import type {
   ContextProvider,
@@ -6,6 +7,7 @@ import type {
   ExecutionContextFactory,
   ExecutionContextPreviewer,
   ExecutionEnvironmentSelector,
+  HumanFeedback,
   ModelResolver,
   ResourceReader,
   TranscriptRecorder,
@@ -68,10 +70,9 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
     const allArtifacts = (await reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: owned })).filter(
       (a) => !a.metadata.labels?.[LABEL_REPLAY],
     );
+    const runs = await reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned });
     // Level-triggered: output of a superseded run is stale even if it landed after the restart labelled artifacts.
-    const supersededRuns = new Set(
-      (await reader.list<AgentRun>("AgentRun", { namespace: ns, ownedBy: owned })).filter((r) => r.metadata.labels?.[LABEL_SUPERSEDED]).map((r) => r.metadata.name),
-    );
+    const supersededRuns = new Set(runs.filter((r) => r.metadata.labels?.[LABEL_SUPERSEDED]).map((r) => r.metadata.name));
     const current = allArtifacts.filter(
       (a) => !a.metadata.labels?.[LABEL_SUPERSEDED] && !supersededRuns.has(a.spec.producedBy?.agentRunRef?.name ?? ""),
     );
@@ -82,15 +83,20 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
       .map((t) => current.filter((a) => a.spec.artifactTypeRef.name === t.name).at(-1))
       .filter((a): a is Artifact => !!a);
 
+    const allFeedback = await reader.list<InlineFeedback>("InlineFeedback", { namespace: ns, ownedBy: owned });
+    let notes = pendingFeedbackFor(run, allFeedback, runs);
+
     if (run.spec.replayOf) {
-      // Faithful replay: same inputs and human answers as the original run saw.
+      // Faithful replay: same inputs, human answers and feedback as the original run saw.
       const original = await reader.get<AgentRun>("AgentRun", ns, run.spec.replayOf.name);
       const prov = original?.status?.provenance;
       if (prov) {
         inputs = allArtifacts.filter((a) => a.metadata.name in prov.inputs);
         clarifications = clarifications.filter((c) => (prov.clarifications ?? []).includes(c.metadata.name));
       }
+      notes = allFeedback.filter((f) => (prov?.feedback ?? []).includes(f.metadata.name));
     }
+    const feedback = await this.groupFeedback(notes, ns);
 
     const repositories: Repository[] = [];
     for (const r of workItem.spec.repositoryRefs ?? []) {
@@ -118,6 +124,7 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
       inputs,
       clarifications,
       approvals,
+      feedback,
       repositories,
       workspaces,
       sections: [],
@@ -134,4 +141,16 @@ export class DefaultContextFactory implements ExecutionContextFactory, Execution
     return ctx;
   }
 
+  /** Notes grouped by the artifact version they annotate (that version may be superseded by now). */
+  private async groupFeedback(notes: InlineFeedback[], ns: string): Promise<HumanFeedback[]> {
+    const groups = new Map<string, InlineFeedback[]>();
+    // Oldest first: the prompt tells the agent that later notes win.
+    const ordered = [...notes].sort((a, b) =>
+      `${a.spec.submitted?.at ?? ""}${a.metadata.creationTimestamp ?? ""}`.localeCompare(`${b.spec.submitted?.at ?? ""}${b.metadata.creationTimestamp ?? ""}`),
+    );
+    for (const n of ordered) groups.set(n.spec.targetRef.name, [...(groups.get(n.spec.targetRef.name) ?? []), n]);
+    return Promise.all(
+      [...groups].map(async ([name, list]) => ({ artifact: (await this.d.reader.get<Artifact>("Artifact", ns, name)) ?? undefined, notes: list })),
+    );
+  }
 }

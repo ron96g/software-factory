@@ -550,6 +550,8 @@ export interface RunProvenance {
   inputs: Record<string, string>;
   contexts?: Record<string, string>;
   clarifications?: string[];
+  /** Submitted InlineFeedback names this run received (ADR-0071); each note reaches one run of its step only. */
+  feedback?: string[];
   promptHash?: string;
   /** Set when this run is a re-run of another. */
   replayOf?: Ref;
@@ -642,6 +644,26 @@ export interface ArtifactSpec {
   content: string;
 }
 export type Artifact = Resource<ArtifactSpec>;
+
+/**
+ * ADR-0071: a human's inline note on a passage of an artifact. Drafts collect until the human submits them as one
+ * batch; the next run of the producing step then receives them (once, recorded in its provenance). Humans write the
+ * spec; the state (draft / submitted / addressed) is derived from `submitted` and run provenance, so there's no status.
+ */
+export interface InlineFeedbackSpec {
+  workItemRef: Ref;
+  /** The Artifact (exact version) the human read and annotated. */
+  targetRef: Ref;
+  /** Producer of the target: the next run of this stage/step receives the feedback. */
+  producedBy: { agentRunRef: Ref; agentRef: Ref; stage: string; step: string };
+  /** The selected passage, as plain text. */
+  quote: string;
+  comment: string;
+  author?: string;
+  /** Set when the human submits the batch; drafts have none. */
+  submitted?: { id: string; at: string; by: string };
+}
+export type InlineFeedback = Resource<InlineFeedbackSpec>;
 
 export interface ClarificationSpec {
   workItemRef: Ref;

@@ -5,7 +5,7 @@
 | Category | Kinds | Who writes them | Where they live |
 |---|---|---|---|
 | **Definitions** (the factory "as code") | `Agent`, `Skill`, `Workflow`, `ArtifactType`, `Source`, `Repository`, `KnowledgeSource`, `ToolServer` | Platform team, via Git | this repo |
-| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `RetrospectiveFeedback`, `CheckRun` | UI, sync, agents; controllers write status | the factory's store/API |
+| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `RetrospectiveFeedback`, `CheckRun`, `InlineFeedback` | UI, sync, agents; controllers write status | the factory's store/API |
 
 Runtime objects follow the Kubernetes split: humans and sync write the **`spec`** (intent), and the factory
 controller writes the **`status`** (observed state). The UI is a view over `WorkItem` objects.
@@ -29,6 +29,8 @@ flowchart LR
   CR -- searches --> Repository
   Agent -- reads --> Repository
   Agent -- writes artifacts / context --> WorkItem
+  Human["Human reviewer"] -- inline notes on artifacts --> FB["InlineFeedback (submitted as a batch)"]
+  FB -- next run of the producing step --> Agent
   Agent -- proposes --> KE["KnowledgeEntry (human approves)"]
   KE -- approved, as context --> Agent
   Agent -- observations --> RF["RetrospectiveFeedback (untrusted evidence)"]
@@ -53,6 +55,7 @@ flowchart LR
 | **CheckRun** | A named repository check pinned to its workspace tree, configuration and environment. Standalone jobs never advance items; verification-enabled workflows and recorded `run_check` calls share durable jobs, with plan/stage/round/attempt identity (ADR-0042). |
 | **Conversation** | Append-only dialogue. Explanation chats use existing evidence; standalone `agent-chat` invokes an opted-in agent with a curated read-only MCP tool intersection (ADR-0036). The Conversation controller serializes durable turns and retries model unavailability. No hidden WorkItem or AgentRun is created. |
 | **IssueProposal** | A tracker issue proposed by an agent or human. Approval is bound to a hash of its publishing fields; creation runs through the recoverable outbox action `create-issue` and needs `Source.spec.writeBack.issues`. Unknown outcomes become `Uncertain` and are resolved by lookup or a human (ADR-0066). Purpose `follow-up` (ADR-0068): created Approved by the Create click in a work item's follow-up dialog, owned by that item; the controller tracks the ticket read-only in `status.tracked` and may link it to the origin (`writeBack.issues.linkOrigin`); "Start implementation" creates the linked WorkItem. |
+| **InlineFeedback** | A human's note on a passage of an artifact. Drafts are submitted as one batch, which rejects the open gate or restarts from the producing stage; the producing step's next run receives them once (ADR-0071). |
 | **KnowledgeEntry** | A piece of reusable knowledge an agent proposed (or a human edited). Used by agents only after a human approves it (ADR-0030). It outlives the work item it came from. |
 | **RetrospectiveFeedback** | Immutable workflow observation with pinned origin identities and workflow versions. Untrusted evidence, not knowledge; independent lifetime. Its controller derives eligibility and durable investigation links (ADR-0041). |
 | **KnowledgeSource** | External docs agents can search, e.g. product docs or runbooks. `type: files` searches a local folder; other types (e.g. a vector store) plug in later. |

@@ -19,6 +19,7 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "Clarification", plural: "clarifications", scope: "runtime" },
   { kind: "Approval", plural: "approvals", scope: "runtime" },
   { kind: "Conversation", plural: "conversations", scope: "runtime" },
+  { kind: "InlineFeedback", plural: "inlinefeedback", scope: "runtime" },
   { kind: "Event", plural: "events", scope: "runtime" },
   { kind: "OutboxMessage", plural: "outboxmessages", scope: "runtime" },
   { kind: "KnowledgeEntry", plural: "knowledgeentries", scope: "runtime" },

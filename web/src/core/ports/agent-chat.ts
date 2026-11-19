@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Approval, Artifact, Clarification, Conversation, FactoryEvent, WorkItem } from "../model/kinds.ts";
+import type { Agent, AgentRun, Approval, Artifact, Clarification, Conversation, FactoryEvent, InlineFeedback, WorkItem } from "../model/kinds.ts";
 import type { NewWorkItemInput, Principal } from "./app.ts";
 import type { BoundTool, ResolvedModel, ToolCall, ToolLoopMessage, ToolSchema } from "./integration.ts";
 import type { TranscriptMessage, TranscriptRecorder } from "./transcripts.ts";
@@ -30,6 +30,8 @@ export interface WorkItemRecord {
   clarifications: Clarification[];
   approvals: Approval[];
   events: FactoryEvent[];
+  /** Inline feedback on artifacts (ADR-0071). */
+  feedback?: InlineFeedback[];
 }
 
 /** Namespace-scoped evidence; reading it never executes or changes the workflow. */

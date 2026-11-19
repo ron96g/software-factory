@@ -12,6 +12,7 @@ import type {
   Artifact,
   Clarification,
   Classification,
+  InlineFeedback,
   Repository,
   Skill,
   WorkItem,
@@ -21,6 +22,13 @@ import type { TranscriptRecorder } from "./transcripts.ts";
 import type { ResolvedModel } from "./integration.ts";
 import type { SandboxHealthInfo } from "./sandbox.ts";
 import type { RunProvenance } from "../model/kinds.ts";
+
+/** ADR-0071: submitted inline notes on one artifact version, for the next run of the producing step. */
+export interface HumanFeedback {
+  /** The version the human read (may be superseded by now); undefined if it was deleted. */
+  artifact?: Artifact;
+  notes: InlineFeedback[];
+}
 
 /** A named block of context made available to the agent. */
 export interface ContextSection {
@@ -44,6 +52,8 @@ export interface ExecutionContext {
   clarifications: Clarification[];
   /** Decided human gate approvals of the item (decision + comment), passed to later agents (X7). */
   approvals: Approval[];
+  /** Pending human feedback on this step's earlier output (ADR-0071). */
+  feedback?: HumanFeedback[];
   repositories: Repository[];
   /** Ready workspaces of the work item: the single code state all agents see (ADR-0021). */
   workspaces: Workspace[];

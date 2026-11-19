@@ -18,10 +18,12 @@ export function useItemCheckRuns(name: string): CheckRun[] {
 }
 
 /** One line under the stage progress: what the current stage waits for, with a link to its details. */
-export function CurrentStageSummary({ d, checks, onOpen }: { d: WorkItemDetail; checks: CheckRun[]; onOpen: (stage: string) => void }) {
+/** `waitingFor` overrides the derived text when the page knows more, e.g. a plan gate that waits for answers (ADR-0072). */
+export function CurrentStageSummary({ d, checks, onOpen, waitingFor }: { d: WorkItemDetail; checks: CheckRun[]; onOpen: (stage: string) => void; waitingFor?: string }) {
   const stage = d.workItem.status?.stage;
   if (!stage || ["Done", "Failed"].includes(d.workItem.status?.phase ?? "")) return null;
-  const s = deriveStageState(d, checks, stage);
+  const derived = deriveStageState(d, checks, stage);
+  const s = waitingFor ? { ...derived, waitingFor } : derived;
   return (
     <Alert color={s.needsAction ? "red" : "blue"} variant="light" p="xs"
       title={<Group gap={6}><Text size="sm" fw={600}>Now in {stage}:</Text><Text size="sm">{s.waitingFor}</Text></Group>}>

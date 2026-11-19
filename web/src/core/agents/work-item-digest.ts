@@ -6,7 +6,7 @@ const roundOf = (name: string) => /-r(\d+)(?:-replay-\d+)?$/.exec(name)?.[1] ?? 
 const clip = (s: string | undefined, n: number) => (!s ? "" : s.length > n ? `${s.slice(0, n)} …[truncated]` : s);
 
 /** Bounded, chronological evidence shared by explanations and contextual investigation. */
-export function workItemDigest({ workItem: wi, runs, artifacts, clarifications: clar, approvals: appr, events }: WorkItemRecord): string {
+export function workItemDigest({ workItem: wi, runs, artifacts, clarifications: clar, approvals: appr, events, feedback = [] }: WorkItemRecord): string {
   const parts: string[] = [
     `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
     clip(wi.spec.description, 2000),
@@ -31,6 +31,7 @@ export function workItemDigest({ workItem: wi, runs, artifacts, clarifications: 
     "## Human input",
     ...clar.map((c) => `- clarification (${c.spec.stage}): ${c.spec.questions.join(" | ")} → ${c.spec.answers?.join(" | ") ?? "(open)"}`),
     ...appr.map((a) => `- approval (${a.spec.stage}): ${a.spec.decision ?? "pending"}${a.spec.comment ? ` — ${a.spec.comment}` : ""}`),
+    ...feedback.map((f) => `- inline feedback (${f.spec.submitted ? "submitted" : "draft"}) to ${f.spec.producedBy.agentRef.name} on \`${f.spec.targetRef.name}\`: "${clip(f.spec.quote, 300)}" → ${clip(f.spec.comment, 600)}`),
     "## Key events",
     ...events.filter((e) => e.spec.type === "Warning" || !["Started", "Succeeded", "Preparing"].includes(e.spec.reason))
       .slice(-40).map((e) => `- ${e.metadata.creationTimestamp} ${e.spec.type === "Warning" ? "⚠ " : ""}${e.spec.reason}: ${clip(e.spec.message, 300)}`),

@@ -202,6 +202,7 @@ export function createAgentRunController(d: AgentRunControllerDeps): Controller 
         contexts: Object.fromEntries(ctx.sections.filter((s) => s.revision).map((s) => [s.source, s.revision!])),
         ...(ctx.sections.some((s) => s.counts) ? { contextCounts: Object.fromEntries(ctx.sections.filter((s) => s.counts).map((s) => [s.source, s.counts!])) } : {}),
         clarifications: ctx.clarifications.map((c) => c.metadata.name),
+        feedback: ctx.feedback?.length ? ctx.feedback.flatMap((g) => g.notes.map((n) => n.metadata.name)) : undefined,
         ...result.provenance,
         replayOf: run.spec.replayOf,
         workspaces: ctx.workspaces.length

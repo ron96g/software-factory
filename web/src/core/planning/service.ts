@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AgentRun, Approval, Artifact, CheckRun, OutboxMessage, WorkItem } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf } from "../model/meta.ts";
-import type { AgentQuestionPolicy, ArtifactProducer, CompiledStage, FileReader, ProposedArtifactCheck, EventRecorder, PlanningCommands, PlanningDecision, PlanningReviewOutcome,
+import type { AgentQuestionPolicy, ArtifactProducer, DraftFeedbackBatch, CompiledStage, FileReader, ProposedArtifactCheck, EventRecorder, PlanningCommands, PlanningDecision, PlanningReviewOutcome,
   PlanningDocument, PlanningQueries, PlanningReviewBinding, PlanningRevisionInput, PlanningSections, PlanningWorkspace,
   Principal, Redactor, ResourceReader, ResourceWriter, WorkflowCompiler, WorkItemIntentPolicy } from "../ports/index.ts";
 import { isStoreError, StoreError } from "../ports/index.ts";
@@ -61,8 +61,19 @@ const normalized = (text: string) => text.trim().toLowerCase().replace(/\s+/g, "
 const signature = (decision: PlanningDecision) => hash([
   normalized(decision.question), decision.options.map(normalized).sort(), decision.required,
 ]);
-const savedAnswer = (item: WorkItem, decision: PlanningDecision) => item.spec.planning?.answers[decision.id] ??
-  Object.values(item.spec.planning?.answers ?? {}).find((answer) => answer.signature === signature(decision));
+type RecordedAnswers = NonNullable<WorkItem["spec"]["planning"]>["answers"];
+/**
+ * ADR-0072: an answer binds to its decision by signature, or by the same question text when the decision offers no
+ * options (an agent's recorded question): that is the question the human already answered. Changed options or
+ * wording still need a fresh answer.
+ */
+const binds = (answer: { question: string; signature: string }, decision: PlanningDecision) => answer.signature === signature(decision) ||
+  !decision.options.length && normalized(answer.question) === normalized(decision.question);
+const answerFor = (answers: RecordedAnswers | undefined, decision: PlanningDecision) => {
+  const own = answers?.[decision.id];
+  return own && binds(own, decision) ? own : Object.values(answers ?? {}).find((answer) => binds(answer, decision));
+};
+const savedAnswer = (item: WorkItem, decision: PlanningDecision) => answerFor(item.spec.planning?.answers, decision);
 
 /** Without a format, either complete shape is accepted (history and human drafts across a migration). */
 export function parsePlanningSections(value: unknown, format?: PlanFormat): PlanningSections {
@@ -127,6 +138,8 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     schemas?: ArtifactSchemaReader; schemaValidator?: JsonSchemaValidator;
     /** ADR-0057: reopens a review's pinned workspaces to check its code locations for display and approval. */
     readers?: WorkspaceReaderFactory;
+    /** ADR-0073: draft inline notes on re-run stages travel with a revision. */
+    notes?: DraftFeedbackBatch;
   };
   constructor(d: PlanningService["d"]) { this.d = d; }
 
@@ -217,7 +230,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     }
     return decisions.map((decision) => {
       const saved = savedAnswer(item, decision);
-      return { ...decision, answer: saved?.signature === signature(decision) ? saved.answer : undefined };
+      return { ...decision, answer: saved?.answer };
     });
   }
 
@@ -422,7 +435,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
       const artifact = state.artifact(type);
       return artifact ? [{ type, artifact: artifact.metadata.name, format: artifact.spec.format, content: artifact.spec.content }] : [];
     }) : [];
-    const result: PlanningWorkspace = { enabled: true, revision: state.revision, format: config.format, sources, decisions: [], unansweredQuestions: [],
+    const result: PlanningWorkspace = { enabled: true, revision: state.revision, format: config.format, revisionStage: config.revisionStage, sources, decisions: [], unansweredQuestions: [],
       recordedAnswers: [], withdrawnAnswers: item.spec.planning?.withdrawn ?? [],
       batchSubmitted: item.spec.planning?.batchSubmitted ?? false, draft: item.spec.planning?.draft, ready: false, issues: [],
       canRevise: state.canRevise, readiness: state.canRevise ? "needs-agent-repair" : "working",
@@ -466,7 +479,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     result.recordedAnswers = Object.entries(item.spec.planning?.answers ?? {}).map(([decisionId, answer]) => ({
       decisionId, question: answer.question, answer: answer.answer, answeredAt: answer.answeredAt,
       current: result.decisions.some((decision) => decision.answer === answer.answer &&
-        (decision.id === decisionId || signature(decision) === answer.signature)),
+        (decision.id === decisionId || binds(answer, decision))),
     }));
     const previous = state.allArtifacts.filter((artifact) => artifact.spec.artifactTypeRef.name === "implementation-plan" &&
       artifact.metadata.uid !== plan?.metadata.uid && !artifact.metadata.labels?.["factory.ai-dlc.io/replay"]).at(-1);
@@ -551,12 +564,18 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
     if (input.action === "decisions" && input.withdraw?.some((id) => id in (input.answers ?? {}))) return invalid("An answer cannot be changed and withdrawn in the same request");
     const answers = { ...item.spec.planning?.answers };
     const withdrawn = [...(item.spec.planning?.withdrawn ?? [])];
+    const missingWithdrawal = input.withdraw?.find((id) => !answers[id]);
+    if (missingWithdrawal) return invalid(`No recorded answer exists for decision ${missingWithdrawal}`);
     for (const id of input.withdraw ?? []) {
       const answer = answers[id];
-      if (!answer) return invalid(`No recorded answer exists for decision ${id}`);
+      if (!answer) continue;
       withdrawn.push({ decisionId: id, question: this.d.redactor.redact(answer.question),
         answer: this.d.redactor.redact(answer.answer), withdrawnBy: p.id, at: new Date().toISOString() });
       delete answers[id];
+      // ADR-0072: another record of the same question would otherwise keep the withdrawn answer binding.
+      for (const [other, recorded] of Object.entries(answers)) {
+        if (normalized(recorded.question) === normalized(answer.question)) delete answers[other];
+      }
     }
     for (const [id, answer] of Object.entries(input.answers ?? {})) {
       const decision = workspace.decisions.find((d) => d.id === id);
@@ -565,7 +584,7 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
         answeredAt: new Date().toISOString() };
     }
     if (input.action === "decisions" && Object.keys(input.answers ?? {}).length > 0 && workspace.decisions.some((decision) => decision.required &&
-        answers[decision.id]?.signature !== signature(decision))) {
+        !answerFor(answers, decision))) {
       return invalid("Answer every unresolved required decision together before submitting answers");
     }
     const withdrawnHistory = withdrawn.slice(-100);
@@ -574,7 +593,14 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
       const text = draft[key];
       if (text !== undefined) draft[key] = this.d.redactor.redact(text);
     }
-    const updated = await this.d.writer.update<WorkItem>({ ...item, spec: { ...item.spec,
+    // Mark first: the planner run started by this restart must already see the notes as submitted (ADR-0071).
+    const batch = `plan-${input.requestId}`;
+    const stages = config.workflow.stages.map((stage) => stage.name);
+    const notes = disposition || !this.d.notes ? [] :
+      await this.d.notes.include(p, name, stages.slice(Math.max(0, stages.indexOf(config.revisionStage))), batch);
+    let updated: WorkItem;
+    try {
+      updated = await this.d.writer.update<WorkItem>({ ...item, spec: { ...item.spec,
       ...(input.context !== undefined ? { context: this.d.redactor.redact(input.context.trim()) || undefined } : {}),
       planning: {
         revision: input.requestId, discovery: input.action === "reopen" ? input.requestId : item.spec.planning?.discovery ?? "initial",
@@ -583,9 +609,13 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
         feedback: input.feedback !== undefined ? this.d.redactor.redact(input.feedback.trim()) : item.spec.planning?.feedback,
         disposition, request: { id: input.requestId, fingerprint: requestFingerprint, by: p.id },
       },
-      restart: { id: `plan-${input.requestId}`, stage: config.revisionStage, requestedBy: p.id },
+      restart: { id: batch, stage: config.revisionStage, requestedBy: p.id },
     } });
-    await this.d.events.normal(updated, "PlanRevisionRequested", `${input.action} by ${p.id}; request ${input.requestId}. Fresh review required; no approval or publication granted.`);
+    } catch (error) {
+      await this.d.notes?.release(notes, batch).catch(() => undefined);
+      throw error;
+    }
+    await this.d.events.normal(updated, "PlanRevisionRequested", `${input.action} by ${p.id}; request ${input.requestId}${notes.length ? `, with ${notes.length} inline feedback note(s)` : ""}. Fresh review required; no approval or publication granted.`);
     return updated;
   }
 
