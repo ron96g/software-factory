@@ -1,0 +1,74 @@
+web/src/core/factory.ts
+  s_0ee096932fcdb2::t_4dd05c83b89aa0 466
+web/src/core/ticket-history.test.ts
+  s_0ee096932fcdb2::t_21d4632620cff4 1-6,9-79,81-113,116-124,126-155,194
+  s_0ee096932fcdb2::t_287e718db0bcce 7-8,114-115,156-193
+  s_0ee096932fcdb2::t_0651b02cae684e 80,125
+web/src/core/sources/syncer.ts
+  s_0ee096932fcdb2::t_0cb28739f6b53e 19,28-29,60,63,67-68,71-75
+  s_0ee096932fcdb2::t_4dd05c83b89aa0 1,5-7,27,45,55-59,61-62,64-66,69-70,76-78,89,94,98-104,109
+web/src/core/model/kinds.ts
+  s_0ee096932fcdb2::t_15f0a24b9a2499 238-271,280-281
+web/src/core/tickets.test.ts
+  s_0ee096932fcdb2::t_0aed9b794080bb 56
+web/src/core/sources/history-bounds.ts
+  s_0ee096932fcdb2::t_0cb28739f6b53e 1-5,9-34
+  s_0ee096932fcdb2::t_99ec38b8608f30 6-8
+web/src/core/agents/prompt-builder.ts
+  s_0ee096932fcdb2::t_455d3f90e1c41d 3,64
+web/src/core/notifications/rules.ts
+  s_0ee096932fcdb2::t_73298ad155ab53 49
+docs/ai-dlc-glossary.md
+  s_0ee096932fcdb2::t_3602b296188eb9 222
+web/src/core/agents/source-history.ts
+  s_0ee096932fcdb2::t_4f20337b92d0f8 1-19,21-27,37-47
+  s_0ee096932fcdb2::t_0cb28739f6b53e 20,28-36
+web/src/ui/ticket-history.tsx
+  s_0ee096932fcdb2::t_4e815d90bcaf32 1-4,6-8,10-16,18-106
+  s_0ee096932fcdb2::t_efe4c123561fcc 5,9,17
+web/src/core/v02.test.ts
+  s_0ee096932fcdb2::t_0aed9b794080bb 113
+web/src/core/agents/work-item-digest.ts
+  s_0ee096932fcdb2::t_455d3f90e1c41d 3,13
+AGENTS.md
+  s_0ee096932fcdb2::t_1eeb3ca0d44bf8 216
+docs/architecture.md
+  s_0ee096932fcdb2::t_3602b296188eb9 109,112
+  s_0ee096932fcdb2::t_1eeb3ca0d44bf8 110-111
+web/src/app/items/[name]/page.tsx
+  s_0ee096932fcdb2::t_5353187bab1ba5 28,230,242-246
+web/src/core/adapters/sources/jira.ts
+  s_0ee096932fcdb2::t_0cb28739f6b53e 185-193,202
+  s_0ee096932fcdb2::t_2be39ec4009ee9 2,35-36,46,54,58-88,93,154-184,194-201,203-217
+  s_0ee096932fcdb2::t_9cd8d6c53409f3 218-219
+web/src/core/ports/integration.ts
+  s_0ee096932fcdb2::t_5ed2ce49ed942f 6
+  s_0ee096932fcdb2::t_15f0a24b9a2499 45-55,73-74
+web/src/core/factory.test.ts
+  s_0ee096932fcdb2::t_0aed9b794080bb 270
+web/src/core/work-item-followups.test.ts
+  s_0ee096932fcdb2::t_0aed9b794080bb 59
+docs/adr/0070-ticket-history-mandatory.md
+  s_0ee096932fcdb2::t_06e11b694732ce 27-28,33-36,42-46,70-72
+  s_0ee096932fcdb2::t_1eeb3ca0d44bf8 47-49,75-76
+  s_0ee096932fcdb2::t_3602b296188eb9 6,80-82
+  s_0ee096932fcdb2::t_f864845cbd247b 1-5,7-26,29-32,37-41,50-69,73-74,77-79,83-88
+sources/sources.yaml
+  s_0ee096932fcdb2::t_de7d7933fc88bc 73-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c76b4d4c1ec5745ae5e0d702cbbbb099b0677234",
+  "prompts": {},
+  "sessions": {
+    "s_0ee096932fcdb2": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "26f5d363-fcff-4f67-8eae-5925de2af735",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
