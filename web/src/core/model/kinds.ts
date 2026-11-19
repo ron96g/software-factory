@@ -146,7 +146,11 @@ export interface SourceSpec {
   mapping?: Record<string, string>;
   defaults?: { workflowRef?: Ref; repositoryRefs?: Ref[] };
   /** Explicit human-reviewed actions, independent of automatic clarification synchronization. */
-  writeBack?: { replyVisibilities?: ("public" | "internal")[]; transitions?: boolean };
+  writeBack?: { replyVisibilities?: ("public" | "internal")[]; transitions?: boolean;
+    /** ADR-0066: permits creating issues here. The project key and defaults live in config, never in code. */
+    issues?: { project?: string; issueType?: string; labels?: string[]; pickUpLabels?: string[]; fields?: Record<string, unknown>;
+      /** ADR-0068: link a created follow-up ticket to its origin ticket (Jira, same instance). Off by default. */
+      linkOrigin?: boolean } };
 }
 export type Source = Resource<SourceSpec>;
 
@@ -158,6 +162,8 @@ export interface RepositorySpec {
   observability?: Record<string, unknown>;
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
+  /** ADR-0066: default Source where agent findings for this repository are proposed. */
+  issueTrackerRef?: Ref;
   /**
    * ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`.
    * `scoped` (ADR-0061): the command takes a module selection whose scope follows the verification tier.
@@ -728,3 +734,39 @@ export interface WorkspaceStatus {
   integration?: { commit: string; ref: string; round: number; conflicts: string[]; error?: string; at: string };
 }
 export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;
+
+/** ADR-0066: an issue the factory may create in a tracker once a human approves it. */
+export type IssuePurpose = "mirror" | "finding" | "escalation" | "unit" | "follow-up";
+export type IssuePhase = "Proposed" | "Approved" | "Creating" | "Created" | "Uncertain" | "Failed" | "Rejected";
+export interface IssueProposalSpec {
+  purpose: IssuePurpose;
+  targetRef?: Ref;
+  title: string;
+  /** Markdown. */
+  body: string;
+  issueType?: string;
+  labels?: string[];
+  pickUp?: boolean;
+  /** ADR-0068: ADR-0039 preview revision a follow-up ticket was created from. */
+  revision?: string;
+  relatesTo?: string[];
+  parent?: string;
+  provenance?: { agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean };
+  /** Human decision (rule 8); contentHash binds it to the publishing fields. */
+  review?: { decision: "approve" | "reject"; contentHash?: string; by?: string; at?: string; comment?: string };
+  resolution?: { action: "create-again" | "link"; externalId?: string; by?: string; at?: string };
+}
+export interface IssueProposalStatus {
+  phase: IssuePhase;
+  approved?: { contentHash: string; at: string; by?: string };
+  attempt?: number;
+  externalRef?: { externalId: string; url?: string };
+  /** Delayed lookups after an unknown outcome (ADR-0066 §4): when the failure was first seen and how many lookups ran. */
+  lookup?: { since: string; count: number };
+  /** Key of the last human resolution applied, so it is consumed once. */
+  resolved?: string;
+  /** ADR-0068: read-only tracker state, written by the controller only. */
+  tracked?: { state?: string; open?: boolean; assignee?: string; updatedAt?: string; readAt: string };
+  conditions?: { type: string; status: "True" | "False" | "Unknown"; reason?: string; message?: string }[];
+}
+export type IssueProposal = Resource<IssueProposalSpec, IssueProposalStatus>;

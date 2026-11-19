@@ -1,6 +1,6 @@
 # ADR-0066: Create GitHub issues and Jira stories from the factory
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Deciders:** project owner
 - **Extends:** ADR-0002, ADR-0005, ADR-0015, ADR-0030, ADR-0034, ADR-0039, ADR-0040

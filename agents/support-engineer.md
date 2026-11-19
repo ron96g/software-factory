@@ -12,6 +12,7 @@ spec:
     - name: customer-response-writing
     - name: human-clarification
     - name: knowledge-base
+    - name: issue-proposal
   delegates:
     - agentRef: { name: code-researcher }
   tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)

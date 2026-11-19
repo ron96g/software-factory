@@ -22,5 +22,6 @@ export const BUILTIN_KINDS: KindInfo[] = [
   { kind: "Event", plural: "events", scope: "runtime" },
   { kind: "OutboxMessage", plural: "outboxmessages", scope: "runtime" },
   { kind: "KnowledgeEntry", plural: "knowledgeentries", scope: "runtime" },
+  { kind: "IssueProposal", plural: "issueproposals", scope: "runtime" },
   { kind: "RetrospectiveFeedback", plural: "retrospectivefeedback", scope: "runtime" },
 ];

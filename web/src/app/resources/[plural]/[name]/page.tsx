@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { stringify } from "yaml";
 import type { Resource } from "@/core/model/resource.ts";
 import { act, useLive } from "@/ui/api.ts";
-import type { Conversation } from "@/core/model/kinds.ts";
+import type { Conversation, IssueProposal } from "@/core/model/kinds.ts";
+import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
 import { PhaseBadge } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
 
@@ -44,6 +45,8 @@ export default function ResourceDetail({ params }: { params: Promise<{ plural: s
           </Anchor>
         )}
       </Group>
+      {/* ADR-0066 §7: proposals without a work item are reviewed here. */}
+      {r.kind === "IssueProposal" && <IssueProposalsPanel issues={[r as IssueProposal]} />}
       <Card className="sf-surface">
         <Tabs defaultValue={body ? "body" : "yaml"}>
           <Tabs.List>

@@ -11,6 +11,7 @@ spec:
   skillRefs:
     - name: spec-review
     - name: code-review
+    - name: issue-proposal
   tools: [search_code, read_file, list_files]   # read-only workspace tools (ADR-0021)
   humanCounterpart: { role: tech-lead }
 ---

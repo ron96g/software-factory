@@ -5,6 +5,7 @@ import type {
   ExecutionContext,
   Lookup,
   PromptBuilder,
+  ProposedIssue,
   ProposedKnowledge,
   SkillHandlerLookup,
 } from "../ports/index.ts";
@@ -119,6 +120,22 @@ export function parseKnowledge(v: unknown): ProposedKnowledge[] {
     .slice(0, 5);
 }
 
+/** ADR-0066: tolerant parsing of proposed issues; bounded like knowledge. */
+export function parseIssues(v: unknown): ProposedIssue[] {
+  if (!Array.isArray(v)) return [];
+  const strs = (x: unknown, n: number) => (Array.isArray(x) ? x.filter((t): t is string => typeof t === "string").map((t) => t.trim()).filter(Boolean).slice(0, n) : []);
+  return v
+    .filter((k): k is Record<string, unknown> => !!k && typeof k === "object")
+    .map((k) => ({
+      title: typeof k.title === "string" ? k.title.trim().slice(0, 200) : "",
+      body: typeof k.body === "string" ? k.body.trim().slice(0, 20_000) : "",
+      ...(typeof k.issueType === "string" && k.issueType.trim() ? { issueType: k.issueType.trim().slice(0, 50) } : {}),
+      labels: strs(k.labels, 10),
+    }))
+    .filter((k) => k.title && k.body)
+    .slice(0, 20);
+}
+
 export function parseQuestions(v: unknown): NonNullable<AgentResult["questions"]> {
   const out: NonNullable<AgentResult["questions"]> = [];
   for (const q of Array.isArray(v) ? v : []) {
@@ -146,6 +163,7 @@ export function parseAgentJson(text: string): AgentResult {
     outcome: typeof raw.outcome === "string" ? raw.outcome : undefined,
     questions: parseQuestions(raw.questions),
     knowledge: parseKnowledge(raw.knowledge),
+    issues: parseIssues(raw.issues),
     feedback: raw.feedback,
   };
 }

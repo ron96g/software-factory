@@ -38,13 +38,21 @@ spec:
     # Only your own labelled issues: the factory comments on imported issues (bidirectional).
     filter: { jql: "labels = factory AND reporter = currentUser() AND statusCategory != Done ORDER BY updated DESC" }
     bidirectional: true
+  writeBack:
+    issues:                                      # ADR-0066: permits creating issues; the key lives only here
+      project: DHEI
+      linkOrigin: false                          # ADR-0068: link new tickets to the origin ticket (Jira, same instance)
+      issueType: Task
+      fields:
+        customfield_18514: "11341"               # Team: "DHEI - Hyperion"
+        fixVersions: [{ name: Q4/2026 }]         # required for DHEI Tasks
   mapping:
     title: fields.summary
     description: fields.description
     externalId: key
     priority: fields.priority.name
   defaults:
-    workflowRef: { name: factory-loop }
+    workflowRef: { name: factory-plan }
     repositoryRefs:
       - name: software-factory
 ---

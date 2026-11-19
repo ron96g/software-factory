@@ -27,7 +27,7 @@ import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRe
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
-import type { AgentRun, Approval, Clarification, Conversation, OutboxMessage } from "@/core/model/kinds.ts";
+import type { AgentRun, Approval, Clarification, Conversation, OutboxMessage, IssueProposal } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
 import type { GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, api, useLive } from "@/ui/api.ts";
@@ -40,6 +40,7 @@ import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
 import { RetrospectivePanel } from "@/ui/retrospectives.tsx";
+import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
 import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
 import { CheckRunsPanel } from "@/ui/check-runs.tsx";
 import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
@@ -65,6 +66,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const [askOpen, setAskOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [useIssue, setUseIssue] = useState<IssueProposal | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -160,7 +162,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       <StageProgress d={d} onOpen={setOpenStage} />
       <CurrentStageSummary d={d} checks={checkRuns} onOpen={setOpenStage} />
       <StageDrawer d={d} checks={checkRuns} stage={openStage} onClose={() => setOpenStage(null)} onOpenRun={(r) => { setOpenStage(null); setOpenRun(r); }} />
-      {followUpOpen && <FollowUpDialog item={wi} onClose={() => setFollowUpOpen(false)} />}
+      {followUpOpen && <FollowUpDialog key={useIssue?.metadata.name ?? "new"} item={wi} prefill={useIssue ? { title: useIssue.spec.title, body: useIssue.spec.body, targetSource: useIssue.spec.targetRef?.name } : undefined} onClose={() => { setFollowUpOpen(false); setUseIssue(null); }} />}
       <Modal opened={deleteOpen} onClose={() => { if (!deleting) setDeleteOpen(false); }} title="Delete work item?" centered>
         <Stack>
           <Text size="sm">
@@ -242,6 +244,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }} style={{ position: "sticky", top: 68, alignSelf: "flex-start" }}>
+          <IssueProposalsPanel issues={d.issues} onUse={(i) => { setUseIssue(i); setFollowUpOpen(true); }} />
           {d.knowledge.length > 0 && (
             <Card className="sf-surface" mb="md">
               <Title order={5} mb={4}>

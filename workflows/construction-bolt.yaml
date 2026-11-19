@@ -36,7 +36,7 @@ spec:
           steps:
             - name: ai-code-review
               agentRef: { name: reviewer }
-              skillRefs: [{ name: code-review }]
+              skillRefs: [{ name: code-review }, { name: issue-proposal }]
               inputs:  [{ artifactRef: { name: source-code } }, { artifactRef: { name: spec } }]
               outputs: [{ artifactRef: { name: code-review-report } }]
           loop:                       # Q1: blocking AI findings are fixed before humans review

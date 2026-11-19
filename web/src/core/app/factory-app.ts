@@ -8,6 +8,7 @@ import type {
   Conversation,
   FactoryEvent,
   KnowledgeEntry,
+  IssueProposal,
   Repository,
   Source,
   WorkItem,
@@ -19,6 +20,7 @@ import { isPublishable } from "../model/kinds.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
+import { issueContentHash } from "../issues/admission.ts";
 import { verificationPolicyGaps } from "../model/verification-policy.ts";
 import type {
   ConversationActions,
@@ -39,6 +41,8 @@ import type {
   Lookup,
   KindLookup,
   KnowledgeActions,
+  IssueProposalActions,
+  IssueReviewActions,
   KnowledgeDetail,
   NewItemOptions,
   NewItemOptionsQuery,
@@ -63,7 +67,9 @@ import type {
   WorkItemRecordReader,
   WorkItemFollowUpQueries,
   WorkItemFollowUpCommands,
+  StartImplementationInput,
   NewFollowUpInput,
+  NewFollowUpTicketInput,
   FollowUpRelations,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
@@ -74,6 +80,10 @@ import type {
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
 import { deriveGateEvidence } from "./gate-evidence.ts";
+import { renderFollowUpTicketBody } from "../issues/followup-body.ts";
+import { originOf } from "../issues/origin.ts";
+import { workItemNameFor } from "../sources/syncer.ts";
+import { externalRefLabel } from "../issues/mirror.ts";
 import { fingerprint, followUpPreview, FOLLOW_UP_INPUT, LABEL_ORIGIN_UID } from "./work-item-followups.ts";
 
 export interface FactoryAppDeps {
@@ -126,6 +136,8 @@ export class FactoryApp
     ItemConversationActions,
     NewItemOptionsQuery,
     KnowledgeActions,
+    IssueProposalActions,
+    IssueReviewActions,
     AgentChatQueries,
     AgentChatCommands,
     ChatWorkItemCreator,
@@ -177,7 +189,8 @@ export class FactoryApp
       const resolved = await resolveRef<Repository>(this.d.reader, "Repository", { name: repo }, this.ns);
       return { name: repo, publishable: !!resolved && isPublishable(resolved) };
     }));
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge };
+    const issues = await this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } });
+    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge, issues };
   }
 
   async newItemOptions(_p: Principal): Promise<NewItemOptions> {
@@ -197,6 +210,7 @@ export class FactoryApp
         workflow: manual?.spec.defaults?.workflowRef?.name,
         repositories: (manual?.spec.defaults?.repositoryRefs ?? []).map((r) => r.name),
       },
+      issueTargets: (await this.listIssueTargets(_p)).map((t) => ({ source: t.source, type: t.type, project: t.project, issueType: t.issueType, labels: t.labels })),
     };
   }
 
@@ -238,13 +252,86 @@ export class FactoryApp
     item.metadata.name = name;
     item.spec.conversationRef = origin ? { name: origin.metadata.name } : undefined;
     try {
-      return await this.d.writer.create(item);
+      const created = await this.d.writer.create<WorkItem>(item);
+      if (input.mirrorTo) await this.proposeMirror(p, created, input.mirrorTo);
+      return created;
     } catch (e) {
       if (!origin || !isStoreError(e, "AlreadyExists")) throw e;
       const existing = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
       if (existing?.spec.conversationRef?.name !== origin.metadata.name) throw e;
       return existing;
     }
+  }
+
+  /** ADR-0066 §6: the proposal stays Proposed; a human approves it on the item page. */
+  private async proposeMirror(p: Principal, item: WorkItem, target: string): Promise<void> {
+    const targets = await this.listIssueTargets(p);
+    if (!targets.some((t) => t.source === target)) throw new Error(`source "${target}" does not permit creating issues`);
+    const r = this.d.redactor;
+    await this.d.writer.create<IssueProposal>({
+      apiVersion: API_VERSION,
+      kind: "IssueProposal",
+      metadata: { name: `${item.metadata.name}-mirror`, namespace: this.ns, ownerReferences: [ownerRef(item)] },
+      spec: {
+        purpose: "mirror",
+        targetRef: { name: target },
+        title: r.redact(item.spec.title).slice(0, 200),
+        body: r.redact(item.spec.description?.trim() || item.spec.title),
+        pickUp: false,
+        provenance: { proposedBy: p.id, human: true, workItem: item.metadata.name, proposedAt: new Date().toISOString() },
+      },
+    });
+  }
+
+  async listIssueProposals(_p: Principal): Promise<IssueProposal[]> {
+    return this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns });
+  }
+
+  private async issueOrThrow(name: string): Promise<IssueProposal> {
+    const e = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, name);
+    if (!e) throw new Error(`issue proposal ${name} not found`);
+    return e;
+  }
+
+  async updateIssueProposal(p: Principal, name: string, patch: { title?: string; body?: string; issueType?: string; labels?: string[]; pickUp?: boolean; targetSource?: string }): Promise<IssueProposal> {
+    const e = await this.issueOrThrow(name);
+    const r = this.d.redactor;
+    const title = patch.title !== undefined ? r.redact(patch.title.trim()).slice(0, 200) : e.spec.title;
+    const body = patch.body !== undefined ? r.redact(patch.body.trim()) : e.spec.body;
+    if (!title || !body) throw new Error("title and body are required");
+    if (patch.targetSource && !(await this.listIssueTargets(p)).some((t) => t.source === patch.targetSource)) throw new Error(`source "${patch.targetSource}" does not permit creating issues`);
+    const labels = patch.labels !== undefined ? patch.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) : e.spec.labels;
+    // Any edit drops the earlier decision: approval is bound to the content that was reviewed.
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: {
+        ...e.spec, title, body, labels,
+        issueType: patch.issueType !== undefined ? r.redact(patch.issueType.trim()) || undefined : e.spec.issueType,
+        pickUp: patch.pickUp ?? e.spec.pickUp,
+        targetRef: patch.targetSource ? { name: patch.targetSource } : e.spec.targetRef,
+        review: undefined,
+      },
+    });
+  }
+
+  async reviewIssueProposal(p: Principal, name: string, decision: "approve" | "reject", comment?: string): Promise<IssueProposal> {
+    if (decision !== "approve" && decision !== "reject") throw new Error("decision must be approve or reject");
+    const e = await this.issueOrThrow(name);
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: { ...e.spec, review: { decision, ...(decision === "approve" ? { contentHash: issueContentHash(e.spec) } : {}), by: p.id, at: new Date().toISOString(), comment: comment?.trim() || undefined } },
+    });
+  }
+
+  async resolveIssueProposal(p: Principal, name: string, input: { action: "create-again" | "link"; externalId?: string }): Promise<IssueProposal> {
+    if (input.action !== "create-again" && input.action !== "link") throw new Error("action must be create-again or link");
+    if (input.action === "link" && !input.externalId?.trim()) throw new Error("externalId is required to link an existing issue");
+    const e = await this.issueOrThrow(name);
+    if (e.status?.phase !== "Uncertain" && e.status?.phase !== "Failed") throw new Error("only an uncertain or failed proposal can be resolved");
+    return this.d.writer.update<IssueProposal>({
+      ...e,
+      spec: { ...e.spec, resolution: { action: input.action, externalId: input.externalId?.trim() || undefined, by: p.id, at: new Date().toISOString() } },
+    });
   }
 
   async previewWorkItemFollowUp(_p: Principal, name: string, context = "") {
@@ -311,6 +398,81 @@ export class FactoryApp
       const duplicate = await this.d.reader.get<WorkItem>("WorkItem", this.ns, target);
       if (duplicate?.metadata.annotations?.[FOLLOW_UP_INPUT] !== hash) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
       return duplicate;
+    }
+  }
+
+  async createFollowUpTicket(p: Principal, name: string, input: NewFollowUpTicketInput): Promise<IssueProposal> {
+    if (typeof input.requestId !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(input.requestId)) throw new Error("requestId must be a name of at most 40 characters");
+    if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
+    if (typeof input.title !== "string" || !input.title.trim()) throw new Error("title is required");
+    if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    const targets = await this.listIssueTargets(p);
+    if (!targets.some((t) => t.source === input.targetSource)) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
+    const target = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, input.targetSource);
+    const proposalName = `${name}-followup-${input.requestId}`;
+    const existing = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
+    if (existing) {
+      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      return existing;
+    }
+    const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
+    if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before creating the ticket.", "Conflict");
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const r = this.d.redactor;
+    const cfg = target?.spec.writeBack?.issues;
+    const spec: IssueProposal["spec"] = {
+      purpose: "follow-up",
+      targetRef: { name: input.targetSource },
+      title: r.redact(input.title.trim()).slice(0, 200),
+      body: r.redact(renderFollowUpTicketBody({ instructions: preview.instructions, snapshot: preview.snapshot, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL })),
+      issueType: input.issueType?.trim() ? r.redact(input.issueType.trim()) : cfg?.issueType,
+      ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
+      pickUp: false,
+      revision: preview.revision,
+      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString() },
+    };
+    const at = new Date().toISOString();
+    try {
+      return await this.d.writer.create<IssueProposal>({
+        apiVersion: API_VERSION, kind: "IssueProposal",
+        metadata: { name: proposalName, namespace: this.ns, ownerReferences: [ownerRef(origin)] },
+        spec: { ...spec, review: { decision: "approve", by: p.id, at, contentHash: issueContentHash(spec) } },
+      });
+    } catch (e) {
+      if (!isStoreError(e, "AlreadyExists")) throw e;
+      return (await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName))!;
+    }
+  }
+
+  async startImplementation(_p: Principal, proposalName: string, input: StartImplementationInput = {}): Promise<WorkItem> {
+    const prop = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
+    if (!prop || prop.spec.purpose !== "follow-up") throw new StoreError(`follow-up ${proposalName} not found`, "NotFound");
+    const ext = prop.status?.externalRef;
+    if (prop.status?.phase !== "Created" || !ext || !prop.spec.targetRef) throw new StoreError("the ticket is not created yet", "Conflict");
+    const sourceName = prop.spec.targetRef.name;
+    const source = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, sourceName);
+    const name = workItemNameFor(sourceName, ext.externalId);
+    const existing = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (existing) return existing;
+    const origin = await originOf({ reader: this.d.reader, records: this.d.records, redactor: this.d.redactor, clock: this.d.clock }, prop);
+    if (!origin) throw new StoreError("the origin work item is no longer available", "Conflict");
+    const wf = input.workflowRef ? { name: input.workflowRef } : source?.spec.defaults?.workflowRef;
+    const repos = input.repositories?.length ? input.repositories.map((n) => ({ name: n })) : source?.spec.defaults?.repositoryRefs;
+    try {
+      return await this.d.writer.create<WorkItem>({
+        apiVersion: API_VERSION, kind: "WorkItem",
+        metadata: { name, namespace: this.ns, labels: { "factory.ai-dlc.io/external-ref": externalRefLabel(sourceName, ext.externalId) } },
+        spec: {
+          title: this.d.redactor.redact(prop.spec.title), description: prop.spec.body,
+          sourceRef: { name: sourceName }, externalRef: { id: ext.externalId, url: ext.url },
+          ...(wf ? { workflowRef: wf } : {}), ...(repos?.length ? { repositoryRefs: repos } : {}),
+          ...origin,
+        },
+      });
+    } catch (e) {
+      if (!isStoreError(e, "AlreadyExists")) throw e;
+      return (await this.d.reader.get<WorkItem>("WorkItem", this.ns, name))!;
     }
   }
 
@@ -629,6 +791,38 @@ export class FactoryApp
       if (item) await this.d.events.warning(item, "VerificationWaived", `Waived, not Passed: ${a.spec.verification.requirements?.join(", ")}. By ${p.id}: ${comment}`);
     }
     return updated;
+  }
+
+  async listIssueTargets(_p: Principal) {
+    return (await this.listSources(_p))
+      .filter((s) => s.spec.writeBack?.issues)
+      .map((s) => ({ source: s.metadata.name, type: s.spec.type, project: s.spec.writeBack?.issues?.project, issueType: s.spec.writeBack?.issues?.issueType, labels: s.spec.writeBack?.issues?.labels }));
+  }
+
+  async proposeIssue(p: Principal, input: { title: string; body: string; issueType?: string; labels?: string[]; workItem?: string }): Promise<{ name: string }> {
+    const title = input.title?.trim();
+    const body = input.body?.trim();
+    if (!title || !body) throw new Error("title and body are required");
+    if (body.length > 20_000) throw new Error("body is too long (max 20000 characters)");
+    if (!input.workItem) throw new Error("workItem is required");
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, input.workItem);
+    if (!wi) throw new Error(`work item ${input.workItem} not found`);
+    const r = this.d.redactor;
+    const created = await this.d.writer.create<IssueProposal>({
+      apiVersion: API_VERSION,
+      kind: "IssueProposal",
+      metadata: { name: `issue-${slug(title).slice(0, 40)}-${randomUUID().slice(0, 6)}`, namespace: this.ns, ...(wi ? { ownerReferences: [ownerRef(wi)] } : {}) },
+      spec: {
+        purpose: "finding",
+        title: r.redact(title).slice(0, 200),
+        body: r.redact(body),
+        ...(input.issueType?.trim() ? { issueType: r.redact(input.issueType.trim()) } : {}),
+        ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
+        pickUp: false,
+        provenance: { proposedBy: p.id, workItem: wi?.metadata.name, proposedAt: new Date().toISOString() },
+      },
+    });
+    return { name: created.metadata.name };
   }
 
   async listSources(_p: Principal): Promise<Source[]> {

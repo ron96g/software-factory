@@ -7,7 +7,7 @@ import { deriveStageState } from "./stage-state.ts";
 const item = (status: WorkItem["status"]): WorkItem => ({ apiVersion: "v", kind: "WorkItem", metadata: { name: "item" }, spec: { title: "t", sourceRef: { name: "manual" } }, status });
 const detail = (status: WorkItem["status"], extra: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
   workItem: item(status), runs: [], artifacts: [], clarifications: [], approvals: [], conversations: [], workspaces: [], outbox: [],
-  evidence: { items: [] } as unknown as WorkItemDetail["evidence"], events: [], knowledge: [],
+  evidence: { items: [] } as unknown as WorkItemDetail["evidence"], events: [], knowledge: [], issues: [],
   stages: [
     { name: "verify", lifecyclePhase: "construction", gate: "verified-checks", steps: [{ name: "verify-against-spec", agent: "verifier" }] },
     { name: "ship", lifecyclePhase: "operations", gate: "human-approval", steps: [], publishes: true },
