@@ -463,7 +463,7 @@ export async function createFactory(o: FactoryOptions) {
   manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
   manager.register(createIssueProposalController({ reader: store, status: store, events, clock, outbox, connectors, workItems: store }));
 
-  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, mirrors: mirrorLinkChecker({ reader: store }), origins: followUpOriginResolver({ reader: store, records: itemRecords, redactor, clock }) });
+  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, clock, mirrors: mirrorLinkChecker({ reader: store }), origins: followUpOriginResolver({ reader: store, records: itemRecords, redactor, clock }) });
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));

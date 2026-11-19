@@ -219,6 +219,7 @@ flowchart LR
 | **Notification** | A browser message derived from an `Event` by a notification rule: toast, entry in the notification center, or desktop notification. Not a stored kind (ADR-0069). |
 | **Notification rule** | Maps one `(involved kind, reason)` of an Event to a notification with a severity, title and link. Uncatalogued reasons never notify. |
 | **Notification severity** | `action` (a human must act, sticky), `problem` (something went wrong), `info` (good to know). |
+| **Ticket history** | A synced item's source comments (public/internal) and field changes (`spec.sourceHistory`), written by sync. Mandatory where the connector can read it: no history, no import (ADR-0070). |
 
 ## Mapping: AI-DLC concept → factory resource
 

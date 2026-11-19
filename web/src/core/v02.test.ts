@@ -110,6 +110,7 @@ test("W4: Jira (Data Center) fetches via JQL, comments as plain text and reads r
       return Response.json({}, { status: 201 });
     }
     if (u.pathname === "/rest/api/2/issue/SHOP-7/comment") return Response.json({ comments });
+    if (u.pathname === "/rest/api/2/issue/SHOP-7") return Response.json({ changelog: { histories: [] } });
     return new Response("nf", { status: 404 });
   }) as typeof fetch;
 

@@ -70,7 +70,8 @@ spec:
     mode: poll
     pollInterval: 5m
     filter: { jql: "project = SDDHEI AND labels = factory AND statusCategory != Done ORDER BY updated DESC" }
-    # No automatic clarification posting or inbound comment-answer sync.
+    # No automatic clarification posting or inbound comment-answer sync. Comments and history are still imported
+    # read-only as context for agents (ADR-0070).
     bidirectional: false
   writeBack:
     replyVisibilities: [public, internal]  # only after explicit human publication review

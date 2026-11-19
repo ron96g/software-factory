@@ -267,7 +267,7 @@ test("servicedesk workflow: response review rejects/redrafts, then a fresh publi
         issues: [{ key: "DESK-1", self: "x", fields: { summary: "Route returns 404", description: "Our API route in the prod environment returns 404 since yesterday's deployment.", labels: ["factory"], updated } }],
       });
     }
-    return Response.json({ comments: [] });
+    return Response.json({ comments: [], changelog: { histories: [] } });
   }) as typeof fetch;
 
   await withFactory({}, async (f) => {

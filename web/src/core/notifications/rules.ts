@@ -46,6 +46,7 @@ export function registerNotificationRules(r: Registrar<NotificationRule>): void 
   add("AgentRun", "ModelUnavailable", rule("problem", "quota", "Waiting for model quota"));
   add("*", "ReconcileFailing", rule("problem", "controller", "Control loop failing"));
   for (const reason of ["DeliveryBlocked", "DeliveryFailed"]) add("OutboxMessage", reason, rule("problem", "write-back", "Write-back failed"));
+  add("Source", "HistoryUnavailable", rule("problem", "sync", "Ticket history unavailable", { link: () => "/" }));
 
   // info: good to know
   add("WorkItem", "Completed", rule("info", "done", "Work item done"));
