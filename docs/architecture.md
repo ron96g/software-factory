@@ -106,6 +106,10 @@ pull-request publication, and the human input it waits on. Above the chips, the 
 running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
 agent tools that no sandbox provides, or a pull request that failed to deliver.
 
+**Ticket history** (ADR-0070): synced Jira items carry the ticket's comments (public/internal) and field changes in
+`spec.sourceHistory`; sync never imports or updates an item without it, every agent prompt includes it, and the item
+page shows it in the **Ticket history** tab.
+
 **Notifications** (ADR-0069): Events that need a human (clarification, approval, knowledge to review), report a
 problem (failed item or run, quota wait, failing control loop, write-back failure) or are good to know (done, PR
 opened, new synced items) become toasts, entries under the header bell (unread count, also in the tab title) and,

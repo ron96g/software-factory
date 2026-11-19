@@ -56,7 +56,7 @@ test("follow-up: synced origin stays unchanged; selected workflow gets separate 
       if ((init?.method ?? "GET") !== "GET") writes.push(u.pathname);
       return Response.json(u.pathname.endsWith("/search")
         ? { issues: [{ key: "FOLLOW-1", fields: { summary: "Additional publisher credentials", description: "Publishing additional client events fails in the production environment after a deployment.", labels: [] } }] }
-        : { comments: [] });
+        : { comments: [], changelog: { histories: [] } });
     }
     if (u.pathname === "/api/mcp") return new Response("fixture unavailable", { status: 503 });
     const body = JSON.parse(String(init?.body)) as { messages: { role: string; content?: string }[] };

@@ -3,7 +3,7 @@
  * so a connector only implements what its external system supports.
  */
 import type { KnowledgeSearcher } from "./knowledge.ts";
-import type { ModelProvider, Repository, Source, Workspace } from "../model/kinds.ts";
+import type { ModelProvider, Repository, Source, SourceHistory, Workspace } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
 import type { FileReader, FileWriter, SandboxArtifacts, SandboxExec } from "./sandbox.ts";
 
@@ -42,6 +42,17 @@ export interface ItemFetcher {
   fetchItems(source: Source): Promise<ExternalItem[]>;
 }
 
+/** What a connector returns as an item's history; sync adds `fetchedAt` and the echo flag. */
+export type ExternalItemHistory = Omit<SourceHistory, "fetchedAt">;
+
+/**
+ * Capability: an item's full conversation and change history (ADR-0070). Connectors that implement it make the
+ * history mandatory: sync never imports or updates an item without it. Throw when it can't be read completely.
+ */
+export interface ItemHistoryFetcher {
+  fetchHistory(source: Source, externalId: string): Promise<ExternalItemHistory>;
+}
+
 /** Capability: write a comment back (clarification questions, status). */
 export interface CommentPublisher {
   postComment(source: Source, externalId: string, body: string): Promise<void>;
@@ -59,6 +70,8 @@ export interface SourceConnector {
 
 export const canFetch = (c: SourceConnector): c is SourceConnector & ItemFetcher =>
   typeof (c as Partial<ItemFetcher>).fetchItems === "function";
+export const canFetchHistory = (c: SourceConnector): c is SourceConnector & ItemHistoryFetcher =>
+  typeof (c as Partial<ItemHistoryFetcher>).fetchHistory === "function";
 export const canComment = (c: SourceConnector): c is SourceConnector & CommentPublisher =>
   typeof (c as Partial<CommentPublisher>).postComment === "function";
 export const canReadComments = (c: SourceConnector): c is SourceConnector & CommentReader =>

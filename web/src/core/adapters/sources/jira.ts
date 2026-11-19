@@ -1,5 +1,5 @@
 import type { Source } from "../../model/kinds.ts";
-import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState, IssueCreator, IssueFinder, CreatedIssue, IssueDraft, IssueStatus, IssueStatusReader, IssueLinker } from "../../ports/index.ts";
+import type { CommentPublisher, CommentReader, ExternalItem, ExternalItemHistory, ItemFetcher, ItemHistoryFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState, IssueCreator, IssueFinder, CreatedIssue, IssueDraft, IssueStatus, IssueStatusReader, IssueLinker } from "../../ports/index.ts";
 import { markdownToAdf, markdownToWiki } from "./markdownToJira.ts";
 
 type Fetch = typeof fetch;
@@ -32,6 +32,8 @@ interface JiraDialect {
   toBody(text: string): unknown;
   /** Issue descriptions are authored as Markdown and rendered per dialect (comments stay plain). */
   toIssueBody(markdown: string): unknown;
+  /** Cloud pages the changelog on its own endpoint; Data Center returns it whole with `expand=changelog`. */
+  pagedChangelog: boolean;
 }
 
 const DIALECTS: Record<string, JiraDialect> = {
@@ -41,6 +43,7 @@ const DIALECTS: Record<string, JiraDialect> = {
     auth: (email, token): Record<string, string> => (email && token ? { authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}` } : {}),
     toBody: textToAdf,
     toIssueBody: markdownToAdf,
+    pagedChangelog: true,
   },
   datacenter: {
     api: "/rest/api/2",
@@ -48,14 +51,46 @@ const DIALECTS: Record<string, JiraDialect> = {
     auth: (_email, token): Record<string, string> => (token ? { authorization: `Bearer ${token}` } : {}),
     toBody: (text) => text,
     toIssueBody: markdownToWiki,
+    pagedChangelog: false,
   },
 };
+
+type JiraComment = {
+  id: string;
+  author?: { displayName?: string };
+  body: Adf | string | null;
+  created: string;
+  updated?: string;
+  /** Restricted to a role or group. */
+  visibility?: { type?: string; value?: string };
+  /** Cloud, service-desk projects. */
+  jsdPublic?: boolean;
+  properties?: { key: string; value?: unknown }[];
+};
+type JiraHistory = { author?: { displayName?: string }; created: string; items?: { field: string; fromString?: string | null; toString?: string | null }[] };
+
+/** Newest entries kept per list; a ticket beyond this is pathological, and the omission is recorded. */
+export const HISTORY_MAX = 2000;
+const COMMENT_MAX_CHARS = 20_000;
+const CHANGE_MAX_CHARS = 300;
+const clipText = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)} …[truncated]` : s);
+
+/**
+ * Internal unless clearly public: restricted comments, Cloud `jsdPublic: false`, and the service-desk property
+ * `sd.public.comment` with `internal: true` (Data Center also stores it as the string "true").
+ */
+export function commentVisibility(c: Pick<JiraComment, "visibility" | "jsdPublic" | "properties">): "public" | "internal" {
+  if (c.visibility?.type) return "internal";
+  if (c.jsdPublic === false) return "internal";
+  const internal = (c.properties?.find((p) => p.key === "sd.public.comment")?.value as { internal?: unknown } | undefined)?.internal;
+  return internal === true || internal === "true" ? "internal" : "public";
+}
 
 /**
  * Jira connector. `connection.deployment`: `cloud` (default) or `datacenter`. Token from `connection.secretRef` (ADR-0015).
  * Filter: `sync.filter.jql`.
  */
-export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, IssueCreator, IssueFinder, IssueStatusReader, IssueLinker {
+export class JiraConnector implements SourceConnector, ItemFetcher, ItemHistoryFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, IssueCreator, IssueFinder, IssueStatusReader, IssueLinker {
   readonly type = "jira";
   private readonly secrets: SecretResolver;
   private readonly f: Fetch;
@@ -114,6 +149,72 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
       priority: i.fields.priority?.name,
       updatedAt: i.fields.updated,
     }));
+  }
+
+  /** Every comment (with visibility) and every field change; throws when either can't be read completely (ADR-0070). */
+  async fetchHistory(source: Source, externalId: string): Promise<ExternalItemHistory> {
+    const d = this.dialect(source);
+    const key = encodeURIComponent(externalId);
+    const page = async <T>(path: (startAt: number) => string, list: (body: Record<string, unknown>) => unknown) => {
+      const out: T[] = [];
+      let startAt = 0;
+      let total = Infinity;
+      let omitted = 0;
+      while (startAt < total) {
+        const body = (await (await this.call(source, path(startAt))).json()) as Record<string, unknown>;
+        const items = list(body);
+        if (!Array.isArray(items)) throw new Error(`Jira returned no list for ${path(startAt).split("?")[0]}`);
+        total = typeof body.total === "number" ? body.total : startAt + items.length;
+        if (startAt === 0 && total > HISTORY_MAX) {
+          // Keep the newest entries: restart from the window's start instead of reading everything.
+          omitted = total - HISTORY_MAX;
+          startAt = omitted;
+          continue;
+        }
+        out.push(...(items as T[]));
+        if (!items.length || body.isLast === true) break;
+        startAt += items.length;
+      }
+      return { items: out, omitted };
+    };
+
+    const comments = await page<JiraComment>(
+      (at) => `${d.api}/issue/${key}/comment?startAt=${at}&maxResults=100&orderBy=created&expand=properties`,
+      (b) => b.comments,
+    );
+    let histories: { items: JiraHistory[]; omitted: number };
+    if (d.pagedChangelog) {
+      histories = await page<JiraHistory>((at) => `${d.api}/issue/${key}/changelog?startAt=${at}&maxResults=100`, (b) => b.values);
+    } else {
+      // Data Center returns the whole changelog with the issue; it has no paging to window.
+      const body = (await (await this.call(source, `${d.api}/issue/${key}?fields=created&expand=changelog`)).json()) as { changelog?: { histories?: unknown } };
+      if (!Array.isArray(body.changelog?.histories)) throw new Error(`Jira returned no changelog for ${externalId}`);
+      histories = { items: body.changelog.histories as JiraHistory[], omitted: 0 };
+    }
+    const changes = histories.items.flatMap((h) => (h.items ?? []).map((i) => ({
+      at: new Date(h.created).toISOString(),
+      author: h.author?.displayName ?? "unknown",
+      field: i.field,
+      ...(i.fromString ? { from: clipText(i.fromString, CHANGE_MAX_CHARS) } : {}),
+      ...(i.toString ? { to: clipText(i.toString, CHANGE_MAX_CHARS) } : {}),
+    })));
+    const keptChanges = changes.slice(-HISTORY_MAX);
+    // Skipped Cloud changelog pages hold at least one change each, so this is a lower bound there.
+    const omittedChanges = histories.omitted + changes.length - keptChanges.length;
+    return {
+      comments: comments.items
+        .map((c) => ({
+          id: String(c.id),
+          author: c.author?.displayName ?? "unknown",
+          createdAt: new Date(c.created).toISOString(),
+          ...(c.updated && c.updated !== c.created ? { updatedAt: new Date(c.updated).toISOString() } : {}),
+          visibility: commentVisibility(c),
+          body: clipText(adfToText(c.body), COMMENT_MAX_CHARS),
+        }))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+      changes: keptChanges.sort((a, b) => a.at.localeCompare(b.at)),
+      ...(comments.omitted || omittedChanges ? { omitted: { ...(comments.omitted ? { comments: comments.omitted } : {}), ...(omittedChanges ? { changes: omittedChanges } : {}) } } : {}),
+    };
   }
 
   async postComment(source: Source, externalId: string, body: string): Promise<void> {
