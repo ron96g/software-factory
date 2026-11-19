@@ -1,5 +1,5 @@
 import type { Source } from "../../model/kinds.ts";
-import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState, IssueCreator, IssueFinder, CreatedIssue, IssueDraft } from "../../ports/index.ts";
+import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, TicketState, IssueCreator, IssueFinder, CreatedIssue, IssueDraft, IssueStatus, IssueStatusReader, IssueLinker } from "../../ports/index.ts";
 import { markdownToAdf, markdownToWiki } from "./markdownToJira.ts";
 
 type Fetch = typeof fetch;
@@ -55,7 +55,7 @@ const DIALECTS: Record<string, JiraDialect> = {
  * Jira connector. `connection.deployment`: `cloud` (default) or `datacenter`. Token from `connection.secretRef` (ADR-0015).
  * Filter: `sync.filter.jql`.
  */
-export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, IssueCreator, IssueFinder {
+export class JiraConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, ServiceDeskCommentPublisher, ServiceDeskCommentFinder, TicketStateReader, TicketTransitionWriter, IssueCreator, IssueFinder, IssueStatusReader, IssueLinker {
   readonly type = "jira";
   private readonly secrets: SecretResolver;
   private readonly f: Fetch;
@@ -195,6 +195,22 @@ export class JiraConnector implements SourceConnector, ItemFetcher, CommentPubli
     const created = await res.json() as { key?: string };
     if (!created.key) throw new Error("Jira did not return an issue key; delivery outcome requires verification");
     return { externalId: created.key, url: `${this.base(source)}/browse/${created.key}` };
+  }
+
+  async readIssueStatus(source: Source, externalId: string): Promise<IssueStatus> {
+    const res = await this.call(source, `${this.dialect(source).api}/issue/${encodeURIComponent(externalId)}?fields=status,assignee,updated,resolution`);
+    const issue = await res.json() as { fields?: { status?: { name?: string; statusCategory?: { key?: string } }; assignee?: { displayName?: string } | null; updated?: string; resolution?: unknown } };
+    const status = issue.fields?.status;
+    if (!status?.name) throw new Error("Jira returned an issue without status");
+    const open = status.statusCategory?.key !== "done" && !issue.fields?.resolution;
+    return { state: status.name, open, assignee: issue.fields?.assignee?.displayName, updatedAt: issue.fields?.updated };
+  }
+
+  async linkIssues(source: Source, fromExternalId: string, toExternalId: string): Promise<void> {
+    await this.call(source, `${this.dialect(source).api}/issueLink`, {
+      method: "POST",
+      body: JSON.stringify({ type: { name: "Relates" }, inwardIssue: { key: fromExternalId }, outwardIssue: { key: toExternalId } }),
+    }, "issue");
   }
 
   async findCreatedIssues(source: Source, query: { marker: string; createdAfter: string }): Promise<CreatedIssue[]> {

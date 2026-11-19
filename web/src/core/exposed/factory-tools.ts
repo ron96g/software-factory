@@ -217,12 +217,12 @@ export function factoryTools(d: FactoryToolDeps): ExposedTool[] {
       name: "propose_issue",
       description: "Propose a tracker issue. Nothing is created until a human picks the target and approves it in the factory UI.",
       inputSchema: obj(
-        { title: S("short, precise title"), body: S("Markdown: what, evidence, why it matters"), issueType: S("optional issue type"), labels: LIST("optional labels"), workItem: S("optional work item this finding came from") },
-        ["title", "body"],
+        { title: S("short, precise title"), body: S("Markdown: what, evidence, why it matters"), issueType: S("optional issue type"), labels: LIST("optional labels"), workItem: S("name of the work item this finding came from (required)") },
+        ["title", "body", "workItem"],
       ),
       async invoke(p, a) {
         const r = await d.issues.proposeIssue(p, {
-          title: str(a, "title")!, body: str(a, "body")!, issueType: str(a, "issueType", false), labels: strs(a, "labels"), workItem: str(a, "workItem", false),
+          title: str(a, "title")!, body: str(a, "body")!, issueType: str(a, "issueType", false), labels: strs(a, "labels"), workItem: str(a, "workItem")!,
         });
         return { name: r.name, phase: "Proposed", note: "A human approves it in the factory UI (Issues)." };
       },

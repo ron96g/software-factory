@@ -45,7 +45,7 @@ import { FilesKnowledgeSearch } from "./adapters/knowledge/files.ts";
 import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
 import { knowledgeProvider } from "./knowledge/context.ts";
 import { mirrorLinkChecker } from "./issues/mirror.ts";
-import { createIssueHandler } from "./issues/handler.ts";
+import { createIssueHandler, createIssueLinkHandler } from "./issues/handler.ts";
 import { createIssueProposalController } from "./issues/controller.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
@@ -57,6 +57,7 @@ import { ExplainResponder } from "./agents/explain-responder.ts";
 import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
 import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
 import { GithubConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
+import { followUpOriginResolver } from "./issues/origin.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
 import { JiraConnector } from "./adapters/sources/jira.ts";
@@ -402,6 +403,7 @@ export async function createFactory(o: FactoryOptions) {
   outboxHandlers.register(pr.action, pr);
   for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);
   outboxHandlers.register("create-issue", createIssueHandler({ reader: store, connectors, redactor }));
+  outboxHandlers.register("link-issue", createIssueLinkHandler({ reader: store, connectors }));
   const sourcePolicies = new Registry<SourceWritePolicy>();
   sourcePolicies.register("comment", { check: (s) => s.spec.sync?.bidirectional ? undefined : "read-only (sync.bidirectional is not true)" });
   sourcePolicies.register("service-desk-reply", { check: (s) => Array.isArray(s.spec.writeBack?.replyVisibilities) && s.spec.writeBack.replyVisibilities.length ? undefined : "reviewed replies are not permitted" });
@@ -458,7 +460,7 @@ export async function createFactory(o: FactoryOptions) {
   manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
   manager.register(createIssueProposalController({ reader: store, status: store, events, clock, outbox, connectors, workItems: store }));
 
-  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, mirrors: mirrorLinkChecker({ reader: store }) });
+  const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, mirrors: mirrorLinkChecker({ reader: store }), origins: followUpOriginResolver({ reader: store, records: itemRecords, redactor, clock }) });
 
   const responders = new Registry<ConversationResponder>();
   responders.register("explain", new ExplainResponder({ reader: store, transcripts, recorders, models }));

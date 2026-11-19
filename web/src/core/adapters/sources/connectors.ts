@@ -1,5 +1,5 @@
 import type { Source } from "../../model/kinds.ts";
-import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, IssueCreator, IssueFinder, IssueDraft, CreatedIssue } from "../../ports/index.ts";
+import type { CommentPublisher, CommentReader, ExternalItem, ItemFetcher, SecretResolver, SourceConnector, IssueCreator, IssueFinder, IssueDraft, CreatedIssue, IssueStatus, IssueStatusReader } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
 
@@ -10,7 +10,7 @@ export const manualConnector: SourceConnector = { type: "manual" };
 export const internalConnector: SourceConnector = { type: "internal" };
 
 /** GitHub Issues: fetch, comment (via the outbox), read replies. */
-export class GithubConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, IssueCreator, IssueFinder {
+export class GithubConnector implements SourceConnector, ItemFetcher, CommentPublisher, CommentReader, IssueCreator, IssueFinder, IssueStatusReader {
   readonly type = "github";
   private readonly secrets: SecretResolver;
   private readonly f: Fetch;
@@ -63,6 +63,13 @@ export class GithubConnector implements SourceConnector, ItemFetcher, CommentPub
     const issue = (await res.json()) as { number?: number; html_url?: string };
     if (typeof issue.number !== "number") throw new Error("GitHub did not return an issue number; delivery outcome requires verification");
     return { externalId: String(issue.number), url: issue.html_url };
+  }
+
+  async readIssueStatus(source: Source, externalId: string): Promise<IssueStatus> {
+    const res = await this.call(source, `/repos/${this.repo(source)}/issues/${encodeURIComponent(externalId)}`);
+    const i = (await res.json()) as { state?: string; state_reason?: string | null; assignee?: { login?: string } | null; updated_at?: string };
+    if (!i.state) throw new Error("GitHub returned an issue without state");
+    return { state: i.state_reason ? `${i.state} (${i.state_reason})` : i.state, open: i.state === "open", assignee: i.assignee?.login, updatedAt: i.updated_at };
   }
 
   async findCreatedIssues(source: Source, query: { marker: string; createdAfter: string }): Promise<CreatedIssue[]> {

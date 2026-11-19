@@ -107,3 +107,33 @@ test("U2: Jira comment bodies stay plain text, unchanged by the converter", asyn
   await new JiraConnector(secrets, dc.f).postComment({ metadata: { name: "j" }, spec: { type: "jira", connection: { url: "https://j.example", deployment: "datacenter" }, sync: { bidirectional: true } } } as never, "X-1", "a **b**");
   assert.equal(dc.calls[0].body.body, "a **b**");
 });
+
+test("U1: Jira readIssueStatus is a GET and maps open/closed", async () => {
+  const open = fake(() => ({ fields: { status: { name: "In Progress", statusCategory: { key: "indeterminate" } }, assignee: { displayName: "Ann" }, updated: "2026-02-01T00:00:00Z", resolution: null } }));
+  const r = await new JiraConnector(secrets, open.f).readIssueStatus(jira("cloud"), "DHEI-1");
+  assert.deepEqual(r, { state: "In Progress", open: true, assignee: "Ann", updatedAt: "2026-02-01T00:00:00Z" });
+  assert.equal(open.calls[0].method, "GET");
+  assert.match(open.calls[0].url, /\/rest\/api\/3\/issue\/DHEI-1\?fields=/);
+  const done = fake(() => ({ fields: { status: { name: "Done", statusCategory: { key: "done" } }, assignee: null } }));
+  assert.equal((await new JiraConnector(secrets, done.f).readIssueStatus(jira("cloud"), "DHEI-1")).open, false);
+  const resolved = fake(() => ({ fields: { status: { name: "Closed", statusCategory: { key: "indeterminate" } }, resolution: { name: "Fixed" } } }));
+  assert.equal((await new JiraConnector(secrets, resolved.f).readIssueStatus(jira("cloud"), "DHEI-1")).open, false);
+});
+
+test("U1: GitHub readIssueStatus maps state and assignee", async () => {
+  const { calls, f } = fake(() => ({ state: "closed", state_reason: "completed", assignee: { login: "bob" }, updated_at: "2026-02-01T00:00:00Z" }));
+  const r = await new GithubConnector(secrets, f).readIssueStatus(gh, "7");
+  assert.deepEqual(r, { state: "closed (completed)", open: false, assignee: "bob", updatedAt: "2026-02-01T00:00:00Z" });
+  assert.equal(calls[0].method, "GET");
+});
+
+test("U1: Jira linkIssues posts a Relates link and is refused without writeBack.issues", async () => {
+  const { calls, f } = fake(() => ({}));
+  const c = new JiraConnector(secrets, f);
+  await c.linkIssues(jira("datacenter"), "DHEI-2", "SDDHEI-11446");
+  assert.equal(calls[0].url, "https://j.example/rest/api/2/issueLink");
+  assert.equal(calls[0].method, "POST");
+  assert.deepEqual(calls[0].body, { type: { name: "Relates" }, inwardIssue: { key: "DHEI-2" }, outwardIssue: { key: "SDDHEI-11446" } });
+  await assert.rejects(c.linkIssues({ metadata: { name: "ro" }, spec: { type: "jira", connection: { url: "https://j.example" } } } as never, "A-1", "B-1"), /read-only/);
+  assert.equal(calls.length, 1);
+});

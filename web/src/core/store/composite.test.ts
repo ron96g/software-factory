@@ -50,7 +50,7 @@ test("admission: namespace + source defaults + labels", async () => {
   const { store } = await setup();
   const created = await store.create(wi("a", "jira-main"));
   assert.equal(created.metadata.namespace, "default");
-  assert.equal(created.spec.workflowRef?.name, "factory-loop");
+  assert.equal(created.spec.workflowRef?.name, "factory-plan");
   assert.deepEqual(created.spec.repositoryRefs?.map((r) => r.name), ["software-factory"]);
   assert.equal(created.metadata.labels?.["factory.ai-dlc.io/source"], "jira-main");
 });

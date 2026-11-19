@@ -3,6 +3,7 @@ import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import {
   canFetch,
   type EventRecorder,
+  type FollowUpOriginResolver,
   type MirrorLinkChecker,
   type Lookup,
   type ResourceReader,
@@ -13,11 +14,13 @@ import {
 import { externalRefLabel } from "../issues/mirror.ts";
 import { resolveRef } from "../refs/refs.ts";
 
+export const workItemNameFor = (source: string, externalId: string) => `${source}-${externalId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+
 const LABEL_EXTERNAL_UPDATED = "factory.ai-dlc.io/external-updated-at";
 
 /** Imports ExternalItems as WorkItems (anti-corruption layer: connectors never create WorkItems themselves). */
 export class DefaultSourceSyncer implements SourceSyncer {
-  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder; mirrors?: MirrorLinkChecker };
+  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder; mirrors?: MirrorLinkChecker; origins?: FollowUpOriginResolver };
   constructor(d: DefaultSourceSyncer["d"]) {
     this.d = d;
   }
@@ -34,13 +37,14 @@ export class DefaultSourceSyncer implements SourceSyncer {
     let updated = 0;
     let skipped = 0;
     for (const item of items) {
-      const name = `${sourceName}-${item.externalId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      const name = workItemNameFor(sourceName, item.externalId);
       if (await this.d.mirrors?.isUnlinkedMirror(item.description)) { skipped++; continue; }
       let existing = await this.d.reader.get<WorkItem>("WorkItem", DEFAULT_NAMESPACE, name);
       if (!existing) {
         const byLabel = await this.d.reader.list<WorkItem>("WorkItem", { namespace: DEFAULT_NAMESPACE, labelSelector: { "factory.ai-dlc.io/external-ref": externalRefLabel(sourceName, item.externalId) } });
         existing = byLabel[0] ?? null;
       }
+      const origin = await this.d.origins?.resolve(item.description);
       if (!existing) {
         await this.d.writer.create<WorkItem>({
           apiVersion: API_VERSION,
@@ -51,14 +55,15 @@ export class DefaultSourceSyncer implements SourceSyncer {
             description: item.description,
             sourceRef: { name: sourceName },
             externalRef: { id: item.externalId, url: item.url },
+            ...(origin ?? {}),
           },
         });
         created++;
-      } else if (existing.metadata.annotations?.[LABEL_EXTERNAL_UPDATED] !== (item.updatedAt ?? "")) {
+      } else if (existing.metadata.annotations?.[LABEL_EXTERNAL_UPDATED] !== (item.updatedAt ?? "") || (origin && !existing.spec.originWorkItemRef)) {
         await this.d.writer.update<WorkItem>({
           ...existing,
           metadata: { ...existing.metadata, annotations: { ...existing.metadata.annotations, [LABEL_EXTERNAL_UPDATED]: item.updatedAt ?? "" } },
-          spec: { ...existing.spec, title: item.title, description: item.description },
+          spec: { ...existing.spec, title: item.title, description: item.description, ...(origin && !existing.spec.originWorkItemRef ? origin : {}) },
         });
         updated++;
       }

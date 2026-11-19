@@ -5,13 +5,16 @@ import { createFactory, type Factory } from "./factory.ts";
 import { ANONYMOUS, FACTORY_COMMENT_MARKER } from "./ports/index.ts";
 import { JiraConnector } from "./adapters/sources/jira.ts";
 import { createOutboxController } from "./runtime/outbox.ts";
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OutboxMessage } from "./model/kinds.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
 
-async function withFactory(fetchImpl: typeof fetch, fn: (f: Factory) => Promise<void>) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, fetch: fetchImpl, commentPollMs: 30, log: () => {} });
+async function withFactory(fetchImpl: typeof fetch, fn: (f: Factory) => Promise<void>, root = ROOT) {
+  const f = await createFactory({ definitionsRoot: root, databasePath: ":memory:", env: {}, fetch: fetchImpl, commentPollMs: 30, log: () => {} });
   await f.start();
   try {
     await fn(f);
@@ -110,6 +113,18 @@ test("W4: Jira (Data Center) fetches via JQL, comments as plain text and reads r
     return new Response("nf", { status: 404 });
   }) as typeof fetch;
 
+  // jira-main defaults to factory-plan (ADR-0068); this test needs the simulated loop that blocks in triage.
+  const root = mkdtempSync(join(tmpdir(), "factory-defs-"));
+  for (const d of ["agents", "skills", "workflows", "artifacts", "sources", "repositories", "knowledge-sources", "tool-servers", "sandbox-profiles"]) {
+    if (existsSync(join(ROOT, d))) cpSync(join(ROOT, d), join(root, d), { recursive: true });
+  }
+  const srcFile = join(root, "sources", "sources.yaml");
+  const lines = readFileSync(srcFile, "utf8").split("\n");
+  const at = lines.findIndex((l) => l.includes("name: jira-main"));
+  const wf = lines.findIndex((l, i) => i > at && l.includes("workflowRef"));
+  lines[wf] = lines[wf].replace("factory-plan", "factory-loop");
+  writeFileSync(srcFile, lines.join("\n"));
+
   await withFactory(fetchImpl, async (f) => {
     assert.deepEqual(await f.app.syncSource(p, "jira-main"), { created: 1, updated: 0 });
     const name = "jira-main-shop-7";
@@ -128,7 +143,7 @@ test("W4: Jira (Data Center) fetches via JQL, comments as plain text and reads r
       return x?.workItem.status?.stage !== "triage" ? x : undefined;
     }, "resumed past triage");
     assert.equal(after.clarifications[0].spec.answeredBy, "jira-main:Bob");
-  });
+  }, root);
 });
 
 test("W4: Jira auth and body format per deployment (cloud: basic + ADF, datacenter: bearer PAT + text)", async () => {

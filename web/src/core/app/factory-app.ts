@@ -67,7 +67,9 @@ import type {
   WorkItemRecordReader,
   WorkItemFollowUpQueries,
   WorkItemFollowUpCommands,
+  StartImplementationInput,
   NewFollowUpInput,
+  NewFollowUpTicketInput,
   FollowUpRelations,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
@@ -78,6 +80,10 @@ import type {
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
 import { deriveGateEvidence } from "./gate-evidence.ts";
+import { renderFollowUpTicketBody } from "../issues/followup-body.ts";
+import { originOf } from "../issues/origin.ts";
+import { workItemNameFor } from "../sources/syncer.ts";
+import { externalRefLabel } from "../issues/mirror.ts";
 import { fingerprint, followUpPreview, FOLLOW_UP_INPUT, LABEL_ORIGIN_UID } from "./work-item-followups.ts";
 
 export interface FactoryAppDeps {
@@ -204,7 +210,7 @@ export class FactoryApp
         workflow: manual?.spec.defaults?.workflowRef?.name,
         repositories: (manual?.spec.defaults?.repositoryRefs ?? []).map((r) => r.name),
       },
-      issueTargets: (await this.listIssueTargets(_p)).map((t) => ({ source: t.source, type: t.type, project: t.project })),
+      issueTargets: (await this.listIssueTargets(_p)).map((t) => ({ source: t.source, type: t.type, project: t.project, issueType: t.issueType, labels: t.labels })),
     };
   }
 
@@ -392,6 +398,81 @@ export class FactoryApp
       const duplicate = await this.d.reader.get<WorkItem>("WorkItem", this.ns, target);
       if (duplicate?.metadata.annotations?.[FOLLOW_UP_INPUT] !== hash) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
       return duplicate;
+    }
+  }
+
+  async createFollowUpTicket(p: Principal, name: string, input: NewFollowUpTicketInput): Promise<IssueProposal> {
+    if (typeof input.requestId !== "string" || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(input.requestId)) throw new Error("requestId must be a name of at most 40 characters");
+    if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
+    if (typeof input.title !== "string" || !input.title.trim()) throw new Error("title is required");
+    if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    const targets = await this.listIssueTargets(p);
+    if (!targets.some((t) => t.source === input.targetSource)) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
+    const target = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, input.targetSource);
+    const proposalName = `${name}-followup-${input.requestId}`;
+    const existing = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
+    if (existing) {
+      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      return existing;
+    }
+    const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
+    if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before creating the ticket.", "Conflict");
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const r = this.d.redactor;
+    const cfg = target?.spec.writeBack?.issues;
+    const spec: IssueProposal["spec"] = {
+      purpose: "follow-up",
+      targetRef: { name: input.targetSource },
+      title: r.redact(input.title.trim()).slice(0, 200),
+      body: r.redact(renderFollowUpTicketBody({ instructions: preview.instructions, snapshot: preview.snapshot, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL })),
+      issueType: input.issueType?.trim() ? r.redact(input.issueType.trim()) : cfg?.issueType,
+      ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
+      pickUp: false,
+      revision: preview.revision,
+      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString() },
+    };
+    const at = new Date().toISOString();
+    try {
+      return await this.d.writer.create<IssueProposal>({
+        apiVersion: API_VERSION, kind: "IssueProposal",
+        metadata: { name: proposalName, namespace: this.ns, ownerReferences: [ownerRef(origin)] },
+        spec: { ...spec, review: { decision: "approve", by: p.id, at, contentHash: issueContentHash(spec) } },
+      });
+    } catch (e) {
+      if (!isStoreError(e, "AlreadyExists")) throw e;
+      return (await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName))!;
+    }
+  }
+
+  async startImplementation(_p: Principal, proposalName: string, input: StartImplementationInput = {}): Promise<WorkItem> {
+    const prop = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
+    if (!prop || prop.spec.purpose !== "follow-up") throw new StoreError(`follow-up ${proposalName} not found`, "NotFound");
+    const ext = prop.status?.externalRef;
+    if (prop.status?.phase !== "Created" || !ext || !prop.spec.targetRef) throw new StoreError("the ticket is not created yet", "Conflict");
+    const sourceName = prop.spec.targetRef.name;
+    const source = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, sourceName);
+    const name = workItemNameFor(sourceName, ext.externalId);
+    const existing = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (existing) return existing;
+    const origin = await originOf({ reader: this.d.reader, records: this.d.records, redactor: this.d.redactor, clock: this.d.clock }, prop);
+    if (!origin) throw new StoreError("the origin work item is no longer available", "Conflict");
+    const wf = input.workflowRef ? { name: input.workflowRef } : source?.spec.defaults?.workflowRef;
+    const repos = input.repositories?.length ? input.repositories.map((n) => ({ name: n })) : source?.spec.defaults?.repositoryRefs;
+    try {
+      return await this.d.writer.create<WorkItem>({
+        apiVersion: API_VERSION, kind: "WorkItem",
+        metadata: { name, namespace: this.ns, labels: { "factory.ai-dlc.io/external-ref": externalRefLabel(sourceName, ext.externalId) } },
+        spec: {
+          title: this.d.redactor.redact(prop.spec.title), description: prop.spec.body,
+          sourceRef: { name: sourceName }, externalRef: { id: ext.externalId, url: ext.url },
+          ...(wf ? { workflowRef: wf } : {}), ...(repos?.length ? { repositoryRefs: repos } : {}),
+          ...origin,
+        },
+      });
+    } catch (e) {
+      if (!isStoreError(e, "AlreadyExists")) throw e;
+      return (await this.d.reader.get<WorkItem>("WorkItem", this.ns, name))!;
     }
   }
 
@@ -715,7 +796,7 @@ export class FactoryApp
   async listIssueTargets(_p: Principal) {
     return (await this.listSources(_p))
       .filter((s) => s.spec.writeBack?.issues)
-      .map((s) => ({ source: s.metadata.name, type: s.spec.type, project: s.spec.writeBack?.issues?.project, issueType: s.spec.writeBack?.issues?.issueType }));
+      .map((s) => ({ source: s.metadata.name, type: s.spec.type, project: s.spec.writeBack?.issues?.project, issueType: s.spec.writeBack?.issues?.issueType, labels: s.spec.writeBack?.issues?.labels }));
   }
 
   async proposeIssue(p: Principal, input: { title: string; body: string; issueType?: string; labels?: string[]; workItem?: string }): Promise<{ name: string }> {
@@ -723,8 +804,9 @@ export class FactoryApp
     const body = input.body?.trim();
     if (!title || !body) throw new Error("title and body are required");
     if (body.length > 20_000) throw new Error("body is too long (max 20000 characters)");
-    const wi = input.workItem ? await this.d.reader.get<WorkItem>("WorkItem", this.ns, input.workItem) : null;
-    if (input.workItem && !wi) throw new Error(`work item ${input.workItem} not found`);
+    if (!input.workItem) throw new Error("workItem is required");
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, input.workItem);
+    if (!wi) throw new Error(`work item ${input.workItem} not found`);
     const r = this.d.redactor;
     const created = await this.d.writer.create<IssueProposal>({
       apiVersion: API_VERSION,

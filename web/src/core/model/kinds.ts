@@ -148,7 +148,9 @@ export interface SourceSpec {
   /** Explicit human-reviewed actions, independent of automatic clarification synchronization. */
   writeBack?: { replyVisibilities?: ("public" | "internal")[]; transitions?: boolean;
     /** ADR-0066: permits creating issues here. The project key and defaults live in config, never in code. */
-    issues?: { project?: string; issueType?: string; labels?: string[]; pickUpLabels?: string[]; fields?: Record<string, unknown> } };
+    issues?: { project?: string; issueType?: string; labels?: string[]; pickUpLabels?: string[]; fields?: Record<string, unknown>;
+      /** ADR-0068: link a created follow-up ticket to its origin ticket (Jira, same instance). Off by default. */
+      linkOrigin?: boolean } };
 }
 export type Source = Resource<SourceSpec>;
 
@@ -734,7 +736,7 @@ export interface WorkspaceStatus {
 export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;
 
 /** ADR-0066: an issue the factory may create in a tracker once a human approves it. */
-export type IssuePurpose = "mirror" | "finding" | "escalation" | "unit";
+export type IssuePurpose = "mirror" | "finding" | "escalation" | "unit" | "follow-up";
 export type IssuePhase = "Proposed" | "Approved" | "Creating" | "Created" | "Uncertain" | "Failed" | "Rejected";
 export interface IssueProposalSpec {
   purpose: IssuePurpose;
@@ -745,6 +747,8 @@ export interface IssueProposalSpec {
   issueType?: string;
   labels?: string[];
   pickUp?: boolean;
+  /** ADR-0068: ADR-0039 preview revision a follow-up ticket was created from. */
+  revision?: string;
   relatesTo?: string[];
   parent?: string;
   provenance?: { agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean };
@@ -761,6 +765,8 @@ export interface IssueProposalStatus {
   lookup?: { since: string; count: number };
   /** Key of the last human resolution applied, so it is consumed once. */
   resolved?: string;
+  /** ADR-0068: read-only tracker state, written by the controller only. */
+  tracked?: { state?: string; open?: boolean; assignee?: string; updatedAt?: string; readAt: string };
   conditions?: { type: string; status: "True" | "False" | "Unknown"; reason?: string; message?: string }[];
 }
 export type IssueProposal = Resource<IssueProposalSpec, IssueProposalStatus>;

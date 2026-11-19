@@ -13,7 +13,7 @@ function linkedCondition(i: IssueProposal) {
 }
 
 /** ADR-0066 §7: edit, retarget, approve, reject and resolve; agents can only propose. */
-export function IssueProposalsPanel({ issues }: { issues: IssueProposal[] }) {
+export function IssueProposalsPanel({ issues, onUse }: { issues: IssueProposal[]; onUse?: (i: IssueProposal) => void }) {
   const { data: options } = useLive<NewItemOptions>(issues.length ? "/api/new-item-options" : null, () => false);
   if (issues.length === 0) return null;
   return (
@@ -26,14 +26,14 @@ export function IssueProposalsPanel({ issues }: { issues: IssueProposal[] }) {
       </Text>
       <Stack gap="md">
         {issues.map((i) => (
-          <IssueRow key={i.metadata.name} issue={i} targets={options?.issueTargets ?? []} />
+          <IssueRow key={i.metadata.name} issue={i} targets={options?.issueTargets ?? []} onUse={onUse} />
         ))}
       </Stack>
     </Card>
   );
 }
 
-function IssueRow({ issue: i, targets }: { issue: IssueProposal; targets: { source: string; type: string; project?: string }[] }) {
+function IssueRow({ issue: i, targets, onUse }: { issue: IssueProposal; targets: { source: string; type: string; project?: string }[]; onUse?: (i: IssueProposal) => void }) {
   const phase = i.status?.phase ?? "Proposed";
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(i.spec.title);
@@ -51,6 +51,8 @@ function IssueRow({ issue: i, targets }: { issue: IssueProposal; targets: { sour
   const frozen = phase !== "Proposed" && phase !== "Rejected";
   const linked = linkedCondition(i);
   const ref = i.status?.externalRef;
+  const owned = !!i.metadata.ownerReferences?.length;
+  const tracked = i.status?.tracked;
   return (
     <Stack gap={6}>
       <Group gap="xs" justify="space-between" wrap="nowrap">
@@ -66,13 +68,21 @@ function IssueRow({ issue: i, targets }: { issue: IssueProposal; targets: { sour
         {linked?.status === "True" && <Badge size="xs" color="teal" variant="light">linked</Badge>}
         {linked?.reason === "Conflict" && <Badge size="xs" color="red" variant="light" title={linked.message}>conflict</Badge>}
       </Group>
+      {tracked && <Text size="xs" c="dimmed">Tracker: {tracked.state}{tracked.assignee ? `, ${tracked.assignee}` : ""}{tracked.updatedAt ? `, updated ${new Date(tracked.updatedAt).toLocaleString()}` : ""}</Text>}
+      {i.spec.provenance?.workItem && <Anchor href={`/items/${i.spec.provenance.workItem}`} size="xs">Work item {i.spec.provenance.workItem}</Anchor>}
+      {phase === "Created" && i.spec.purpose === "follow-up" && <Group><Button size="compact-xs" loading={busy} onClick={() => run(`${base}/start`, {}, "Implementation started")}>Start implementation</Button></Group>}
       {linked?.reason === "Conflict" && <Text size="xs" c="red">{linked.message}</Text>}
       {(phase === "Uncertain" || phase === "Failed") && (
         <Text size="xs" c="dimmed">
           {i.status?.conditions?.find((c) => c.type !== "Linked")?.message ?? "The outcome of the last attempt is not confirmed."}
         </Text>
       )}
-      {editing && !frozen ? (
+      {owned && onUse && phase === "Proposed" && i.spec.purpose !== "mirror" ? (
+        <Group gap="xs">
+          <Button size="compact-xs" onClick={() => onUse(i)}>Use</Button>
+          <Button size="compact-xs" color="red" variant="light" loading={busy} onClick={() => run(`${base}/review`, { decision: "reject" }, "Dismissed")}>Dismiss</Button>
+        </Group>
+      ) : owned && !onUse ? null : owned && i.spec.purpose === "follow-up" ? null : editing && !frozen ? (
         <Stack gap={6}>
           <TextInput size="xs" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
           <Textarea size="xs" autosize minRows={4} value={body} onChange={(e) => setBody(e.currentTarget.value)} />

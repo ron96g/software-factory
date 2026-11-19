@@ -50,3 +50,24 @@ test("content hash covers publishing fields only", () => {
   assert.equal(issueContentHash(a), issueContentHash({ ...a, review: approve }));
   assert.notEqual(issueContentHash(a), issueContentHash({ ...a, labels: ["x"] }));
 });
+
+test("ADR-0068: click-created follow-ups need item, name, owner, revision and a matching hash", async () => {
+  const w = { ...item(), metadata: { name: "w", namespace: "default" } };
+  const owner = [{ apiVersion: "factory.ai-dlc.io/v1", kind: "WorkItem", name: "w", uid: "u" }];
+  const mk = (spec: Partial<IssueProposal["spec"]>, name = "w-followup-r1", own: unknown = owner) => {
+    const p = prop({ purpose: "follow-up", targetRef: { name: "jira" }, provenance: { human: true, workItem: "w" }, revision: "rev1", ...spec }, name);
+    p.metadata.ownerReferences = own as never;
+    return p;
+  };
+  const ok = mk({}); ok.spec.review = { decision: "approve", contentHash: issueContentHash(ok.spec) };
+  assert.deepEqual(await run(ok, [src(true), w]), []);
+  assert.match((await run(ok, [src(true)])).join(), /existing work item/);
+  assert.match((await run(mk({ revision: undefined }), [src(true), w])).join(), /preview revision/);
+  assert.match((await run(mk({}, "other"), [src(true), w])).join(), /named w-followup/);
+  assert.match((await run(mk({}, "w-followup-r1", []), [src(true), w])).join(), /owned by/);
+  const stale = mk({ review: { decision: "approve", contentHash: "x" } });
+  assert.match((await run(stale, [src(true), w])).join(), /does not match/);
+  const agent = mk({ provenance: { agent: "a", workItem: "w" }, review: { decision: "approve", contentHash: issueContentHash(ok.spec) } });
+  assert.match((await run(agent, [src(true), w])).join(), /agents cannot create approved/);
+  assert.notEqual(issueContentHash(ok.spec), issueContentHash({ ...ok.spec, revision: "rev2" }));
+});

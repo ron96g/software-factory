@@ -1,5 +1,5 @@
 import type { IssueProposal } from "../model/kinds.ts";
-import { canCreateIssues, canFindIssues, type Lookup, type OutboxDelivery, type Redactor, type RecoverableOutboxHandler, type ResourceReader, type SourceConnector } from "../ports/index.ts";
+import { canCreateIssues, canFindIssues, canLinkIssues, type Lookup, type OutboxDelivery, type OutboxHandler, type Redactor, type RecoverableOutboxHandler, type ResourceReader, type SourceConnector } from "../ports/index.ts";
 import { issueContentHash } from "./admission.ts";
 
 export const issueMarker = (uid: string) => `[software-factory:issue-${uid}]`;
@@ -36,6 +36,26 @@ export function createIssueHandler(d: { reader: ResourceReader; connectors: Look
         issueType: proposal.spec.issueType, labels, marker,
       });
       return { ...created };
+    },
+  };
+}
+
+/** ADR-0068: relates-to link from the created ticket to the origin ticket. A failure never affects the created ticket. */
+export function createIssueLinkHandler(d: { reader: ResourceReader; connectors: Lookup<SourceConnector> }): OutboxHandler {
+  return {
+    action: "link-issue",
+    async deliver(msg) {
+      const { namespace, proposal: name, proposalUid, from, to } = msg.payload;
+      if (typeof namespace !== "string" || typeof name !== "string" || typeof proposalUid !== "string" || typeof from !== "string" || typeof to !== "string") throw new Error("invalid issue link identity");
+      if (namespace !== msg.namespace) throw new Error("issue link cannot cross namespaces");
+      const proposal = await d.reader.get<IssueProposal>("IssueProposal", namespace, name);
+      if (!proposal || proposal.metadata.uid !== proposalUid || proposal.status?.externalRef?.externalId !== from) throw new Error("issue proposal is unavailable");
+      const source = msg.source;
+      if (!source || proposal.spec.targetRef?.name !== source.metadata.name || !source.spec.writeBack?.issues?.linkOrigin) throw new Error("issue links are not permitted for this source");
+      const connector = d.connectors.get(source.spec.type);
+      if (!connector || !canLinkIssues(connector)) throw new Error("source cannot link issues");
+      await connector.linkIssues(source, from, to);
+      return { linked: to };
     },
   };
 }

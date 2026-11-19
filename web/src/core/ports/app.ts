@@ -55,7 +55,7 @@ export interface NewItemOptions {
   repositories: NewItemChoice[];
   defaults: { workflow?: string; repositories: string[] };
   /** ADR-0066: sources that permit creating issues ("Also create in …"). */
-  issueTargets: { source: string; type: string; project?: string }[];
+  issueTargets: { source: string; type: string; project?: string; issueType?: string; labels?: string[] }[];
 }
 
 export interface NewItemOptionsQuery {
@@ -228,7 +228,7 @@ export interface IssueReviewActions {
 
 /** ADR-0066: proposing issues. Approval, target choice and creation are deliberately not here (rule 8). */
 export interface IssueProposalActions {
-  listIssueTargets(p: Principal): Promise<{ source: string; type: string; project?: string; issueType?: string }[]>;
+  listIssueTargets(p: Principal): Promise<{ source: string; type: string; project?: string; issueType?: string; labels?: string[] }[]>;
   proposeIssue(p: Principal, input: { title: string; body: string; issueType?: string; labels?: string[]; workItem?: string }): Promise<{ name: string }>;
 }
 

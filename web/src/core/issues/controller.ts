@@ -1,18 +1,45 @@
 import type { IssueProposal, IssueProposalStatus, OutboxMessage, Source, WorkItem } from "../model/kinds.ts";
+import { SYSTEM_NAMESPACE } from "../model/resource.ts";
 import { keyOf, nsOf, ownerRef, parseKey } from "../model/meta.ts";
-import { canFindIssues, isStoreError, type Clock, type Controller, type EventRecorder, type InitialKeys, type Lookup, type Outbox, type ResourceReader, type ResourceWriter, type SourceConnector, type StatusWriter } from "../ports/index.ts";
+import { canFindIssues, canReadIssueStatus, isStoreError, type Clock, type Controller, type EventRecorder, type InitialKeys, type Lookup, type Outbox, type ResourceReader, type ResourceWriter, type SourceConnector, type StatusWriter } from "../ports/index.ts";
 import { issueContentHash } from "./admission.ts";
 import { issueMarker } from "./handler.ts";
 import { externalRefLabel, isLinked, LABEL_EXTERNAL_REF, mirrorItemName } from "./mirror.ts";
 
 /** Lookups after an unknown outcome (ADR-0066 §4): 1, 5 and 15 minutes after the failure was first seen. */
 export const LOOKUP_DELAYS_MS = [60_000, 300_000, 900_000];
+function pollIntervalMs(v?: string): number {
+  const m = /^(\d+)\s*(s|m|h)$/.exec(v ?? "");
+  return m ? Number(m[1]) * { s: 1000, m: 60_000, h: 3_600_000 }[m[2] as "s" | "m" | "h"] : 300_000;
+}
 export const createKey = (name: string, attempt: number) => `${name}-create-a${attempt}`;
 const resolutionKey = (r: NonNullable<IssueProposal["spec"]["resolution"]>) => `${r.action}|${r.externalId ?? ""}|${r.at ?? ""}`;
 
 /** ADR-0066: owns IssueProposal.status. Claim before effect; the outbox performs the single POST. */
 export function createIssueProposalController(d: { reader: ResourceReader; status: StatusWriter; events: EventRecorder; clock: Clock; outbox: Outbox; connectors: Lookup<SourceConnector>; workItems?: ResourceWriter }): Controller & InitialKeys {
-  const phaseOk = (p: IssueProposal) => p.status?.phase === "Created" ? p.spec.purpose === "mirror" && !isLinked(p) : true;
+  const linkPending = (p: IssueProposal) => p.spec.purpose === "follow-up" && !p.status?.conditions?.some((c) => c.type === "Linked");
+  const trackable = (p: IssueProposal) => p.spec.purpose === "follow-up" && p.status?.tracked?.open !== false && !!p.status?.externalRef?.externalId;
+  const phaseOk = (p: IssueProposal) => p.status?.phase === "Created" ? (p.spec.purpose === "mirror" && !isLinked(p)) || linkPending(p) || trackable(p) : true;
+  /** ADR-0068: read-only refresh of the created ticket, at most once per Source pollInterval; stops when the tracker reports it closed. */
+  async function track(p: IssueProposal, st: IssueProposalStatus, write: (n: IssueProposalStatus, r?: string, m?: string, w?: boolean) => Promise<void>) {
+    if (!trackable(p)) return;
+    const ns = nsOf(p);
+    const source = await d.reader.get<Source>("Source", ns, p.spec.targetRef!.name) ?? await d.reader.get<Source>("Source", SYSTEM_NAMESPACE, p.spec.targetRef!.name);
+    const connector = source ? d.connectors.get(source.spec.type) : undefined;
+    if (!source || !connector || !canReadIssueStatus(connector)) return;
+    const interval = pollIntervalMs(source.spec.sync?.pollInterval);
+    const now = d.clock.now().getTime();
+    const last = st.tracked?.readAt ? Date.parse(st.tracked.readAt) : NaN;
+    if (!Number.isNaN(last) && now - last < interval) return { requeueAfterMs: interval - (now - last) };
+    try {
+      const s = await connector.readIssueStatus(source, st.externalRef!.externalId);
+      await write({ ...st, tracked: { state: s.state, open: s.open, assignee: s.assignee, updatedAt: s.updatedAt, readAt: new Date(now).toISOString() } });
+      return s.open ? { requeueAfterMs: interval } : undefined;
+    } catch (err) {
+      await d.events.warning(p, "IssueTrackingFailed", err instanceof Error ? err.message : String(err));
+      return { requeueAfterMs: interval };
+    }
+  }
   /** ADR-0066 §6: writes the item's reference on the human's behalf; a different existing reference is never overwritten. */
   async function linkMirror(p: IssueProposal, st: IssueProposalStatus, write: (n: IssueProposalStatus, r?: string, m?: string, w?: boolean) => Promise<void>) {
     const ns = nsOf(p);
@@ -36,6 +63,31 @@ export function createIssueProposalController(d: { reader: ResourceReader; statu
       });
     }
     await write({ ...st, conditions: [...others, { type: "Linked", status: "True", reason: "Linked" }] }, "MirrorLinked", `work item linked to ${ref.externalId}`);
+  }
+  /** ADR-0068: optional Jira link to the origin; the ticket stays Created whatever happens here. */
+  async function linkOrigin(p: IssueProposal, st: IssueProposalStatus, write: (n: IssueProposalStatus, r?: string, m?: string, w?: boolean) => Promise<void>) {
+    const ns = nsOf(p);
+    const done = async (status: "True" | "False", reason: string, message: string | undefined, event?: string, warn = false) =>
+      write({ ...st, conditions: [...(st.conditions ?? []).filter((c) => c.type !== "Linked"), { type: "Linked", status, reason, message }] }, event, message ?? reason, warn);
+    const getSource = async (n: string) => await d.reader.get<Source>("Source", ns, n) ?? await d.reader.get<Source>("Source", SYSTEM_NAMESPACE, n);
+    const target = await getSource(p.spec.targetRef!.name);
+    if (!target?.spec.writeBack?.issues?.linkOrigin) return await done("False", "NotRequested", undefined);
+    const item = p.spec.provenance?.workItem ? await d.reader.get<WorkItem>("WorkItem", ns, p.spec.provenance.workItem) : null;
+    const originRef = item?.spec.externalRef?.id;
+    const origin = item?.spec.sourceRef ? await getSource(item.spec.sourceRef.name) : null;
+    const base = (s: Source) => String(s.spec.connection?.baseUrl ?? "").replace(/\/+$/, "").toLowerCase();
+    if (!originRef || !origin || origin.spec.type !== target.spec.type || !base(origin) || base(origin) !== base(target)) {
+      return await done("False", "NoSameInstanceOrigin", "origin ticket is not on the same tracker instance");
+    }
+    const key = `${p.metadata.name}-link`;
+    await d.outbox.enqueue({
+      key, namespace: ns, source: target.metadata.name, action: "link-issue", owner: ownerRef(p),
+      payload: { namespace: ns, proposal: p.metadata.name, proposalUid: p.metadata.uid, from: st.externalRef!.externalId, to: originRef },
+    });
+    const msg = await d.reader.get<OutboxMessage>("OutboxMessage", ns, key);
+    if (msg?.status?.phase === "Delivered") return await done("True", "Linked", undefined, "IssueLinked");
+    if (msg?.status?.phase === "Failed") return await done("False", "LinkFailed", msg.status.lastError, "IssueLinkFailed", true);
+    return { requeueAfterMs: 2000 };
   }
   return {
     name: "issueproposal",
@@ -70,7 +122,9 @@ export function createIssueProposalController(d: { reader: ResourceReader; statu
           }
           return;
         }
+        if (st.phase === "Created" && linkPending(p)) return await linkOrigin(p, st, write);
         if (st.phase === "Created" && p.spec.purpose === "mirror" && d.workItems && !isLinked(p)) return await linkMirror(p, st, write);
+        if (st.phase === "Created" && p.spec.purpose === "follow-up") return await track(p, st, write);
         if (st.phase === "Created" || st.phase === "Uncertain" || st.phase === "Failed") return;
         if (st.phase !== "Creating") {
           if (p.spec.review?.decision === "reject") return st.phase === "Rejected" ? undefined : await write({ phase: "Rejected" }, "IssueRejected", "rejected");
