@@ -53,7 +53,7 @@ function fakeJira() {
       ...(state.id === "2" ? [{ id: "41", name: "Wait for customer", to: statuses.waiting }] : []),
       { id: "99", name: "Resolve with required fields", to: { id: "4", name: "Resolved" }, fields: { resolution: { required: true } } },
     ] });
-    if (path === "/rest/api/2/issue/DESK-1") return Response.json({ fields: { status: state } });
+    if (path === "/rest/api/2/issue/DESK-1") return Response.json({ fields: { status: state }, changelog: { histories: [] } });
     throw new Error(`unexpected request: ${path}`);
   };
   return { fetch, writes, comments, rejectTransition: () => { rejectTransition = true; }, setState: (id: "pending" | "progress" | "waiting") => { state = statuses[id]; } };

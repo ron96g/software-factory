@@ -1,5 +1,6 @@
 import type { WorkItemRecord } from "../ports/agent-chat.ts";
 import { normalizeQuestions } from "../questions.ts";
+import { DIGEST_HISTORY_BUDGET, renderSourceHistory } from "./source-history.ts";
 
 const roundOf = (name: string) => /-r(\d+)(?:-replay-\d+)?$/.exec(name)?.[1] ?? "?";
 const clip = (s: string | undefined, n: number) => (!s ? "" : s.length > n ? `${s.slice(0, n)} …[truncated]` : s);
@@ -9,6 +10,7 @@ export function workItemDigest({ workItem: wi, runs, artifacts, clarifications: 
   const parts: string[] = [
     `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
     clip(wi.spec.description, 2000),
+    renderSourceHistory(wi, DIGEST_HISTORY_BUDGET),
     wi.spec.context ? `## Additional context from the team\n${clip(wi.spec.context, 4000)}` : "",
     wi.spec.originSnapshot ? `## Inherited work-item evidence (historical, captured ${wi.spec.originSnapshot.capturedAt})\n${wi.spec.originSnapshot.content}` : "",
     `Status: ${wi.status?.phase} · stage ${wi.status?.stage} · round ${wi.status?.round}`,

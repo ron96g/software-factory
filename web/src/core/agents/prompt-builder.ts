@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ExecutionContext, Prompt, PromptBuilder } from "../ports/index.ts";
+import { PROMPT_HISTORY_BUDGET, renderSourceHistory } from "./source-history.ts";
 
 const proposesKnowledge = (ctx: ExecutionContext) => ctx.skills.some((s) => s.metadata.name === "knowledge-base");
 
@@ -60,6 +61,7 @@ definitions. Do not report mere disagreement as proof of a defect. Keep each tex
     const parts = [
       `# Work item ${wi.metadata.name}: ${wi.spec.title}`,
       wi.spec.description ?? "(no description)",
+      ...(wi.spec.sourceHistory ? [renderSourceHistory(wi, PROMPT_HISTORY_BUDGET)] : []),
       ...(wi.spec.context?.trim()
         ? [`## Additional context from the team\nProvided by humans working on this item. Use it; don't ask for what it already answers.\n\n${wi.spec.context.trim()}`]
         : []),

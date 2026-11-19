@@ -1,7 +1,10 @@
-import type { Source, WorkItem } from "../model/kinds.ts";
+import type { Source, SourceHistory, WorkItem } from "../model/kinds.ts";
 import { API_VERSION, DEFAULT_NAMESPACE } from "../model/resource.ts";
 import {
   canFetch,
+  canFetchHistory,
+  FACTORY_COMMENT_MARKER,
+  type Clock,
   type EventRecorder,
   type FollowUpOriginResolver,
   type MirrorLinkChecker,
@@ -13,6 +16,7 @@ import {
 } from "../ports/index.ts";
 import { externalRefLabel } from "../issues/mirror.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { boundHistory } from "./history-bounds.ts";
 
 export const workItemNameFor = (source: string, externalId: string) => `${source}-${externalId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 
@@ -20,7 +24,9 @@ const LABEL_EXTERNAL_UPDATED = "factory.ai-dlc.io/external-updated-at";
 
 /** Imports ExternalItems as WorkItems (anti-corruption layer: connectors never create WorkItems themselves). */
 export class DefaultSourceSyncer implements SourceSyncer {
-  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder; mirrors?: MirrorLinkChecker; origins?: FollowUpOriginResolver };
+  private readonly d: { reader: ResourceReader; writer: ResourceWriter; connectors: Lookup<SourceConnector>; events: EventRecorder; clock: Clock; mirrors?: MirrorLinkChecker; origins?: FollowUpOriginResolver };
+  /** Last history error per `<source>/<externalId>`: a persistently unreadable ticket warns once, not every poll. */
+  private readonly historyErrors = new Map<string, string>();
   constructor(d: DefaultSourceSyncer["d"]) {
     this.d = d;
   }
@@ -36,6 +42,7 @@ export class DefaultSourceSyncer implements SourceSyncer {
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let failed = 0;
     for (const item of items) {
       const name = workItemNameFor(sourceName, item.externalId);
       if (await this.d.mirrors?.isUnlinkedMirror(item.description)) { skipped++; continue; }
@@ -45,6 +52,30 @@ export class DefaultSourceSyncer implements SourceSyncer {
         existing = byLabel[0] ?? null;
       }
       const origin = await this.d.origins?.resolve(item.description);
+      const changed = !existing || existing.metadata.annotations?.[LABEL_EXTERNAL_UPDATED] !== (item.updatedAt ?? "") || Boolean(origin && !existing.spec.originWorkItemRef);
+      // ADR-0070: where the connector can read the ticket's history, it is mandatory. Without it the item is left
+      // as it is (not created, not updated) and the next sync retries; the item's updated stamp isn't advanced.
+      let sourceHistory: SourceHistory | undefined;
+      if (canFetchHistory(connector) && (changed || !existing?.spec.sourceHistory)) {
+        const errorKey = `${sourceName}/${item.externalId}`;
+        try {
+          const h = await connector.fetchHistory(source, item.externalId);
+          sourceHistory = boundHistory({
+            ...h,
+            fetchedAt: this.d.clock.now().toISOString(),
+            comments: h.comments.map((c) => (c.body.includes(FACTORY_COMMENT_MARKER) ? { ...c, byFactory: true } : c)),
+          });
+          this.historyErrors.delete(errorKey);
+        } catch (e) {
+          failed++;
+          const message = e instanceof Error ? e.message : String(e);
+          if (this.historyErrors.get(errorKey) !== message) {
+            this.historyErrors.set(errorKey, message);
+            await this.d.events.warning(source, "HistoryUnavailable", `${item.externalId}: ticket history could not be read, item not ${existing ? "updated" : "imported"}: ${message}`);
+          }
+          continue;
+        }
+      }
       if (!existing) {
         await this.d.writer.create<WorkItem>({
           apiVersion: API_VERSION,
@@ -55,20 +86,27 @@ export class DefaultSourceSyncer implements SourceSyncer {
             description: item.description,
             sourceRef: { name: sourceName },
             externalRef: { id: item.externalId, url: item.url },
+            ...(sourceHistory ? { sourceHistory } : {}),
             ...(origin ?? {}),
           },
         });
         created++;
-      } else if (existing.metadata.annotations?.[LABEL_EXTERNAL_UPDATED] !== (item.updatedAt ?? "") || (origin && !existing.spec.originWorkItemRef)) {
+      } else if (changed || sourceHistory) {
         await this.d.writer.update<WorkItem>({
           ...existing,
           metadata: { ...existing.metadata, annotations: { ...existing.metadata.annotations, [LABEL_EXTERNAL_UPDATED]: item.updatedAt ?? "" } },
-          spec: { ...existing.spec, title: item.title, description: item.description, ...(origin && !existing.spec.originWorkItemRef ? origin : {}) },
+          spec: {
+            ...existing.spec,
+            title: item.title,
+            description: item.description,
+            ...(sourceHistory ? { sourceHistory } : {}),
+            ...(origin && !existing.spec.originWorkItemRef ? origin : {}),
+          },
         });
         updated++;
       }
     }
-    await this.d.events.normal(source, "Synced", `${created} created, ${updated} updated${skipped ? `, ${skipped} skipped (mirror not linked yet)` : ""}`);
+    await this.d.events.normal(source, "Synced", `${created} created, ${updated} updated${skipped ? `, ${skipped} skipped (mirror not linked yet)` : ""}${failed ? `, ${failed} failed (ticket history unavailable)` : ""}`);
     return { created, updated };
   }
 }

@@ -25,6 +25,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil, IconTrash } from "@tabler/icons-react";
 import Link from "next/link";
+import { TicketHistory } from "@/ui/ticket-history.tsx";
 import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
 import type { AgentRun, Approval, Clarification, Conversation, OutboxMessage, IssueProposal } from "@/core/model/kinds.ts";
@@ -226,6 +227,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
                 <Tabs.Tab value="artifacts">Artifacts ({d.artifacts.length})</Tabs.Tab>
                 <Tabs.Tab value="runs">Agent runs ({d.runs.length})</Tabs.Tab>
                 <Tabs.Tab value="description">Description</Tabs.Tab>
+                {wi.spec.sourceHistory && <Tabs.Tab value="ticket-history">Ticket history ({wi.spec.sourceHistory.comments.length})</Tabs.Tab>}
                 <Tabs.Tab value="human">Human input ({d.clarifications.length + d.approvals.length})</Tabs.Tab>
               </Tabs.List>
               <Tabs.Panel value="artifacts" pt="md">
@@ -237,6 +239,11 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
               <Tabs.Panel value="description" pt="md">
                 <MarkdownView>{wi.spec.description || "_No description._"}</MarkdownView>
               </Tabs.Panel>
+              {wi.spec.sourceHistory && (
+                <Tabs.Panel value="ticket-history" pt="md">
+                  <TicketHistory history={wi.spec.sourceHistory} externalId={wi.spec.externalRef?.id} url={wi.spec.externalRef?.url} />
+                </Tabs.Panel>
+              )}
               <Tabs.Panel value="human" pt="md">
                 <HumanHistory clarifications={d.clarifications} approvals={d.approvals} />
               </Tabs.Panel>

@@ -235,6 +235,40 @@ export interface Classification {
   confidence?: number;
 }
 
+/** One comment of the source ticket's conversation (ADR-0070). */
+export interface SourceComment {
+  id: string;
+  author: string;
+  createdAt: string;
+  updatedAt?: string;
+  /** `internal`: only the service-desk team sees it (also restricted comments). Never reveal it to the requester. */
+  visibility: "public" | "internal";
+  body: string;
+  /** Posted by the factory itself (echo marker). */
+  byFactory?: boolean;
+}
+
+/** One field change of the source ticket (status, assignee, priority, …). */
+export interface SourceChange {
+  at: string;
+  author: string;
+  field: string;
+  from?: string;
+  to?: string;
+}
+
+/**
+ * The source ticket's conversation and change history, written by sync like title and description (ADR-0070).
+ * Mandatory for sources whose connector can read it: an item is never imported or updated without it.
+ */
+export interface SourceHistory {
+  fetchedAt: string;
+  comments: SourceComment[];
+  changes: SourceChange[];
+  /** Entries beyond the connector's bound (oldest dropped). */
+  omitted?: { comments?: number; changes?: number };
+}
+
 export interface WorkItemSpec {
   title: string;
   description?: string;
@@ -243,6 +277,8 @@ export interface WorkItemSpec {
    * humans only; sync never touches it. Every agent sees it (ADR-0032).
    */
   context?: string;
+  /** Comments and change history of the source ticket; sync-only, humans never edit it (ADR-0070). */
+  sourceHistory?: SourceHistory;
   sourceRef: Ref;
   externalRef?: { id: string; url?: string };
   workflowRef?: Ref;
