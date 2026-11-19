@@ -79,6 +79,10 @@ import type {
   NewFollowUpInput,
   NewFollowUpTicketInput,
   FollowUpRelations,
+  FollowUpTicketDrafting,
+  FollowUpTicketDrafter,
+  FollowUpTicketDraft,
+  DraftFollowUpTicketInput,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
   BaseConflictDetector,
@@ -88,7 +92,7 @@ import type {
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
 import { deriveGateEvidence } from "./gate-evidence.ts";
-import { renderFollowUpTicketBody } from "../issues/followup-body.ts";
+import { renderFollowUpTicketBody, templateFollowUpTicketBody } from "../issues/followup-body.ts";
 import { originOf } from "../issues/origin.ts";
 import { workItemNameFor } from "../sources/syncer.ts";
 import { externalRefLabel } from "../issues/mirror.ts";
@@ -121,6 +125,8 @@ export interface FactoryAppDeps {
   baseConflicts?: BaseConflictDetector;
   /** ADR-0075: item capability detectors by name. Without them an item reports no capabilities. */
   capabilities?: Lookup<CapabilityDetector>;
+  /** ADR-0076: drafts follow-up tickets; without it, drafting is unavailable and Create uses the template. */
+  ticketDrafter?: FollowUpTicketDrafter;
 }
 
 const MAX_CONTEXT = 20_000;
@@ -156,6 +162,7 @@ export class FactoryApp
     ChatWorkItemCreator,
     WorkItemFollowUpQueries,
     WorkItemFollowUpCommands,
+    FollowUpTicketDrafting,
     PullRequestMaintenance,
     FeedbackActions
 {
@@ -443,31 +450,44 @@ export class FactoryApp
     if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
     if (typeof input.title !== "string" || !input.title.trim()) throw new Error("title is required");
     if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    if (input.body !== undefined && (typeof input.body !== "string" || !input.body.trim())) throw new Error("body must be non-empty text");
+    if ((input.body?.length ?? 0) > MAX_CONTEXT) throw new Error(`body is too long (max ${MAX_CONTEXT} characters)`);
+    if (input.draftConversation !== undefined && typeof input.draftConversation !== "string") throw new Error("draftConversation must be a name");
     const targets = await this.listIssueTargets(p);
     if (!targets.some((t) => t.source === input.targetSource)) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
     const target = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, input.targetSource);
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const r = this.d.redactor;
+    const title = r.redact(input.title.trim()).slice(0, 200);
+    const reviewed = input.body ?? templateFollowUpTicketBody({ instructions: r.redact(input.instructions ?? ""), originTitle: origin.spec.title, originDescription: origin.spec.description });
+    const body = r.redact(renderFollowUpTicketBody({ body: reviewed, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL }));
     const proposalName = `${name}-followup-${input.requestId}`;
     const existing = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
     if (existing) {
-      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource || existing.spec.title !== title || existing.spec.body !== body) {
+        throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      }
       return existing;
     }
     const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
     if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before creating the ticket.", "Conflict");
-    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
-    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
-    const r = this.d.redactor;
+    const conversation = input.draftConversation ? await this.draftConversationOf(name, input.draftConversation) : undefined;
+    const answered = conversation?.status?.transcriptRef && conversation.spec.agentRef
+      && (await this.d.transcripts.read(conversation.status.transcriptRef)).some((m) => m.role === "assistant" && m.author.id === conversation.spec.agentRef?.name);
+    const draftedBy = answered ? { agent: conversation.spec.agentRef!.name, conversation: conversation.metadata.name } : undefined;
     const cfg = target?.spec.writeBack?.issues;
     const spec: IssueProposal["spec"] = {
       purpose: "follow-up",
       targetRef: { name: input.targetSource },
-      title: r.redact(input.title.trim()).slice(0, 200),
-      body: r.redact(renderFollowUpTicketBody({ instructions: preview.instructions, snapshot: preview.snapshot, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL })),
+      title,
+      body,
       issueType: input.issueType?.trim() ? r.redact(input.issueType.trim()) : cfg?.issueType,
       ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
       pickUp: false,
       revision: preview.revision,
-      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString() },
+      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString(),
+        ...(draftedBy ? { draftedBy } : {}) },
     };
     const at = new Date().toISOString();
     try {
@@ -480,6 +500,45 @@ export class FactoryApp
       if (!isStoreError(e, "AlreadyExists")) throw e;
       return (await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName))!;
     }
+  }
+
+  private async draftConversationOf(workItem: string, name: string): Promise<Conversation> {
+    const c = await this.d.reader.get<Conversation>("Conversation", this.ns, name);
+    if (!c || c.spec.purpose !== "draft-ticket" || c.spec.workItemRef?.name !== workItem) throw new Error(`draft conversation ${name} does not belong to work item ${workItem}`);
+    return c;
+  }
+
+  async draftFollowUpTicket(p: Principal, name: string, input: DraftFollowUpTicketInput): Promise<FollowUpTicketDraft> {
+    const drafter = this.d.ticketDrafter;
+    if (!drafter) throw new Error("ticket drafting is not configured");
+    if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
+    if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    for (const [field, value] of [["title", input.title], ["instructions", input.instructions], ["feedback", input.feedback], ["conversation", input.conversation]] as const) {
+      if (value !== undefined && typeof value !== "string") throw new Error(`${field} must be text`);
+    }
+    if (input.previous !== undefined && (typeof input.previous !== "object" || typeof input.previous?.title !== "string" || typeof input.previous.body !== "string")) throw new Error("previous must have a title and a body");
+    if ((input.feedback?.length ?? 0) + (input.previous?.body.length ?? 0) > MAX_CONTEXT) throw new Error(`draft and feedback are too long (max ${MAX_CONTEXT} characters)`);
+    const target = (await this.listIssueTargets(p)).find((t) => t.source === input.targetSource);
+    if (!target) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
+    const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
+    if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before drafting.", "Conflict");
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const conversation = input.conversation
+      ? await this.draftConversationOf(name, input.conversation)
+      : await this.awaitTranscript(await this.d.writer.create<Conversation>({
+        apiVersion: API_VERSION, kind: "Conversation",
+        metadata: { name: "", generateName: `${name.slice(0, 50)}-draft-`, namespace: this.ns, ownerReferences: [ownerRef(origin)] },
+        spec: { workItemRef: { name }, agentRef: { name: drafter.agent }, purpose: "draft-ticket", startedBy: p.id,
+          title: this.d.redactor.redact(`Ticket draft: ${origin.spec.title}`).slice(0, 200) },
+      }));
+    const draft = await drafter.draft(conversation, {
+      namespace: this.ns, originTitle: origin.spec.title, originDescription: origin.spec.description,
+      instructions: preview.instructions, evidence: preview.snapshot.content,
+      target: { source: target.source, type: target.type, project: target.project, issueType: target.issueType },
+      title: input.title, previous: input.previous, feedback: input.feedback,
+    }, { type: "human", id: p.id });
+    return { ...draft, conversation: conversation.metadata.name };
   }
 
   async startImplementation(_p: Principal, proposalName: string, input: StartImplementationInput = {}): Promise<WorkItem> {
