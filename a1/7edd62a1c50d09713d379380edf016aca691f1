@@ -1,0 +1,106 @@
+web/src/core/testing/fixtures/workflows/test-planned.yaml
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 6
+  s_2e5609ec7cc3c1::t_122042d7bb6e6b 1-3,5,7-148
+  s_2e5609ec7cc3c1::t_7f6f1b80b5e9b7 4
+web/src/core/testing/fixtures/workflows/test-loop.yaml
+  s_2e5609ec7cc3c1::t_870d67af3e83ab 1-6,8-103
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 7
+web/src/core/planning-factory.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,48,55
+examples/workitem.yaml
+  s_2e5609ec7cc3c1::t_c90d61e0c32893 11
+web/src/core/verification.test.ts
+  s_2e5609ec7cc3c1::t_e30af34e1da367 511,515,517
+docs/ai-dlc-glossary.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 232
+web/src/core/factory.ts
+  s_2e5609ec7cc3c1::t_f6a1ed1640ee99 137
+  s_2e5609ec7cc3c1::t_cdc065c1391984 76,138,175
+AGENTS.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 159,220
+web/src/core/agent-chat.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 11,57,78,173,202,241,266,308,364,388,401,413,436
+web/src/core/item-chat.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,13,15
+web/src/core/knowledge.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 7,55,66,76,80,87,99
+web/src/core/work-item-followups.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 6,23,67,80,86,107,112,117
+web/src/core/testing/definitions.ts
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 10
+  s_2e5609ec7cc3c1::t_54cf1c182ab393 1-9,11-27
+web/src/core/sandbox.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 8,50,58
+web/src/core/review-loop.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,31,33
+web/src/core/factory.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,11,39-40,89,118,177,205,222,245,308-309,319,333,359,363,386,405,416
+docs/adr/0074-retire-legacy-code-workflows.md
+  s_2e5609ec7cc3c1::t_41230adf5439e1 50
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 1-49,51-58
+web/src/core/testing/fixtures/workflows/test-bolt.yaml
+  s_2e5609ec7cc3c1::t_870d67af3e83ab 1-5,7-64
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 6
+web/src/core/tool-loop.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,62,71,148,158
+web/src/core/gate-evidence.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 6,109,113
+web/src/acceptance/factory.acceptance.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,16,33,103
+docs/adr/0042-reliable-verification-and-recovery.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 3
+web/src/core/gate-input.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,17,20
+web/src/core/readonly-tools.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,46,49
+web/src/core/mcp.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 10,44,49,60,126
+README.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 182
+  s_2e5609ec7cc3c1::t_dff2601193bb3c 34,86,88-90,92-93,181,202-203
+workflows/servicedesk.yaml
+  s_2e5609ec7cc3c1::t_c90d61e0c32893 47
+web/src/core/workspace.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 5,28,31,66,69
+web/src/ui/verification-contract.tsx
+  s_2e5609ec7cc3c1::t_82554d2b21f9fa 3,6,16,25,33
+  s_2e5609ec7cc3c1::t_1c56628aeb2683 71
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 10
+docs/architecture.md
+  s_2e5609ec7cc3c1::t_f4edb41ad9b1f2 443,445,447
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 411,444,448
+  s_2e5609ec7cc3c1::t_dff2601193bb3c 126-127,129-130,308,410,412
+  s_2e5609ec7cc3c1::t_41230adf5439e1 128
+docs/adr/0003-factory-loop.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 5
+sources/sources.yaml
+  s_2e5609ec7cc3c1::t_c90d61e0c32893 21,107
+docs/adr/0050-one-planner-run-and-revocable-answers.md
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 3
+web/src/core/retrospectives.test.ts
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 24,260,264,268,295
+web/src/core/feedback.test.ts
+  s_2e5609ec7cc3c1::t_de8693e4322534 5,26,28
+web/src/core/v02.test.ts
+  s_2e5609ec7cc3c1::t_3c3d56dff43ed1 5,15-18,136,184
+  s_2e5609ec7cc3c1::t_b528a288bb9e01 14
+web/src/core/checks-pr.test.ts
+  s_2e5609ec7cc3c1::t_8753b5dc8ea982 45
+  s_2e5609ec7cc3c1::t_3c3b59ee11025c 7,84,120,136,162,175,199,221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a17edd62a1c50d09713d379380edf016aca691f1",
+  "prompts": {},
+  "sessions": {
+    "s_2e5609ec7cc3c1": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "d8386c56-98a3-4c0c-916e-8c395127a827",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
