@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileS
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { ANONYMOUS, type BaseConflictDetector, type PreparedWorkspace, type WorkspaceIntegrator } from "./ports/index.ts";
 
@@ -41,6 +42,7 @@ function setup(buildResults: number[], baseSync: BaseConflictDetector & Workspac
     make: () =>
       createFactory({
         definitionsRoot,
+        definitionLoader: testDefinitions({ root: definitionsRoot }),
         databasePath: ":memory:",
         env: { FACTORY_SANDBOX_RUNTIME: "in-memory" },
         sandboxes: [sandbox],
@@ -79,7 +81,7 @@ test("S5c: real checks run in the workspace (fail → retry implement → pass),
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Checks and PR", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Checks and PR", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.outbox.some((m) => m.status?.phase === "Delivered"));
     assert.equal(d.workItem.status?.retries?.verify, 1, "one failed attempt consumed the retry budget");
     assert.ok(d.events.some((e) => e.spec.reason === "CheckFailed" && /build/.test(e.spec.message)));
@@ -115,7 +117,7 @@ test("a repository without a git remote is not published: ship is reached with n
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "No remote", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "No remote", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.stage === "ship" && x.workItem.status.phase === "AwaitingApproval");
     assert.deepEqual(d.outbox.filter((m) => m.spec.action === "open-pull-request"), []);
     assert.deepEqual(s.published, []);
@@ -131,7 +133,7 @@ test("S5c: checks that keep failing exhaust maxAttempts and fail the item with t
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Always red", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Always red", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "Failed");
     assert.match(d.workItem.status!.message!, /checks failed after 3 attempt\(s\)/);
     assert.match(d.workItem.status!.message!, /exit 2/);
@@ -157,7 +159,7 @@ function movingBase(conflictingDetections: number) {
 test("ADR-0053: a publisher without base-conflict detection is rejected, whatever the runtime", async () => {
   await assert.rejects(
     createFactory({
-      definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "in-memory" }, log: () => {},
+      definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "in-memory" }, log: () => {},
       publisher: { publish: async (ws) => ({ branch: ws.spec.branch, commit: "head456", pushed: true }) },
     }),
     /base-conflict detection/,
@@ -170,7 +172,7 @@ test("ADR-0053: a PR that conflicts with the moved base is not opened; the base 
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Parallel work", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Parallel work", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.outbox.some((m) => m.status?.result?.url));
     const prs = d.outbox.filter((m) => m.spec.action === "open-pull-request");
     assert.equal(prs[0].status?.result?.conflict, true, "the first attempt reported the conflict instead of publishing");
@@ -194,7 +196,7 @@ test("ADR-0053: conflicts that keep coming back exhaust the budget and ask a hum
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Busy main", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Busy main", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     const d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "Blocked" && x.workItem.status.stage === "ship");
     assert.equal(d.workItem.status?.retries?.["base-conflict"], 2);
     const c = d.clarifications.find((x) => x.metadata.name === d.workItem.status?.blockedBy?.name)!;
@@ -216,7 +218,7 @@ test("ADR-0054: updating a published PR whose base moved on merges the base, res
   const f = await s.make();
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Published then stale", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Published then stale", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     await assert.rejects(f.app.updatePullRequest(p, wi.metadata.name), /has not reached ship/);
     let d = await drive(f, wi.metadata.name, (x) => x.workItem.status?.phase === "AwaitingApproval" && x.workItem.status.stage === "ship");
     await f.app.decideApproval(p, d.workItem.status!.blockedBy!.name, "approve");

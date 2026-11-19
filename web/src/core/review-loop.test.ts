@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -27,9 +28,9 @@ function fakeLLM(reviewOutcomes: string[]) {
 }
 
 async function runUntilCodeReviewGate(reviewOutcomes: string[]) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(reviewOutcomes), log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(reviewOutcomes), log: () => {} });
   await f.start();
-  const wi = await f.app.createWorkItem(p, { title: "Review loop", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+  const wi = await f.app.createWorkItem(p, { title: "Review loop", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
   for (let i = 0; i < 1000; i++) {
     const d = (await f.app.getWorkItem(p, wi.metadata.name))!;
     const st = d.workItem.status;

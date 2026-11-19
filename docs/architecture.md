@@ -109,6 +109,13 @@ pull-request publication, and the human input it waits on. Above the chips, the 
 running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
 agent tools that no sandbox provides, or a pull request that failed to deliver.
 
+Workflow-specific panels follow the item's **capabilities** (ADR-0075). `WorkItemDetail.capabilities` lists them
+(`planning`, `verification`, `checks`, `unit-execution`, `pull-requests`, `ticket-actions`, `retrospective`). They are
+derived by `CapabilityDetector`s registered in the composition root, from the compiled workflow, the item and its
+Source, and stay present once the item has records of them. The page renders panels from a registry
+(`web/src/ui/item-panels.tsx`) by region and required capabilities. A service desk item therefore shows its ticket
+actions but no verification contract, check evidence, Units or pull requests.
+
 **Ticket history** (ADR-0070): synced Jira items carry the ticket's comments (public/internal) and field changes in
 `spec.sourceHistory`; sync never imports or updates an item without it, every agent prompt includes it, and the item
 page shows it in the **Ticket history** tab.
@@ -123,10 +130,11 @@ reasons notify; history comes from `GET /api/notifications`, live frames from `/
 
 The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.
 Its single planner run produces requirements, Units, validation and implementation plan together, followed by one
-independent review and the existing verified human plan gate. `factory-planned` remains available for items already
-using its multi-stage planning chain; they are not migrated automatically. A human can explicitly migrate an eligible
-stopped item or an item paused in its planning stages, restarting at the one-planner stage and superseding the old
-workflow's planning and later evidence. ADR-0047 implements approved Units one at a time and
+independent review and the existing verified human plan gate. The multi-stage planning chain (`revisionStage` /
+`synthesisStage`) remains an engine capability, though no production workflow uses it since `factory-planned` was
+retired (ADR-0074). A human can explicitly migrate an eligible stopped item, or an item paused in its planning stages,
+from such a workflow. The migration restarts at the one-planner stage and supersedes the old workflow's planning and
+later evidence. ADR-0047 implements approved Units one at a time and
 keeps code review closed until every Unit is ready on the current candidate (see "Unit execution" below).
 The implementation plan is a JSON Artifact with readable Markdown sections and structured human decisions;
 the existing policy-controlled validation plan remains the verification contract. In `factory-plan` it is a focused
@@ -304,7 +312,7 @@ proposed resource, concurrency, provenance and acceptance contracts.
 
 ## Unit execution (ADR-0047)
 
-On `factory-planned`, the validation plan carries the approved Unit manifest. The implementation stage runs one
+On `factory-plan`, the validation plan carries the approved Unit manifest. The implementation stage runs one
 developer attempt per round, each assigned to the first Unit whose dependencies are ready; its `unit-progress` gate
 checks the structured result and runs the Unit's readiness checks before moving to the next Unit.
 
@@ -406,8 +414,9 @@ Checks accept a command string (15-minute default) or `{command, timeoutMs}` in 
 budgets must be positive integers no greater than 24 hours. Typed timeout/signal/spawn errors remain separate from
 generic UnknownFailure. Standalone evidence does not advance/restart items or satisfy a workflow gate automatically.
 
-X23b/c add the explicitly selected `factory-verified` workflow. Its architect writes a JSON `validation-plan` mapping
-every acceptance criterion to named policy checks. Human spec-review approves its exact artifact/specification,
+X23b/c add verification-enabled workflows (`spec.verification`; today `factory-plan`, whose planner writes the plan,
+since `factory-verified` was retired by ADR-0074). The JSON `validation-plan` maps every acceptance criterion to named
+policy checks. Human spec-review approves its exact artifact/specification,
 workflow versions and repository policy, then same-environment preflight runs before construction. Restarting directly
 into implementation cannot bypass this policy: entering any later stage with missing or stale preflight evidence (e.g.
 after a definition change and plan re-confirmation) reruns preflight in place, within its budgets, instead of asking a
@@ -438,12 +447,12 @@ genuine complete test-failure events. Preflight nonzero results are SetupFailed.
 Required checks without usable, current evidence cannot pass. Where repository policy explicitly permits it, a
 fresh human waiver names the exact missing requirements and needs a reason; it binds plan/policy/candidate/evidence
 revisions and remains **Waived**, not Passed. Non-waivable gaps and stale approvals block. Publication rechecks evidence
-before entering the outbox. Migrating a stopped item via **Use verified workflow** preserves workspace/history,
-restarts at validation planning with fresh human reviews, and sets a durable publication hold. It never approves
-anything or enables pushes.
+before entering the outbox. A durable publication hold (`publicationDisabled`) blocks publishing regardless of
+approvals. There is no migration into a verified workflow (ADR-0074). The **Verification contract** card appears only
+for workflows with a verification policy.
 
-Legacy gate caching, retry routing and warnings for unsupported checks remain unchanged for non-migrated workflows.
-No existing item is migrated or restarted automatically. Controlplane build/test checks retain explicit 30/60-minute
+Workflows without a verification policy keep the earlier gate caching, retry routing and warnings for unsupported
+checks; since ADR-0074 no production workflow runs checks without a policy. No existing item is restarted automatically. Controlplane build/test checks retain explicit 30/60-minute
 budgets; their module scope follows ADR-0044 below. Its existing preflight checks Go/make/gotestsum and prepares
 Rover envtest assets; selected modules' supported Makefile targets also prepare their own assets. Missing integration/acceptance/security
 checks remain visible requirements needing evidence or explicit permitted waivers.

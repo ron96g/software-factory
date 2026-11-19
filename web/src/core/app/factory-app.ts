@@ -12,6 +12,7 @@ import type {
   IssueProposal,
   Repository,
   Source,
+  CheckRun,
   WorkItem,
   Workflow,
   Workspace,
@@ -43,6 +44,9 @@ import type {
   NewFeedbackInput,
   ItemConversationActions,
   Lookup,
+  CapabilityDetector,
+  CapabilityFacts,
+  CompiledWorkflow,
   KindLookup,
   KnowledgeActions,
   IssueProposalActions,
@@ -115,6 +119,8 @@ export interface FactoryAppDeps {
   clock: Clock;
   /** ADR-0054: compares published pull requests with the current base. */
   baseConflicts?: BaseConflictDetector;
+  /** ADR-0075: item capability detectors by name. Without them an item reports no capabilities. */
+  capabilities?: Lookup<CapabilityDetector>;
 }
 
 const MAX_CONTEXT = 20_000;
@@ -183,9 +189,10 @@ export class FactoryApp
     let stages: WorkItemDetail["stages"] = [];
     let verified = false;
     let feedbackPlan: FeedbackPlan | undefined;
+    let workflow: CompiledWorkflow | undefined;
     if (workItem.spec.workflowRef) {
       try {
-        const wf = await this.d.compiler.compile(workItem.spec.workflowRef, this.ns);
+        const wf = workflow = await this.d.compiler.compile(workItem.spec.workflowRef, this.ns);
         verified = !!wf.verification;
         stages = wf.stages.map((s) => ({ name: s.name, lifecyclePhase: s.lifecyclePhase, gate: s.gate?.type,
           steps: s.steps.map((step) => ({ name: step.name, agent: step.agentRef.name })), ...(s.publish?.pullRequest ? { publishes: true } : {}) }));
@@ -203,11 +210,24 @@ export class FactoryApp
       return { name: repo, publishable: !!resolved && isPublishable(resolved) };
     }));
     const issues = await this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } });
+    const capabilities = await this.capabilities({ workItem, workflow, runs, outbox });
     return {
       workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge, issues,
       feedback: feedbackViews(feedback, runs, artifacts).sort((a, b) => (a.feedback.metadata.creationTimestamp ?? "").localeCompare(b.feedback.metadata.creationTimestamp ?? "")),
-      feedbackPlan,
+      feedbackPlan, capabilities,
     };
+  }
+
+  private async capabilities(facts: Omit<CapabilityFacts, "source" | "checkRuns">): Promise<string[]> {
+    const detectors = this.d.capabilities;
+    if (!detectors?.keys().length) return [];
+    const { workItem } = facts;
+    const [source, checkRuns] = await Promise.all([
+      resolveRef<Source>(this.d.reader, "Source", workItem.spec.sourceRef, this.ns),
+      this.d.reader.list<CheckRun>("CheckRun", { namespace: this.ns, ownedBy: { kind: "WorkItem", name: workItem.metadata.name, namespace: this.ns } }),
+    ]);
+    const all = { ...facts, source: source ?? undefined, checkRuns };
+    return detectors.keys().filter((name) => detectors.get(name)!.detect(all)).sort();
   }
 
   async newItemOptions(_p: Principal): Promise<NewItemOptions> {

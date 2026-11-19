@@ -32,8 +32,9 @@ import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
 import type { AgentRun, Approval, Artifact, Clarification, Conversation, OutboxMessage, IssueProposal } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
-import type { FeedbackView, GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/ports/app.ts";
+import type { FeedbackView, GateEvidence, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, api, useLive } from "@/ui/api.ts";
+import { itemPanels, type ItemPanelContext, type ItemPanelRegion } from "@/ui/item-panels.tsx";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
 import { EvidenceArtifacts } from "@/ui/evidence-artifacts.tsx";
@@ -42,15 +43,9 @@ import { EventTimeline } from "@/ui/event-timeline.tsx";
 import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
-import { RetrospectivePanel } from "@/ui/retrospectives.tsx";
 import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
-import { TicketActionsPanel } from "@/ui/ticket-actions.tsx";
-import { CheckRunsPanel } from "@/ui/check-runs.tsx";
-import { VerificationContractPanel } from "@/ui/verification-contract.tsx";
-import { UnitProgressPanel } from "@/ui/unit-progress.tsx";
 import { RecoveryPanel } from "@/ui/recovery-panel.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
-import PlanningWorkspace from "@/ui/planning-workspace.tsx";
 import { normalizeQuestions } from "@/core/questions.ts";
 import { AnnotatedArtifact, NoteCount, travellingNotes } from "@/ui/selection-feedback.tsx";
 
@@ -62,7 +57,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const { name } = use(params);
   const router = useRouter();
   const { data: d, error } = useLive<WorkItemDetail>(`/api/workitems/${name}`, (n) => n.workItem === name || n.name === name);
-  const planning = useLive<PlanningWorkspaceData>(`/api/workitems/${encodeURIComponent(name)}/planning`, (n) =>
+  const planning = useLive<PlanningWorkspaceData>(d?.capabilities.includes("planning") ? `/api/workitems/${encodeURIComponent(name)}/planning` : null, (n) =>
     n.workItem === name || n.name === name || ["Workflow", "Repository"].includes(n.kind ?? ""));
   const [openRun, setOpenRun] = useState<string | null>(null);
   const [openStage, setOpenStage] = useState<string | null>(null);
@@ -104,6 +99,9 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const openClar = d.clarifications.find((c) => c.metadata.name === st?.blockedBy?.name && st?.phase === "Blocked");
   const openAppr = d.approvals.find((a) => a.metadata.name === st?.blockedBy?.name && st?.phase === "AwaitingApproval");
   const run = d.runs.find((r) => r.metadata.name === openRun) ?? null;
+  const panelContext: ItemPanelContext = { detail: d, constructing, planning, onOpenRun: setOpenRun };
+  const panels = (region: ItemPanelRegion) => itemPanels(region, panelContext).map((p) => p.render(panelContext));
+  const operational = itemPanels("operational", panelContext);
   // Re-publication (ADR-0054) delivers the same PR again in later rounds: show each PR once.
   const pullRequests = [...new Map(d.outbox.flatMap((m) => {
     const result = m.status?.result;
@@ -182,7 +180,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Stack>
       </Modal>
       <WorkItemFollowUps item={wi} />
-      {wi.spec.retrospective && <RetrospectivePanel item={wi} />}
+      {panels("summary")}
       <Modal opened={chatOpen} onClose={() => setChatOpen(false)} title="Chat with an agent about this work item" size="lg">
         <Stack>
           <Text size="sm">The agent receives this item's details, runs, artifacts and human input, refreshed before each turn, and can use its allowed read-only MCP tools. The workflow and gates stay unchanged. Repository file access is not enabled by attaching the item.</Text>
@@ -211,19 +209,12 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       <FeedbackSubmitBar d={d} withPlan={!!planning.data?.canRevise && !constructing ? travellingNotes(d, planning.data.revisionStage) : 0} />
       {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
-      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || !!openAppr.spec.verification.rebinds || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
-      {pullRequests.length > 0 && <PullRequestPanel key={`prs-${wi.metadata.uid ?? wi.metadata.name}`} d={d} />}
-      {!wi.spec.retrospective && <TicketActionsPanel key={`tickets-${wi.metadata.name}`} item={wi} />}
-      {constructing && !wi.spec.retrospective && <UnitProgressPanel key={`units-${wi.metadata.uid ?? wi.metadata.name}`} item={wi} />}
-      <PlanningWorkspace key={wi.metadata.uid ?? wi.metadata.name}
-        workspace={planning.data} error={planning.error} reload={planning.reload}
-        detail={d} onOpenRun={setOpenRun} summary={constructing} />
+      {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || !!openAppr.spec.verification.rebinds || !d.capabilities.includes("planning")) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
+      {panels("attention")}
+      {panels("primary")}
 
       <OperationalDetails collapsed={planningEnabled}>
-      {!wi.spec.retrospective && <Stack mb="md">
-        <VerificationContractPanel key={wi.metadata.uid ?? wi.metadata.name} item={wi} />
-        <CheckRunsPanel key={`checks-${wi.metadata.name}`} item={wi} />
-      </Stack>}
+      {operational.length > 0 && <Stack mb="md">{operational.map((p) => p.render(panelContext))}</Stack>}
       <Grid>
         <Grid.Col span={{ base: 12, md: 8 }}>
           {!planningEnabled && <ContextCard d={d} />}
@@ -458,62 +449,6 @@ function ContextCard({ d }: { d: WorkItemDetail }) {
         <Text size="xs" c="dimmed" mt="xs">
           Agents use it from their next run. To redo steps that already ran, use Restart.
         </Text>
-      )}
-    </Card>
-  );
-}
-
-/**
- * ADR-0054: published pull requests go stale when the base branch moves on. Checking compares them with the current
- * base; updating re-publishes from the publish stage, where conflicts are merged and resolved before the push.
- */
-function PullRequestPanel({ d }: { d: WorkItemDetail }) {
-  const name = d.workItem.metadata.name;
-  const [status, setStatus] = useState<PublishedPullRequest[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const check = async () => {
-    setChecking(true);
-    setError(null);
-    try { setStatus(await api<PublishedPullRequest[]>(`/api/workitems/${name}/pull-requests`)); }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    finally { setChecking(false); }
-  };
-  const update = async () => {
-    setUpdating(true);
-    if (await act(`/api/workitems/${name}/pull-requests`, {}, "Updating the pull request from the publish stage")) setStatus(null);
-    setUpdating(false);
-  };
-  const conflicting = status?.filter((pr) => pr.conflicts.length) ?? [];
-  return (
-    <Card withBorder>
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Group gap="xs"><IconGitPullRequest size={18} /><Text fw={600}>Pull request</Text></Group>
-          <Text size="sm" c="dimmed">
-            Other work may change the base branch after publication. Updating re-publishes from the publish stage: the latest base is merged,
-            conflicts go to the developer agent, and the changed candidate passes review and verification again before it is pushed to the same pull request.
-          </Text>
-        </Stack>
-        <Group gap="xs" wrap="nowrap">
-          <Button variant="default" loading={checking} onClick={() => void check()}>Check for conflicts</Button>
-          <Button leftSection={<IconRefresh size={16} />} loading={updating} onClick={() => void update()}>Update pull request</Button>
-        </Group>
-      </Group>
-      {error && <Alert mt="sm" color="red" title="Could not check the pull request">{error}</Alert>}
-      {status && (
-        <Stack gap={4} mt="sm">
-          {status.map((pr) => (
-            <Group key={pr.url} gap="xs">
-              <Anchor href={pr.url} target="_blank" rel="noopener noreferrer">{pr.repository} #{pr.number}</Anchor>
-              {pr.error ? <Badge color="gray" variant="light">{pr.error}</Badge>
-                : pr.conflicts.length ? <Tooltip label={pr.conflicts.join(", ")}><Badge color="red" variant="light">Conflicts with {pr.base}: {pr.conflicts.length} file(s)</Badge></Tooltip>
-                : <Badge color="teal" variant="light">Merges cleanly into {pr.base}</Badge>}
-            </Group>
-          ))}
-          {conflicting.length > 0 && <Text size="sm">Use <strong>Update pull request</strong> to resolve the conflicts.</Text>}
-        </Stack>
       )}
     </Card>
   );

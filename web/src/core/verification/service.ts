@@ -890,25 +890,4 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     }
     catch (e) { if (!isStoreError(e, "Invalid")) throw e; return { ...result, error: this.d.redactor.redact(e.message) }; }
   }
-
-  async migrate(p: Principal, name: string, input: { workflow: string; requestId: string }) {
-    if (!input.workflow?.trim() || !input.requestId?.trim() || input.requestId.length > 200) return invalid("workflow and bounded requestId are required");
-    const item = await this.item(name);
-    const id = `verification:${input.requestId}`;
-    if (item.spec.restart?.id === id) {
-      if (item.spec.workflowRef?.name !== input.workflow) throw new StoreError("migration request ID reused with different workflow", "Conflict");
-      return item;
-    }
-    if (!["Failed", "Done", "Closed"].includes(item.status?.phase ?? "")) throw new StoreError("migration requires a stopped work item", "Conflict");
-    const checks = await this.d.reader.list<CheckRun>("CheckRun", owned(item));
-    const agents = await this.d.reader.list<AgentRun>("AgentRun", owned(item));
-    if (checks.some(active) || agents.some((r) => ["Running", "Pending"].includes(r.status?.phase ?? "Pending"))) throw new StoreError("wait for active agents/checks before migration", "Conflict");
-    const wf = await this.d.compiler.compile({ name: input.workflow }, nsOf(item));
-    if (!wf.verification) return invalid("target workflow is not verification-enabled");
-    verificationPolicy(wf);
-    const updated = await this.d.writer.update<WorkItem>({ ...item, spec: { ...item.spec, workflowRef: { name: input.workflow }, publicationDisabled: true,
-      restart: { id, stage: wf.verification.planningStage, requestedBy: p.id } } });
-    await this.d.events.normal(updated, "VerificationMigration", `${p.id}: migrated to ${input.workflow}; fresh validation review required; publication disabled`);
-    return updated;
-  }
 }
