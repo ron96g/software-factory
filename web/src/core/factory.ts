@@ -12,6 +12,7 @@ import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
+import { BUILTIN_CAPABILITY_DETECTORS } from "./capabilities/detectors.ts";
 import { CompositeStore, DefinitionStore, ScopeRouter } from "./store/composite-store.ts";
 import { AdmissionChain, AdmittedStore } from "./admission/chain.ts";
 import { nameValidator, namespaceDefaulter, recoveryPolicyValidator, refValidator, requiredFieldsValidator, sourceDefaultsMutator } from "./admission/builtins.ts";
@@ -73,7 +74,7 @@ import { OpenCodeHost } from "./adapters/opencode/host.ts";
 import { OpenCodeExecutor } from "./adapters/opencode/executor.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
-import type { ConversationTurnRunner, DefinitionLoader, FinishValidator } from "./ports/index.ts";
+import type { CapabilityDetector, ConversationTurnRunner, DefinitionLoader, FinishValidator } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 import { TicketActions } from "./tickets/actions.ts";
@@ -474,7 +475,10 @@ export async function createFactory(o: FactoryOptions) {
   responders.register("explain-item", new ItemExplainResponder({ records: itemRecords, transcripts, recorders, models, redactor }));
   responders.register("refine-knowledge", new KnowledgeRefineResponder({ reader: store, transcripts, recorders, models, redactor }));
 
+  const capabilities = new Registry<CapabilityDetector>();
+  for (const [name, detector] of Object.entries(BUILTIN_CAPABILITY_DETECTORS)) capabilities.register(name, detector);
   const app = new FactoryApp({
+    capabilities,
     approvalGuards: [retrospectiveReview],
     verificationGuard: verification,
     reader: store,

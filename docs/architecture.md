@@ -109,6 +109,13 @@ pull-request publication, and the human input it waits on. Above the chips, the 
 running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
 agent tools that no sandbox provides, or a pull request that failed to deliver.
 
+Workflow-specific panels follow the item's **capabilities** (ADR-0075). `WorkItemDetail.capabilities` lists them
+(`planning`, `verification`, `checks`, `unit-execution`, `pull-requests`, `ticket-actions`, `retrospective`). They are
+derived by `CapabilityDetector`s registered in the composition root, from the compiled workflow, the item and its
+Source, and stay present once the item has records of them. The page renders panels from a registry
+(`web/src/ui/item-panels.tsx`) by region and required capabilities. A service desk item therefore shows its ticket
+actions but no verification contract, check evidence, Units or pull requests.
+
 **Ticket history** (ADR-0070): synced Jira items carry the ticket's comments (public/internal) and field changes in
 `spec.sourceHistory`; sync never imports or updates an item without it, every agent prompt includes it, and the item
 page shows it in the **Ticket history** tab.

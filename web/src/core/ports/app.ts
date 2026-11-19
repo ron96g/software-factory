@@ -88,6 +88,8 @@ export interface WorkItemDetail {
   feedback: FeedbackView[];
   /** What "Submit feedback" would do now; set while drafts exist. */
   feedbackPlan?: FeedbackPlan;
+  /** Item capabilities (ADR-0075): which workflow-specific views apply, e.g. `checks`, `ticket-actions`. Sorted. */
+  capabilities: string[];
 }
 
 export interface WorkItemQueries {

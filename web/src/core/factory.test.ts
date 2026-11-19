@@ -276,6 +276,7 @@ test("servicedesk workflow: response review rejects/redrafts, then a fresh publi
     const name = "jira-servicedesk-desk-1";
     let d = await waitFor(phaseIs(f, name, "AwaitingApproval"), "response-review");
     assert.equal(d.workItem.spec.workflowRef?.name, "servicedesk");
+    assert.deepEqual(d.capabilities, ["ticket-actions"], "ADR-0075: only the reviewed ticket actions, no code-pipeline panels");
     assert.deepEqual(d.stages.map((s) => s.name), ["classify", "investigate", "respond", "response-review", "publish-response"]);
     assert.equal(d.workItem.status?.stage, "response-review");
     for (const t of ["research-notes", "support-analysis", "customer-response"]) assert.ok(d.artifacts.some((a) => a.spec.artifactTypeRef.name === t), t);
@@ -299,6 +300,15 @@ test("servicedesk workflow: response review rejects/redrafts, then a fresh publi
     assert.equal((await f.app.getWorkItem(p, name))?.workItem.spec.context, "Customer uses the Rover CLI in eu-central.");
     assert.deepEqual(writes, [], "read-only source: nothing was written to Jira");
   }, fetchImpl);
+});
+
+test("ADR-0075: item capabilities follow the production workflows", async () => {
+  await withFactory({}, async (f) => {
+    const caps = async (workflowRef: string) =>
+      (await f.app.getWorkItem(p, (await f.app.createWorkItem(p, { title: workflowRef, description: "x", workflowRef })).metadata.name))!.capabilities;
+    assert.deepEqual(await caps("factory-plan"), ["checks", "planning", "pull-requests", "unit-execution", "verification"]);
+    assert.deepEqual(await caps("servicedesk"), [], "no code-pipeline panels for a service request");
+  });
 });
 
 test("new item: offers top-level workflows and readable repositories, applies the picks, rejects unusable ones", async () => {

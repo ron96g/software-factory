@@ -117,6 +117,7 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Check scope** | The modules a scoped check covers: `changed`, `affected` (changed plus transitive dependents, ADR-0044) or `full`. Chosen by the tier (policy may raise it with `minScope`), widened to `full` for shared or unknown paths. |
 | **Check worker** | The process that executes CheckRuns outside the web server, claiming them with fenced leases and limiting concurrency (ADR-0062). |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
+| **Item capability** | A named feature a work item supports (`planning`, `verification`, `checks`, `pull-requests`, `ticket-actions`, …). Derived by registered detectors from the compiled workflow, the item and its Source; present when declared **or** already used. The item page shows a workflow-specific panel only when its capabilities are present (ADR-0075). |
 | **Gate evidence** | What a human sees at a gate: structured verdicts (e.g. verifier pass/partial/fail), check results, open questions. Graded ok/warning/blocking (ADR-0027). |
 | **Delegation (at a gate)** | "Approve & let agents decide": open decisions are resolved by agents with the recommended/conservative default, documented under "Decisions taken". Gate comments are input for later agents. |
 | **Agent model mapping** | `ModelProvider.agentModels`: assigns a specific model to an agent, overriding its tier (ADR-0028). |
