@@ -31,7 +31,7 @@ References follow the Kubernetes `*Ref` convention:
 ```yaml
 agentRef:     { name: product-owner }          # → agents/product-owner.md
 skillRefs:    [{ name: user-story-writing }]   # → skills/user-story-writing.md
-workflowRef:  { name: construction-bolt }      # → sub-workflow
+workflowRef:  { name: factory-plan }           # → workflows/factory-plan.yaml
 inputs:       [{ artifactRef: { name: user-stories } }]
 ```
 
@@ -83,14 +83,14 @@ Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless `NODE_USE_ENV_
 work: Next.js loads that file after Node has started. Otherwise source sync and LLM calls fail with
 `fetch failed: Connect Timeout Error`.
 
-## Plan-first work items (ADR-0045, ADR-0046)
+## Plan-first work items (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
-In **New item**, explicitly choose **factory-planned**, select repositories with verification policy, and supply the
-goal and any **Additional context**. Existing items and workflow defaults are unchanged. Agents research and draft
-the specification, Units, validation and implementation plan before asking for a consolidated human review.
+Code changes run on **factory-plan**, the default for manual, Jira and GitHub items. In **New item**, select
+repositories with verification policy and supply the goal and any **Additional context**. One planner run drafts the
+specification, Units, validation and implementation plan before asking for a consolidated human review.
 
-The item's **Planning workspace** is the primary view: outcome, scope, approach, ordered delivery, acceptance and
-risks, followed by one decision sheet. Answer required decisions together; optional choices show recommended
+The item's **Planning workspace** is the primary view: the specification, Units, validation and implementation plan,
+followed by one decision sheet. Answer required decisions together; optional choices show recommended
 defaults. Submitting answers, editing plan sections/context, or requesting changes saves human intent and
 asynchronously regenerates the proposal from requirements. Compare revisions, then explicitly **Approve plan**.
 Saving or answering never approves the result. Changed context/evidence makes old approvals unusable.
@@ -178,9 +178,8 @@ status-only action rather than publishing the reply again.
 
 ## Reliable verification (ADR-0042)
 
-Use **Use verified workflow** on a stopped item's detail page to explicitly migrate to `factory-verified`.
-This preserves its workspace/history, restarts validation planning and disables publication. Deployment alone
-never migrates or restarts existing items.
+`factory-plan` carries the verification contract. The item page's **Verification contract** card appears only for
+workflows with a verification policy; there is no migration from other workflows (ADR-0074).
 
 Review the JSON validation plan and its criterion/check mappings at the fresh spec-review gate. Only after human
 approval do configured same-environment preflights and construction start. Required checks run as durable CheckRuns;
@@ -200,8 +199,8 @@ opt in with `moduleScope: {graph, sharedPaths, nonBuildPaths}` and `moduleScoped
 Policy changes require a fresh human-reviewed validation plan; deploying this does not restart existing items.
 
 Missing required evidence blocks verification. Policy-permitted exceptions require an explicit, reasoned,
-revision-bound waiver and remain **Waived**, not Passed. Migrated items retain their publication hold even after
-approvals. The legacy `factory-loop` workflow is unchanged.
+revision-bound waiver and remain **Waived**, not Passed. A publication hold (`publicationDisabled`) stays in place
+even after approvals.
 
 ## MCP (ADR-0034)
 

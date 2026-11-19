@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-11
-- **Amended by:** ADR-0065
+- **Amended by:** ADR-0065, ADR-0074 (the loop is now implemented by `workflows/factory-plan.yaml`)
 
 ## Context
 AI-DLC defines Inception, Construction, and Operations, with human oversight. We need a concrete, operable loop.

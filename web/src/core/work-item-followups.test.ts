@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS as p, type NewFollowUpInput } from "./ports/index.ts";
 import type { AgentRun, Artifact, WorkItem } from "./model/kinds.ts";
 import { LABEL_SUPERSEDED } from "./model/kinds.ts";
@@ -19,7 +20,7 @@ test("factory shutdown waits for a newly started background agent before closing
   const hold = new Promise<void>((r) => { release = r; });
   let requested!: () => void;
   const request = new Promise<void>((r) => { requested = r; });
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-shutdown-fixture" },
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-shutdown-fixture" },
     fetch: async () => { requested(); await hold; return Response.json({ choices: [{ message: { content: '{"summary":"done","artifacts":[],"questions":[]}' } }] }); } });
   let stopping: Promise<void> | undefined;
   try {
@@ -63,7 +64,7 @@ test("follow-up: synced origin stays unchanged; selected workflow gets separate 
     prompts.push(body.messages.filter((m) => m.role === "user").map((m) => m.content).join("\n"));
     return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] });
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env, fetch: mock });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env, fetch: mock });
   await f.start();
   try {
     await f.app.syncSource(p, "jira-servicedesk");
@@ -76,13 +77,13 @@ test("follow-up: synced origin stays unchanged; selected workflow gets separate 
     assert.deepEqual(await f.app.getWorkItem(p, name), before, "preview has no writes");
     assert.match(preview.snapshot.content, /support-analysis/);
     assert.match(preview.snapshot.content, /not approved for the new workflow/);
-    const input: NewFollowUpInput = { requestId: "feature-xyz", expectedRevision: preview.revision, title: "Feature XYZ", description: "Implement additional publisher credential support.", context: instructions, workflowRef: "factory-loop", repositoryRefs: ["software-factory"] };
+    const input: NewFollowUpInput = { requestId: "feature-xyz", expectedRevision: preview.revision, title: "Feature XYZ", description: "Implement additional publisher credential support.", context: instructions, workflowRef: "test-loop", repositoryRefs: ["software-factory"] };
     env.OPENAI_API_KEY = "sk-followup-fixture";
     const [item, duplicate] = await Promise.all([f.app.createWorkItemFollowUp(p, name, input), f.app.createWorkItemFollowUp(p, name, input)]);
     assert.equal(item.metadata.name, duplicate.metadata.name);
     assert.equal(item.spec.sourceRef.name, "manual");
     assert.equal(item.spec.externalRef, undefined);
-    assert.equal(item.spec.workflowRef?.name, "factory-loop");
+    assert.equal(item.spec.workflowRef?.name, "test-loop");
     assert.deepEqual(item.spec.repositoryRefs, [{ name: "software-factory" }]);
     assert.equal(item.spec.context, instructions);
     assert.equal(item.spec.originWorkItemRef?.name, name);
@@ -103,17 +104,17 @@ test("follow-up: synced origin stays unchanged; selected workflow gets separate 
 });
 
 test("follow-up: stale previews conflict; retries survive origin deletion and do not overwrite edits or attach to a recreated origin", async () => {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {} });
   try {
     const source = await f.app.createWorkItem(p, { title: "Original", description: "An original request" });
     const name = source.metadata.name;
     const preview = await f.app.previewWorkItemFollowUp(p, name, "Implement XYZ");
-    const base: NewFollowUpInput = { requestId: "independent", expectedRevision: preview.revision, title: "Independent feature", context: "Implement XYZ", workflowRef: "factory-loop", repositoryRefs: ["software-factory"] };
+    const base: NewFollowUpInput = { requestId: "independent", expectedRevision: preview.revision, title: "Independent feature", context: "Implement XYZ", workflowRef: "test-loop", repositoryRefs: ["software-factory"] };
     await f.app.updateWorkItemContext(p, name, "New source evidence");
     await assert.rejects(f.app.createWorkItemFollowUp(p, name, base), /Refresh the context preview/);
     const fresh = await f.app.previewWorkItemFollowUp(p, name, base.context);
     const input = { ...base, expectedRevision: fresh.revision };
-    await assert.rejects(f.app.createWorkItemFollowUp(p, name, { ...input, workflowRef: "construction-bolt" }), /can't be used/);
+    await assert.rejects(f.app.createWorkItemFollowUp(p, name, { ...input, workflowRef: "test-bolt" }), /can't be used/);
     await assert.rejects(f.app.createWorkItemFollowUp(p, name, { ...input, repositoryRefs: [] }), /select at least one repository/);
     const item = await f.app.createWorkItemFollowUp(p, name, input);
     const another = await f.app.createWorkItemFollowUp(p, name, { ...input, requestId: "another" });

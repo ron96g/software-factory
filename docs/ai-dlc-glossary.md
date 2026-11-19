@@ -229,7 +229,7 @@ flowchart LR
 | Phase (Inception / Construction / Operations) | `Workflow.spec.phases[]` |
 | Mob Elaboration / Mob Construction | `stage` + `human-approval` gate |
 | Intent, Story, Unit, Domain Model, … | `ArtifactType` |
-| Bolt | Sub-`Workflow` (`construction-bolt`) fanned out per Unit |
+| Bolt | One Unit's construction: `factory-plan` implements approved Units one at a time (ADR-0047); `forEach` sub-workflow fan-out stays an engine capability (ADR-0074) |
 | Human oversight | `gate.type: human-approval` |
 | Persistent context | Step `inputs` / `outputs` via `artifactRef` |
 | Human roles | `Agent.spec.humanCounterpart`, `gate.approvers` |

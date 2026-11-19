@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { deriveGateEvidence, parseVerdict } from "./app/gate-evidence.ts";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 import type { AgentRun, FactoryEvent } from "./model/kinds.ts";
 import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
@@ -105,11 +106,11 @@ test("X5: a failed verification can't be approved by accident (server-enforced o
       : { summary: "ok", outcome: system.includes("## Skill: code-review") ? "approve" : "accept", artifacts: [], questions: [] };
     return Response.json({ choices: [{ message: { content: JSON.stringify(out) } }] });
   }) as typeof fetch;
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_SANDBOX_RUNTIME: "in-memory" }, fetch: fetchImpl, sandboxes: [new InMemorySandboxEnvironment()], log: () => {} });
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_SANDBOX_RUNTIME: "in-memory" }, fetch: fetchImpl, sandboxes: [new InMemorySandboxEnvironment()], log: () => {} });
   await f.start();
   const p = ANONYMOUS;
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Guarded release", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Guarded release", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     let d = null;
     for (let i = 0; i < 1000; i++) {
       d = (await f.app.getWorkItem(p, wi.metadata.name))!;

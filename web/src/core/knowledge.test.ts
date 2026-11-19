@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 import { FilesKnowledgeSearch } from "./adapters/knowledge/files.ts";
 import { parseDraft } from "./model/knowledge-draft.ts";
@@ -51,7 +52,7 @@ function fakeLLM(seen: string[]) {
 
 async function withFactory(fn: (f: Factory, seen: string[]) => Promise<void>) {
   const seen: string[] = [];
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(seen), log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fakeLLM(seen), log: () => {} });
   await f.start();
   try {
     await fn(f, seen);
@@ -62,7 +63,7 @@ async function withFactory(fn: (f: Factory, seen: string[]) => Promise<void>) {
 
 test("knowledge: agents propose, humans approve; only approved knowledge reaches later runs", async () => {
   await withFactory(async (f, seen) => {
-    const first = await f.app.createWorkItem(p, { title: "Where are conditions set?", description: "Find where conditions are set on resources and how to change them.", workflowRef: "factory-loop" });
+    const first = await f.app.createWorkItem(p, { title: "Where are conditions set?", description: "Find where conditions are set on resources and how to change them.", workflowRef: "test-loop" });
     const d = await waitFor(async () => {
       const x = await f.app.getWorkItem(p, first.metadata.name);
       return x?.knowledge[0]?.status?.phase && x.events.some((e) => e.spec.reason === "KnowledgeProposed") ? x : undefined;
@@ -72,18 +73,18 @@ test("knowledge: agents propose, humans approve; only approved knowledge reaches
     assert.equal(entry.spec.provenance?.agent, "code-researcher");
     assert.equal(entry.spec.provenance?.workItem, first.metadata.name);
     assert.deepEqual(entry.spec.tags, ["conditions", "status"]);
-    assert.deepEqual(entry.spec.scope, { repositories: ["software-factory"], workflows: ["factory-loop"] });
+    assert.deepEqual(entry.spec.scope, { repositories: ["software-factory"], workflows: ["test-loop"] });
     assert.equal(entry.metadata.ownerReferences?.length ?? 0, 0, "knowledge outlives the item");
 
     // Proposed knowledge is never shown to agents.
-    const second = await f.app.createWorkItem(p, { title: "Change setCondition conditions", description: "Conditions should record the reason when they flip.", workflowRef: "factory-loop" });
+    const second = await f.app.createWorkItem(p, { title: "Change setCondition conditions", description: "Conditions should record the reason when they flip.", workflowRef: "test-loop" });
     await waitFor(async () => (await f.app.getWorkItem(p, second.metadata.name))?.workItem.status?.phase === "AwaitingApproval", "second item at spec-review");
     assert.ok(!seen.some(inKnowledgeSection), "proposed knowledge is never context");
 
     await f.app.reviewKnowledge(p, entry.metadata.name, "approve");
     await waitFor(async () => (await f.app.getKnowledge(p, entry.metadata.name))?.entry.status?.phase === "Approved", "approved");
 
-    const third = await f.app.createWorkItem(p, { title: "Explain setCondition conditions", description: "How do conditions get their lastTransitionTime?", workflowRef: "factory-loop" });
+    const third = await f.app.createWorkItem(p, { title: "Explain setCondition conditions", description: "How do conditions get their lastTransitionTime?", workflowRef: "test-loop" });
     await waitFor(async () => (await f.app.getWorkItem(p, third.metadata.name))?.workItem.status?.phase === "AwaitingApproval", "third item at spec-review");
     assert.ok(seen.some(inKnowledgeSection), "approved knowledge is context");
 
@@ -95,7 +96,7 @@ test("knowledge: agents propose, humans approve; only approved knowledge reaches
 
 test("knowledge: every edit (also an applied draft) goes back to review; refining with the agent never changes the entry", async () => {
   await withFactory(async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Where are conditions set?", description: "Find where conditions are set on resources and how to change them.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Where are conditions set?", description: "Find where conditions are set on resources and how to change them.", workflowRef: "test-loop" });
     const entry = (await waitFor(async () => (await f.app.getWorkItem(p, wi.metadata.name))?.knowledge[0], "a proposal"))!;
 
     await f.app.reviewKnowledge(p, entry.metadata.name, "reject", "too vague");

@@ -1,9 +1,9 @@
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: Workflow
 metadata:
-  name: construction-bolt
+  name: test-bolt
   annotations:
-    description: One Bolt for a single Unit of Work. design → implement ⇄ code-review (AI loop) → verify
+    description: Test fixture only (ADR-0074; formerly `construction-bolt`). One Bolt for a single Unit of Work. design → implement ⇄ code-review (AI loop) → verify
 spec:
   timebox: 8h
   inputs:

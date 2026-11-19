@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS as p } from "./ports/index.ts";
 import type { PlanningDocument } from "./model/planning.ts";
 
@@ -44,14 +45,14 @@ test("opt-in factory plans autonomously, records context, batches decisions and 
       outcome: step === "triage-signal" ? "needs-info" : "approve",
       questions: step === "triage-signal" ? ["Include personal data?"] : [] }) } }] });
   };
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:",
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:",
     env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "test-planning-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
     fetch: fetchImpl, log: () => {} });
   await f.start();
   try {
     const item = await f.app.createWorkItem(p, { title: "Plan an authorized CSV export",
       description: "Allow tenant users to export their own records without crossing tenant boundaries.",
-      context: "Reuse our existing service; no bulk export.", workflowRef: "factory-planned", repositoryRefs: ["software-factory"] });
+      context: "Reuse our existing service; no bulk export.", workflowRef: "test-planned", repositoryRefs: ["software-factory"] });
     async function waitForReview(previous?: string) {
       for (let attempt = 0; attempt < 400; attempt++) {
         const detail = (await f.app.getWorkItem(p, item.metadata.name))!;

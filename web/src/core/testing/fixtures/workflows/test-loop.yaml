@@ -1,21 +1,14 @@
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: Workflow
 metadata:
-  name: factory-loop
+  name: test-loop
   annotations:
     description: >
-      Continuous AI-DLC loop:
+      Test fixture only (ADR-0074; formerly the production `factory-loop`). A small pipeline without planning or
+      verification policy that exercises engine features: decision/human-approval/automated gates, humanInput blocking,
+      forEach sub-workflows, review loops and draft-PR publication.
       input → triage → spec → spec-review → implement → code-review → verify → ship (draft PR)
 spec:
-  # ── Input: WorkItems are created by these Sources ───────────────────
-  trigger:
-    sourceRefs:
-      - name: manual
-      - name: github-issues
-      - name: jira-main
-      - name: monitoring-feedback
-    output: { artifactRef: { name: signal } }
-
   phases:
     # ── Inception ──────────────────────────────────────────────────────
     - name: inception
@@ -85,7 +78,7 @@ spec:
             artifactRef: { name: units-of-work }
             as: unit
             parallelism: 3
-          workflowRef: { name: construction-bolt }   # implement → code-review → verify
+          workflowRef: { name: test-bolt }   # implement → code-review → verify
 
     # ── Operations ─────────────────────────────────────────────────────
     - name: operations
