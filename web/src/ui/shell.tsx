@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { SystemHealth } from "@/core/ports/app.ts";
 import { useLive, useLiveStatus } from "./api.ts";
 import { Navbar } from "./navbar.tsx";
+import { NotificationBell, NotificationBridge } from "./notifications.tsx";
 
 function HealthBadges() {
   const { data, reload } = useLive<SystemHealth>("/api/system/health", (n) => n.kind === "Event");
@@ -121,6 +122,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 </Text>
               </Group>
             </Tooltip>
+            <NotificationBell />
             <ActionIcon
               variant="subtle"
               color="gray"
@@ -136,6 +138,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <Navbar />
       </AppShell.Navbar>
       <AppShell.Main>{children}</AppShell.Main>
+      <NotificationBridge />
     </AppShell>
   );
 }

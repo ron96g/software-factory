@@ -216,6 +216,9 @@ flowchart LR
 | **Policy waiver** (ADR-0067) | A `waiver` Approval created by the controller from `Repository.verification.autoWaive` when a comparable check's findings all exist on the base commit; decided by `policy:<repo>@<version>`, verify stage only, durably vetoable by a human. Recorded as a `PolicyWaiver` event ("decided automatically"). |
 | **Refine with the agent** | A conversation (purpose `refine-knowledge`) in which a human and the proposing agent improve an entry. The agent suggests drafts; the human applies them and decides on approval. |
 | **Customer response** | The reply to the requester, free of internal details, ready to post after human approval. |
+| **Notification** | A browser message derived from an `Event` by a notification rule: toast, entry in the notification center, or desktop notification. Not a stored kind (ADR-0069). |
+| **Notification rule** | Maps one `(involved kind, reason)` of an Event to a notification with a severity, title and link. Uncatalogued reasons never notify. |
+| **Notification severity** | `action` (a human must act, sticky), `problem` (something went wrong), `info` (good to know). |
 
 ## Mapping: AI-DLC concept → factory resource
 

@@ -117,6 +117,9 @@ import { runtimeRecoveryNeed } from "./recovery/runtime-need.ts";
 import { SerializedWorkspaceJobs } from "./checks/workspace-jobs.ts";
 import { ActiveCheckFinishValidator } from "./checks/finish-guard.ts";
 import type { RecoveryCheckAuthorization, RecoveryNeedHandler } from "./ports/index.ts";
+import type { NotificationClassifier, NotificationQueries, NotificationRule } from "./ports/index.ts";
+import { EventNotificationFeed, RuleBasedNotificationClassifier } from "./notifications/classifier.ts";
+import { registerNotificationRules } from "./notifications/rules.ts";
 import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
 import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
 import { persistedArtifactCheck, RegistryFinishValidator, schemaArtifactCheck } from "./artifacts/output-checks.ts";
@@ -489,6 +492,12 @@ export async function createFactory(o: FactoryOptions) {
     baseConflicts: baseSync,
   });
 
+  // ── Browser notifications (ADR-0069): projected from Events by registered rules ──
+  const notificationRules = new Registry<NotificationRule>();
+  registerNotificationRules(notificationRules);
+  const notificationClassifier = new RuleBasedNotificationClassifier({ rules: notificationRules, reader: store, redactor });
+  const notifications = new EventNotificationFeed({ reader: store, classifier: notificationClassifier });
+
   // ── MCP server (ADR-0034): what local agent harnesses may do; gates stay in the UI ──
   const exposedTools = factoryTools({ items: app, answers: app, sources: app, knowledge: app, issues: app, search: knowledge });
   const mcp = createMcpHttpHandler({
@@ -510,6 +519,10 @@ export async function createFactory(o: FactoryOptions) {
     mcp,
     /** The exposed tool catalog (also used by tests). */
     exposedTools,
+    /** Notification center history (ADR-0069). */
+    notifications: notifications as NotificationQueries,
+    /** Turns a stored Event into a browser notification (SSE `notification` frames). */
+    notificationClassifier: notificationClassifier as NotificationClassifier,
     /** Watch feed for the UI (SSE). */
     watcher: store as Pick<typeof store, "watch">,
     transcriptTail: transcripts as Pick<typeof transcripts, "tail">,

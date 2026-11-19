@@ -1,6 +1,7 @@
 "use client";
 import { notifications } from "@mantine/notifications";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { FactoryNotification } from "@/core/ports/notifications.ts";
 
 export interface ChangeNotice {
   type: string;
@@ -13,19 +14,42 @@ export interface ChangeNotice {
 type Listener = (n: ChangeNotice) => void;
 const listeners = new Set<Listener>();
 const statusListeners = new Set<() => void>();
+const notificationListeners = new Set<(n: FactoryNotification) => void>();
+const connectListeners = new Set<() => void>();
 let source: EventSource | null = null;
 let connected = false;
 
-function ensureSource() {
+export function ensureSource() {
   if (source || typeof window === "undefined") return;
   source = new EventSource("/api/watch");
   source.onopen = () => setConnected(true);
   source.onerror = () => setConnected(false);
   source.onmessage = (e) => {
-    const n = JSON.parse(e.data) as ChangeNotice;
-    if (n.type === "hello") return setConnected(true);
+    const n = JSON.parse(e.data) as ChangeNotice & { notification?: FactoryNotification };
+    // `hello` arrives on every (re)connect: the moment to catch up on missed notifications.
+    if (n.type === "hello") {
+      setConnected(true);
+      connectListeners.forEach((l) => l());
+      return;
+    }
+    if (n.type === "notification") {
+      if (n.notification) notificationListeners.forEach((l) => l(n.notification!));
+      return;
+    }
     listeners.forEach((l) => l(n));
   };
+}
+
+/** Subscribes to notification frames (ADR-0069); they never trigger `useLive` refetches. */
+export function onNotification(l: (n: FactoryNotification) => void): () => void {
+  notificationListeners.add(l);
+  return () => notificationListeners.delete(l);
+}
+
+/** Called on every (re)connect of the shared EventSource. */
+export function onConnect(l: () => void): () => void {
+  connectListeners.add(l);
+  return () => connectListeners.delete(l);
 }
 function setConnected(v: boolean) {
   connected = v;

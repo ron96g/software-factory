@@ -122,3 +122,9 @@ body {
 .sf-run-row:hover {
   background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
 }
+
+/* Notification center rows (ADR-0069) */
+.sf-notification-row:hover,
+.sf-notification-row:focus-visible {
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-5));
+}
