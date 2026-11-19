@@ -106,6 +106,12 @@ pull-request publication, and the human input it waits on. Above the chips, the 
 running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
 agent tools that no sandbox provides, or a pull request that failed to deliver.
 
+**Notifications** (ADR-0069): Events that need a human (clarification, approval, knowledge to review), report a
+problem (failed item or run, quota wait, failing control loop, write-back failure) or are good to know (done, PR
+opened, new synced items) become toasts, entries under the header bell (unread count, also in the tab title) and,
+opt-in, desktop notifications while the tab is in the background. Rules in `core/notifications/` decide which
+reasons notify; history comes from `GET /api/notifications`, live frames from `/api/watch`.
+
 ## Planning workspace (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
 The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.

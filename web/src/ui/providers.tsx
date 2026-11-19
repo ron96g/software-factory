@@ -10,7 +10,7 @@ export function Providers({ colorScheme, children }: { colorScheme: MantineColor
   const [manager] = useState(cookieColorSchemeManager);
   return (
     <MantineProvider theme={theme} defaultColorScheme={colorScheme} colorSchemeManager={manager}>
-      <Notifications position="bottom-right" />
+      <Notifications position="bottom-right" limit={3} />
       <Shell>{children}</Shell>
     </MantineProvider>
   );
