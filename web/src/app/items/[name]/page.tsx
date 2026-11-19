@@ -2,6 +2,7 @@
 import { CurrentStageSummary, StageDrawer, useItemCheckRuns } from "@/ui/stage-drawer.tsx";
 import {
   Accordion,
+  Affix,
   Alert,
   Anchor,
   Badge,
@@ -143,9 +144,6 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </div>
         <Group gap="sm">
           <RestartMenu d={d} />
-          <Button variant="light" leftSection={<IconMessageQuestion size={16} />} onClick={() => setAskOpen(true)}>
-            Ask about this item
-          </Button>
           <Menu position="bottom-end">
             <Menu.Target><Button variant="default">More</Button></Menu.Target>
             <Menu.Dropdown>
@@ -336,6 +334,15 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Grid.Col>
       </Grid>
       </OperationalDetails>
+
+      {!askOpen && (
+        <Affix position={{ bottom: 24, right: 24 }}>
+          <Button size="md" radius="xl" leftSection={<IconMessageQuestion size={18} />} onClick={() => setAskOpen(true)}
+            style={{ boxShadow: "var(--mantine-shadow-lg)" }}>
+            Ask about this item
+          </Button>
+        </Affix>
+      )}
 
       <Drawer opened={askOpen} onClose={() => setAskOpen(false)} position="right" size="xl" title={<Text fw={600}>Ask about this work item</Text>}>
         <ChatPanel
