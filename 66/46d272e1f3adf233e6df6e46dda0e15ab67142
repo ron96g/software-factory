@@ -1,0 +1,71 @@
+web/src/core/factory.ts
+  s_0ee096932fcdb2::t_ec3fbc13f026c3 121-122,495-497,499-500
+  s_0ee096932fcdb2::t_4b3103505ed204 498
+  s_0ee096932fcdb2::t_618da717b34ce9 120,522-525
+web/src/app/globals.css
+  s_0ee096932fcdb2::t_8bcfc75a25e02b 125-130
+web/src/core/ports/index.ts
+  s_0ee096932fcdb2::t_da0356a865fd10 23
+web/src/core/notifications/rules.ts
+  s_0ee096932fcdb2::t_751c8f6bff00fe 1-77
+AGENTS.md
+  s_0ee096932fcdb2::t_33197359080bee 215
+web/src/core/ports/notifications.ts
+  s_0ee096932fcdb2::t_4b3103505ed204 48
+  s_0ee096932fcdb2::t_5584ef873c4517 22-23
+  s_0ee096932fcdb2::t_8d25ebfa9ff444 1-21,24-47,49-57
+docs/adr/0069-browser-notifications.md
+  s_0ee096932fcdb2::t_23131437cdf03b 1-2,5-31,33-68,71-72,74,76,78-89,97-100,103-104,108,112,114-121,123-125,128-150,155-164,170-178,180,185-186,189-196,200-206,211-212,214-227
+  s_0ee096932fcdb2::t_808c17ebdb9f1d 151-154,165-169,179,181-184,187-188,197-199
+  s_0ee096932fcdb2::t_6caf98ebaa552f 3-4,32,69-70,73,75,77,90-91,94,101-102,105-107,109-111,113,122,126-127
+  s_0ee096932fcdb2::t_9bd7a9d9de928e 92-93,95-96,207-210,213
+web/src/app/api/notifications/route.ts
+  s_0ee096932fcdb2::t_618da717b34ce9 1-13
+docs/architecture.md
+  s_0ee096932fcdb2::t_dbad66a5a7cab7 109-114
+web/src/ui/notification-store.ts
+  s_0ee096932fcdb2::t_4cce9719aa359b 1-40,42-48,56-57,59-145
+  s_0ee096932fcdb2::t_4b3103505ed204 41,49-55,58
+web/src/ui/shell.tsx
+  s_0ee096932fcdb2::t_9e837445d4811f 8,125,141
+web/src/core/notifications.test.ts
+  s_0ee096932fcdb2::t_ddf528f8806d0b 1-7,9-14,16-20,22-52,54-81,83-90,93,103
+  s_0ee096932fcdb2::t_4341dac94304a6 8
+  s_0ee096932fcdb2::t_4b3103505ed204 82,91-92
+  s_0ee096932fcdb2::t_666c96fa957cff 15,21,94-97,99,101
+  s_0ee096932fcdb2::t_5584ef873c4517 53
+  s_0ee096932fcdb2::t_9e69a46b40ccc5 98,100,102
+web/src/core/notifications/classifier.ts
+  s_0ee096932fcdb2::t_4b3103505ed204 11,19-22,24-25,43,60,62
+  s_0ee096932fcdb2::t_5584ef873c4517 45
+  s_0ee096932fcdb2::t_1f846a1fd413f9 26-27,52-55
+  s_0ee096932fcdb2::t_a70651440d484d 1-10,12-18,23,28-42,44,46-51,56-59,61,63-77
+web/src/ui/notifications.tsx
+  s_0ee096932fcdb2::t_808c17ebdb9f1d 114-124
+  s_0ee096932fcdb2::t_eb14caba19325e 1-113,125-355
+web/src/ui/providers.tsx
+  s_0ee096932fcdb2::t_9e837445d4811f 13
+web/src/app/api/watch/route.ts
+  s_0ee096932fcdb2::t_618da717b34ce9 3,9-10,19-22,29-34,38
+docs/ai-dlc-glossary.md
+  s_0ee096932fcdb2::t_3cf3f8ce6c19a8 220-221
+  s_0ee096932fcdb2::t_23131437cdf03b 219
+web/src/ui/api.ts
+  s_0ee096932fcdb2::t_882f18b3b5e428 4,17-18,22,28-38,42-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6646d272e1f3adf233e6df6e46dda0e15ab67142",
+  "prompts": {},
+  "sessions": {
+    "s_0ee096932fcdb2": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "26f5d363-fcff-4f67-8eae-5925de2af735",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
