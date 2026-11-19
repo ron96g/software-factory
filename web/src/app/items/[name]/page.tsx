@@ -2,6 +2,7 @@
 import { CurrentStageSummary, StageDrawer, useItemCheckRuns } from "@/ui/stage-drawer.tsx";
 import {
   Accordion,
+  ActionIcon,
   Affix,
   Alert,
   Anchor,
@@ -24,14 +25,14 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil, IconTrash } from "@tabler/icons-react";
+import { IconAlertTriangle, IconRobot, IconCheck, IconChevronLeft, IconGitPullRequest, IconHandStop, IconX, IconMessageQuestion, IconRefresh, IconHourglass, IconPencil, IconTrash, IconNote, IconSend } from "@tabler/icons-react";
 import Link from "next/link";
 import { TicketHistory } from "@/ui/ticket-history.tsx";
 import { useRouter } from "next/navigation";
 import { use, useMemo, useState, type ReactNode } from "react";
-import type { AgentRun, Approval, Clarification, Conversation, OutboxMessage, IssueProposal } from "@/core/model/kinds.ts";
+import type { AgentRun, Approval, Artifact, Clarification, Conversation, OutboxMessage, IssueProposal } from "@/core/model/kinds.ts";
 import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
-import type { GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/ports/app.ts";
+import type { FeedbackView, GateEvidence, PublishedPullRequest, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, api, useLive } from "@/ui/api.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 import { MarkdownView } from "@/ui/markdown.tsx";
@@ -51,6 +52,7 @@ import { RecoveryPanel } from "@/ui/recovery-panel.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import PlanningWorkspace from "@/ui/planning-workspace.tsx";
 import { normalizeQuestions } from "@/core/questions.ts";
+import { AnnotatedArtifact, NoteCount, travellingNotes } from "@/ui/selection-feedback.tsx";
 
 
 const ALERT_STYLES = { title: { color: "var(--mantine-color-text)" } };
@@ -93,6 +95,10 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
   const wi = d.workItem;
   const st = wi.status;
   const planningEnabled = planning.data?.enabled === true;
+  const openDecisions = planning.data?.approval && planning.data.readiness === "needs-answers" ? planning.data.unansweredQuestions.length : 0;
+  const planWaitsForAnswers = openDecisions
+    ? `Your answers to ${openDecisions} required planning decision${openDecisions === 1 ? "" : "s"}. Approval opens once the plan is updated with them.`
+    : undefined;
   // Once inception is over, the plan is reference material and construction progress becomes the main view.
   const constructing = !!st?.lifecyclePhase && st.lifecyclePhase !== "inception";
   const openClar = d.clarifications.find((c) => c.metadata.name === st?.blockedBy?.name && st?.phase === "Blocked");
@@ -119,6 +125,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           <Group gap="sm">
             <Title order={2}>{wi.spec.title}</Title>
             <PhaseBadge phase={st?.phase} size="md" />
+            {openDecisions > 0 && <Badge color="yellow" variant="outline" size="md">needs your answers</Badge>}
             <TypeBadge type={st?.classification?.type} />
             {st?.classification?.priority && <Badge variant="outline">{st.classification.priority}</Badge>}
             {pullRequests.map((pr) => (
@@ -159,7 +166,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
       </Group>
 
       <StageProgress d={d} onOpen={setOpenStage} />
-      <CurrentStageSummary d={d} checks={checkRuns} onOpen={setOpenStage} />
+      <CurrentStageSummary d={d} checks={checkRuns} onOpen={setOpenStage} waitingFor={planWaitsForAnswers} />
       <StageDrawer d={d} checks={checkRuns} stage={openStage} onClose={() => setOpenStage(null)} onOpenRun={(r) => { setOpenStage(null); setOpenRun(r); }} />
       {followUpOpen && <FollowUpDialog key={useIssue?.metadata.name ?? "new"} item={wi} prefill={useIssue ? { title: useIssue.spec.title, body: useIssue.spec.body, targetSource: useIssue.spec.targetRef?.name } : undefined} onClose={() => { setFollowUpOpen(false); setUseIssue(null); }} />}
       <Modal opened={deleteOpen} onClose={() => { if (!deleting) setDeleteOpen(false); }} title="Delete work item?" centered>
@@ -201,6 +208,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
         </Alert>
       )}
       <RecoveryPanel key={`recovery-${wi.metadata.uid ?? wi.metadata.name}`} detail={d} />
+      <FeedbackSubmitBar d={d} withPlan={!!planning.data?.canRevise && !constructing ? travellingNotes(d, planning.data.revisionStage) : 0} />
       {/* What needs a human now comes first. Keyed by clarification: a new round's questions start with fresh answer state. */}
       {openClar && <ClarificationPanel key={openClar.metadata.name} c={openClar} d={d} />}
       {openAppr && !openAppr.spec.ticketPublication && (openAppr.spec.verification?.kind !== "plan" || !!openAppr.spec.verification.rebinds || planning.data?.enabled === false) && <ApprovalPanel key={openAppr.metadata.name} a={openAppr} d={d} onOpenRun={setOpenRun} />}
@@ -249,6 +257,7 @@ export default function ItemPage({ params }: { params: Promise<{ name: string }>
           </Card>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 4 }} style={{ position: "sticky", top: 68, alignSelf: "flex-start" }}>
+          <FeedbackPanel d={d} onOpenRun={setOpenRun} />
           <IssueProposalsPanel issues={d.issues} onUse={(i) => { setUseIssue(i); setFollowUpOpen(true); }} />
           {d.knowledge.length > 0 && (
             <Card className="sf-surface" mb="md">
@@ -797,6 +806,7 @@ function stageOutputs(d: WorkItemDetail, stage: string) {
 function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; onOpenRun: (n: string) => void }) {
   const evidence = d.evidence;
   const outputs = useMemo(() => stageOutputs(d, a.spec.stage), [d, a.spec.stage]);
+  const feedbackPlan = d.feedbackPlan;
   const [comment, setComment] = useState("");
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -832,11 +842,21 @@ function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; on
               <Accordion.Item key={artifact.metadata.name} value={artifact.metadata.name}>
                 <Accordion.Control>Under review: {artifact.spec.artifactTypeRef.name} by {artifact.spec.producedBy?.agentRef.name}</Accordion.Control>
                 <Accordion.Panel>
-                  <MarkdownView>{artifact.spec.content}</MarkdownView>
+                  <ArtifactBody d={d} a={artifact} />
                 </Accordion.Panel>
               </Accordion.Item>
             ))}
           </Accordion>
+        )}
+        {feedbackPlan && (
+          <Alert color="yellow" p="xs" icon={<IconNote size={16} />} styles={ALERT_STYLES}>
+            <Text size="sm">
+              You have {feedbackPlan.drafts} unsubmitted feedback note{feedbackPlan.drafts === 1 ? "" : "s"}.{" "}
+              {feedbackPlan.action === "reject"
+                ? "Submit them from the feedback bar above to request changes: that rejects this gate with your notes."
+                : `Submitting them from the feedback bar above restarts from ${feedbackPlan.stage}. Approving or rejecting here leaves them as drafts.`}
+            </Text>
+          </Alert>
         )}
         {a.spec.approvers.length > 0 && (
           <Text size="sm">
@@ -906,6 +926,11 @@ function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; on
           </Button>
           </Group>
         </Group>
+        {blocking && (!override || comment.trim().length < 10) && (
+          <Text size="xs" c="dimmed" ta="right">
+            To approve despite failing evidence, tick the checkbox and give a reason of at least 10 characters.
+          </Text>
+        )}
       </Stack>
     </Alert>
   );
@@ -914,8 +939,14 @@ function ApprovalPanel({ a, d, onOpenRun }: { a: Approval; d: WorkItemDetail; on
 function Artifacts({ d }: { d: WorkItemDetail }) {
   const sorted = useMemo(() => [...d.artifacts].reverse(), [d.artifacts]);
   if (!sorted.length) return <Text c="dimmed" size="sm">No artifacts yet.</Text>;
+  const superseded = (a: Artifact) =>
+    !!(a.metadata.labels?.[LABEL_SUPERSEDED] || d.runs.find((r) => r.metadata.name === a.spec.producedBy?.agentRunRef.name)?.metadata.labels?.[LABEL_SUPERSEDED]);
   return (
-    // Re-key on count so the newest artifact opens when new ones arrive.
+    <Stack gap="xs">
+    <Text size="xs" c="dimmed">
+      Select text in an artifact to ask its agent about it or to leave a feedback note.
+    </Text>
+    {/* Re-key on count so the newest artifact opens when new ones arrive. */}
     <Accordion key={sorted.length} variant="separated" defaultValue={sorted[0]?.metadata.name}>
       {sorted.map((a) => (
         <Accordion.Item key={a.metadata.name} value={a.metadata.name}>
@@ -937,8 +968,7 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
                   replay
                 </Badge>
               )}
-              {(a.metadata.labels?.[LABEL_SUPERSEDED] ||
-                d.runs.find((r) => r.metadata.name === a.spec.producedBy?.agentRunRef.name)?.metadata.labels?.[LABEL_SUPERSEDED]) && (
+              {superseded(a) && (
                 <Tooltip label="Replaced by a restart; no longer used as agent input">
                   <Badge variant="outline" color="gray" size="xs">
                     superseded
@@ -949,14 +979,212 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
               <Text size="xs" c="dimmed" ff="monospace">
                 {a.spec.producedBy?.agentRunRef.name}
               </Text>
+              <NoteCount notes={d.feedback.filter((f) => f.feedback.spec.targetRef.name === a.metadata.name)} />
             </Group>
           </Accordion.Control>
           <Accordion.Panel>
-            <MarkdownView>{a.spec.content}</MarkdownView>
+            <ArtifactBody d={d} a={a} />
           </Accordion.Panel>
         </Accordion.Item>
       ))}
     </Accordion>
+    </Stack>
+  );
+}
+
+/** Rendered artifact content: select text to ask its agent or leave a feedback note (ADR-0071). */
+function ArtifactBody({ d, a }: { d: WorkItemDetail; a: Artifact }) {
+  return (
+    <AnnotatedArtifact detail={d} artifact={a.metadata.name}>
+      <MarkdownView>{a.spec.content}</MarkdownView>
+    </AnnotatedArtifact>
+  );
+}
+
+function FeedbackPlanHint({ d }: { d: WorkItemDetail }) {
+  const plan = d.feedbackPlan;
+  if (!plan) return null;
+  const gate = plan.approval ? d.approvals.find((a) => a.metadata.name === plan.approval)?.spec.stage : undefined;
+  return (
+    <>
+      {plan.action === "reject"
+        ? `Submitting requests changes at the ${gate ?? "open"} gate (rejects it): ${plan.stage} re-runs`
+        : `Submitting restarts the item from ${plan.stage} (later output is kept as superseded history)`}
+      , and {plan.agents.join(", ")} get{plan.agents.length === 1 ? "s" : ""} your notes with the version you read.
+    </>
+  );
+}
+
+function SubmitFeedbackButton({ d, onDone }: { d: WorkItemDetail; onDone?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const n = d.feedback.filter((f) => f.state === "draft").length;
+  return (
+    <Button
+      size="xs"
+      loading={busy}
+      disabled={!d.feedbackPlan}
+      leftSection={<IconSend size={14} />}
+      onClick={async () => {
+        setBusy(true);
+        await act(`/api/workitems/${d.workItem.metadata.name}/feedback/submit`, {}, `${n} note${n === 1 ? "" : "s"} submitted`);
+        setBusy(false);
+        onDone?.();
+      }}
+    >
+      Submit {n} note{n === 1 ? "" : "s"}
+    </Button>
+  );
+}
+
+// The Feedback panel lives in the (often collapsed) details section; this bar keeps drafts visible and submittable.
+function FeedbackSubmitBar({ d, withPlan = 0 }: { d: WorkItemDetail; withPlan?: number }) {
+  const [open, setOpen] = useState(false);
+  const drafts = d.feedback.filter((f) => f.state === "draft");
+  if (!drafts.length) return null;
+  return (
+    <Alert color="yellow" variant="light" p="sm" icon={<IconSend size={18} />}>
+      <Group justify="space-between" wrap="nowrap" gap="sm">
+        <Text size="sm">
+          <strong>{drafts.length} feedback note{drafts.length === 1 ? "" : "s"}</strong> not yet sent to the agent.{" "}
+          {d.feedbackPlan ? <FeedbackPlanHint d={d} /> : "Nothing can be re-run for them right now."}
+          {withPlan > 0 && ` To send ${withPlan === drafts.length ? "them" : `the ${withPlan} on the plan`} together with decision answers or requested changes, submit those in the plan below: the notes go along in the same planner run.`}
+        </Text>
+        <Group gap="xs" wrap="nowrap">
+          <Button size="xs" variant="default" onClick={() => setOpen(true)}>Review notes</Button>
+          <SubmitFeedbackButton d={d} />
+        </Group>
+      </Group>
+      <Modal opened={open} onClose={() => setOpen(false)} title="Feedback notes" size="lg">
+        <Stack gap="xs">
+          {drafts.map((v) => <FeedbackNote key={v.feedback.metadata.name} v={v} editable />)}
+          <Group justify="flex-end"><SubmitFeedbackButton d={d} onDone={() => setOpen(false)} /></Group>
+        </Stack>
+      </Modal>
+    </Alert>
+  );
+}
+
+function FeedbackPanel({ d, onOpenRun }: { d: WorkItemDetail; onOpenRun: (n: string) => void }) {
+  const drafts = d.feedback.filter((f) => f.state === "draft");
+  const sent = d.feedback.filter((f) => f.state !== "draft");
+  if (!d.feedback.length) return null;
+  const plan = d.feedbackPlan;
+  return (
+    <Card className="sf-surface" mb="md">
+      <Group justify="space-between" mb={4}>
+        <Title order={5}>Feedback</Title>
+        {drafts.length > 0 && (
+          <Badge color="yellow" variant="light">
+            {drafts.length} draft{drafts.length === 1 ? "" : "s"}
+          </Badge>
+        )}
+      </Group>
+      {drafts.length > 0 && (
+        <Stack gap="xs">
+          {drafts.map((v) => (
+            <FeedbackNote key={v.feedback.metadata.name} v={v} editable />
+          ))}
+          {plan && (
+            <Alert color={plan.action === "reject" ? "yellow" : "blue"} p="xs" styles={ALERT_STYLES}>
+              <Text size="xs"><FeedbackPlanHint d={d} /></Text>
+            </Alert>
+          )}
+          <SubmitFeedbackButton d={d} />
+        </Stack>
+      )}
+      {sent.length > 0 && (
+        <Accordion variant="default" chevronPosition="left" mt={drafts.length ? "xs" : 0}>
+          <Accordion.Item value="sent">
+            <Accordion.Control>
+              <Text size="xs">
+                Submitted ({sent.length}) · {sent.filter((f) => f.state === "addressed").length} addressed
+              </Text>
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="xs">
+                {[...sent].reverse().map((v) => (
+                  <FeedbackNote key={v.feedback.metadata.name} v={v} onOpenRun={onOpenRun} />
+                ))}
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      )}
+    </Card>
+  );
+}
+
+function FeedbackNote({ v, editable, onOpenRun }: { v: FeedbackView; editable?: boolean; onOpenRun?: (n: string) => void }) {
+  const f = v.feedback;
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(f.spec.comment);
+  return (
+    <Card withBorder p="xs">
+      <Group justify="space-between" gap={4} wrap="nowrap" mb={4}>
+        <Text size="xs" c="dimmed" lineClamp={1}>
+          to <b>{f.spec.producedBy.agentRef.name}</b> · {f.spec.producedBy.stage}
+        </Text>
+        {editable ? (
+          <Group gap={2} wrap="nowrap">
+            <ActionIcon size="sm" variant="subtle" aria-label="Edit note" onClick={() => setEditing((e) => !e)}>
+              <IconPencil size={14} />
+            </ActionIcon>
+            <ActionIcon
+              size="sm"
+              variant="subtle"
+              color="red"
+              aria-label="Delete note"
+              onClick={() => void act(`/api/feedback/${f.metadata.name}/delete`, {})}
+            >
+              <IconTrash size={14} />
+            </ActionIcon>
+          </Group>
+        ) : v.state === "addressed" && v.addressedBy ? (
+          <Badge size="xs" color="teal" variant="light" style={{ cursor: "pointer" }} onClick={() => onOpenRun?.(v.addressedBy!)}>
+            addressed
+          </Badge>
+        ) : (
+          <Tooltip label="Waiting for the next run of this step">
+            <Badge size="xs" color="blue" variant="light">
+              pending
+            </Badge>
+          </Tooltip>
+        )}
+      </Group>
+      <Text size="xs" className="sf-quote" lineClamp={3}>
+        {f.spec.quote}
+      </Text>
+      {v.outdated && (
+        <Tooltip multiline w={280} label="The agent still gets the note with the version you read. Delete it if it no longer applies.">
+          <Badge size="xs" mt={4} color={v.outdated.quoteFound ? "gray" : "orange"} variant="light">
+            {v.outdated.quoteFound ? "older version · passage still in the current one" : "older version · passage changed"}
+          </Badge>
+        </Tooltip>
+      )}
+      {editing ? (
+        <Stack gap={4} mt={4}>
+          <Textarea size="xs" autosize minRows={2} value={text} onChange={(e) => setText(e.currentTarget.value)} />
+          <Group gap={4} justify="flex-end">
+            <Button size="compact-xs" variant="default" onClick={() => (setEditing(false), setText(f.spec.comment))}>
+              Cancel
+            </Button>
+            <Button
+              size="compact-xs"
+              disabled={!text.trim()}
+              onClick={async () => {
+                if (await act(`/api/feedback/${f.metadata.name}/edit`, { comment: text })) setEditing(false);
+              }}
+            >
+              Save
+            </Button>
+          </Group>
+        </Stack>
+      ) : (
+        <Text size="sm" mt={4} style={{ whiteSpace: "pre-wrap" }}>
+          {f.spec.comment}
+        </Text>
+      )}
+    </Card>
   );
 }
 

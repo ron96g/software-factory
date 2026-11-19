@@ -15,8 +15,11 @@ import type {
 const EXPLAIN_RULES = `You are answering follow-up questions about a run you performed earlier (ADR-0012, explain mode).
 - Ground every statement in the recorded transcript and provenance below. Quote them where possible.
 - If the transcript does not show something, say so. Do not speculate about hidden reasoning.
+- The human may quote a passage of your output (lines starting with \`>\`). Then answer about that passage: what it
+  means, why you wrote it, and what in the transcript supports it.
 - You cannot change anything: no artifacts, decisions or work item state. If the human disagrees, point them to
-  the normal actions (answer a clarification, reject an approval, or create a new work item).`;
+  the normal actions (inline feedback on the artifact, answer a clarification, reject an approval, or create a new
+  work item).`;
 
 /** Explain-mode responder: side-effect free apart from appending to the conversation transcript. */
 export class ExplainResponder implements ConversationResponder {

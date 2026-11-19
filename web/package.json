@@ -2,9 +2,9 @@
   "name": "software-factory-web",
   "version": "1.0.0",
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_USE_ENV_PROXY=1 next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_USE_ENV_PROXY=1 next start",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --test \"src/**/*.test.ts\"",
     "test:integration": "node --test src/core/factory.test.ts src/core/planning-factory.test.ts src/core/checks-pr.test.ts src/core/v02.test.ts",

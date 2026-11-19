@@ -87,6 +87,18 @@ definitions. Do not report mere disagreement as proof of a defect. Keep each tex
           c.spec.questions.map((q, i) => `Q: ${q}\nA: ${c.spec.answers?.[i] ?? c.spec.answers?.join(" ") ?? ""}`).join("\n"),
       );
     }
+    if ((ctx.feedback ?? []).reduce((n, g) => n + g.notes.length, 0) > 1) parts.push("Note: the human feedback below is in chronological order; where notes conflict, the later one wins.");
+    for (const g of ctx.feedback ?? []) {
+      // The earlier version is usually not an input of this step, so the notes carry it (ADR-0071).
+      const type = g.artifact?.spec.artifactTypeRef.name ?? "output";
+      parts.push(
+        `## Human feedback on your earlier ${type}\n` +
+          `A human read the version below and left ${g.notes.length} inline note(s). Revise that output: apply every note, ` +
+          `keep the rest unless a note requires changing it, and say in your summary how you handled each note.\n\n` +
+          g.notes.map((n, i) => `${i + 1}. On the passage:\n${quote(n.spec.quote)}\n   Feedback: ${n.spec.comment}`).join("\n\n") +
+          (g.artifact ? `\n\n### The version they read\n${clip(g.artifact.spec.content, 20_000)}` : ""),
+      );
+    }
     for (const a of ctx.approvals ?? []) {
       // Human gate decisions (e.g. "use your recommended defaults", or why something was rejected) steer later agents.
       if (!a.spec.comment?.trim() && a.spec.decision === "approve") continue;
@@ -100,5 +112,8 @@ definitions. Do not report mere disagreement as proof of a defect. Keep each tex
     return { system, user: parts.join("\n\n") };
   }
 }
+
+const quote = (s: string) => s.trim().split("\n").map((l) => `   > ${l}`).join("\n");
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…[truncated]` : s);
 
 export const promptHash = (p: Prompt) => createHash("sha256").update(p.system + "\n---\n" + p.user).digest("hex").slice(0, 16);

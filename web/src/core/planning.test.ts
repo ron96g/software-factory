@@ -22,6 +22,8 @@ import { parse as parseYaml } from "yaml";
 import type { ArtifactType } from "./model/kinds.ts";
 import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
 import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
+import { StoreDraftFeedbackBatch } from "./app/feedback-batch.ts";
+import type { InlineFeedback } from "./model/kinds.ts";
 
 const document: PlanningDocument = {
   outcome: "Customers can export their own records.", scope: "Include CSV. Exclude bulk tenant exports.",
@@ -42,7 +44,7 @@ async function fixture() {
   const redactor = { redact: (text: string) => text.replaceAll("secret-value", "[REDACTED]") };
   const schemas = new DefinitionArtifactSchemas(store);
   const planning = new PlanningService({ namespace: "default", reader: store, writer: store, compiler, events, redactor,
-    schemas, schemaValidator: new AjvSchemaValidator() });
+    schemas, schemaValidator: new AjvSchemaValidator(), notes: new StoreDraftFeedbackBatch({ namespace: "default", reader: store, writer: store }) });
   const workflow = await store.create<Workflow>({ apiVersion: API_VERSION, kind: "Workflow", metadata: { name: "planned", namespace: "factory-system" },
     spec: { planning: { revisionStage: "spec", synthesisStage: "implementation-plan", reviewStage: "spec-review" },
       verification: { planningStage: "validation-plan", reviewStage: "spec-review", preflightStage: "preflight",
@@ -408,10 +410,15 @@ test("withdrawing a planning answer removes it from intent and keeps bounded aud
     await f.regenerate(plan);
     const answered = await f.item();
     assert.ok(answered.spec.planning?.answers["sensitive-data"].answeredAt);
+    // ADR-0072: a second record of the same question (e.g. under an agent's question ID) is withdrawn with it.
+    const planning = answered.spec.planning!;
+    await f.store.update<WorkItem>({ ...answered, spec: { ...answered.spec, planning: { ...planning,
+      answers: { ...planning.answers, "question-copy": { ...planning.answers["sensitive-data"], signature: "other" } } } } });
     const before = await f.planning.inspect(p, "item");
     const withdrawn = await f.planning.revise(p, "item", { action: "decisions", requestId: "withdraw-answer",
       revision: before.revision, withdraw: ["sensitive-data"] });
     assert.equal(withdrawn.spec.planning?.answers["sensitive-data"], undefined);
+    assert.equal(withdrawn.spec.planning?.answers["question-copy"], undefined);
     assert.equal(withdrawn.spec.planning?.withdrawn?.length, 1);
     assert.deepEqual(withdrawn.spec.planning?.withdrawn?.[0], {
       decisionId: "sensitive-data", question: required.question, answer: "Exclude", withdrawnBy: p.id,
@@ -658,4 +665,40 @@ test("AC-3 a decision citing an upstream question id suppresses it regardless of
   assert.deepEqual(call({ spec: {} } as WorkItem).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
   const answered = { spec: { planning: { answers: { D1: { question: "x", signature: "s", answer: "A" } } } } } as unknown as WorkItem;
   assert.deepEqual(call(answered).map((d) => d.id.startsWith("question-") ? "question" : d.id), ["D1", "question"]);
+});
+
+test("ADR-0072 an agent's recorded question keeps the answer the human gave to the same question under another ID", () => {
+  const document = parsePlanningDocument(JSON.stringify({ risks: "r",
+    decisions: [{ id: "crd-owner", question: "Who installs the CRDs?", options: ["Operator", "Factory"], rationale: "r", required: true }] }));
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const run = { spec: { stage: "plan", agentRef: { name: "planner" } },
+    status: { result: { questions: ["Do runtime objects also move to the cluster, or only definitions?"] } } } as AgentRun;
+  const item = { spec: { planning: { answers: {
+    scope: { question: "Do runtime objects also move to the cluster,  or only definitions?", signature: "with-options", answer: "Definitions only" },
+    other: { question: "Who installs the CRDs?", signature: "old-options", answer: "Operator" },
+  } } } } as unknown as WorkItem;
+  const decisions = (service as unknown as { decisions(i: WorkItem, d: typeof document, r: AgentRun[], s: Set<string>): { id: string; answer?: string }[] })
+    .decisions(item, document, [run], new Set(["plan"]));
+  assert.equal(decisions.find((d) => d.id.startsWith("question-"))?.answer, "Definitions only");
+  assert.equal(decisions.find((d) => d.id === "crd-owner")?.answer, undefined, "a decision with options still needs a matching signature");
+});
+
+test("ADR-0073 a planning revision takes the draft inline notes on re-run stages into the same batch", async () => {
+  const f = await fixture();
+  try {
+    await f.seed();
+    await f.openReview();
+    const wi = await f.item();
+    const note = (name: string, stage: string) => f.store.create<InlineFeedback>({ apiVersion: API_VERSION, kind: "InlineFeedback",
+      metadata: { name, namespace: "default", ownerReferences: [ownerRef(wi)] },
+      spec: { workItemRef: { name: "item" }, targetRef: { name: "a" }, producedBy: { agentRunRef: { name: "r" }, agentRef: { name: "x" }, stage, step: "s" },
+        quote: "q", comment: "c", author: p.id } });
+    await note("on-spec", "spec");
+    await note("on-triage", "triage");
+    await f.revise("revise", "with-notes", { feedback: "Tighten scope." });
+    const get = async (name: string) => (await f.store.get<InlineFeedback>("InlineFeedback", "default", name))!;
+    assert.equal((await get("on-spec")).spec.submitted?.id, "plan-with-notes");
+    assert.equal((await get("on-triage")).spec.submitted, undefined, "triage is not re-run by a planning revision");
+  } finally { f.db.close(); }
 });

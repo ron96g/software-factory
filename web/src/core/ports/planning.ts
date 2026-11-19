@@ -9,6 +9,8 @@ export interface PlanningWorkspace {
   enabled: boolean;
   revision: string;
   format: PlanFormat;
+  /** The stage every planning revision restarts from (ADR-0073: draft inline notes on it and later stages go along). */
+  revisionStage?: string;
   document?: PlanningDocument;
   /** Decision-sheet plans: the current planner-run artifacts the sheet refers to (spec, Units, validation plan). */
   sources: { type: string; artifact: string; format?: string; content: string }[];
@@ -48,6 +50,17 @@ export interface PlanningRevisionInput {
   feedback?: string;
   answers?: Record<string, string>;
   withdraw?: string[];
+}
+
+/**
+ * ADR-0073: a planning revision takes the item's draft inline notes on the stages it re-runs into the same batch,
+ * so answers, requested changes and notes reach the planner in one run.
+ */
+export interface DraftFeedbackBatch {
+  /** Marks the drafts produced in `stages` as submitted under `batch`; returns their names. */
+  include(p: Principal, workItem: string, stages: string[], batch: string): Promise<string[]>;
+  /** Compensation when the revision could not be written: the notes become drafts again. */
+  release(names: string[], batch: string): Promise<void>;
 }
 
 export interface PlanningCommands {

@@ -78,8 +78,10 @@ the factory's own tool loop instead. OpenCode keeps its session cache in `web/da
 Use **Restart** on an item to run it again (e.g. after adding a key). Earlier output stays as superseded history.
 Data lives in `web/data/factory.db`. Delete the file to reset.
 
-Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless you opt in. Start the server with
-`NODE_USE_ENV_PROXY=1 npm run dev`. Otherwise source sync and LLM calls fail with `fetch failed: Connect Timeout Error`.
+Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set when Node starts.
+`npm run dev` and `npm start` set it for you (it has no effect without proxy variables). Putting it in `.env.local` doesn't
+work: Next.js loads that file after Node has started. Otherwise source sync and LLM calls fail with
+`fetch failed: Connect Timeout Error`.
 
 ## Plan-first work items (ADR-0045, ADR-0046)
 

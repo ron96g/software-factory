@@ -11,6 +11,7 @@ import type {
   Clarification,
   Conversation,
   FactoryEvent,
+  InlineFeedback,
   Source,
   WorkItem,
   Workspace,
@@ -83,6 +84,10 @@ export interface WorkItemDetail {
   knowledge: KnowledgeEntry[];
   /** Issues proposed for this item (ADR-0066). */
   issues: IssueProposal[];
+  /** Inline feedback on artifacts with its derived state (ADR-0071). */
+  feedback: FeedbackView[];
+  /** What "Submit feedback" would do now; set while drafts exist. */
+  feedbackPlan?: FeedbackPlan;
 }
 
 export interface WorkItemQueries {
@@ -244,4 +249,49 @@ export interface KnowledgeActions {
   proposeKnowledge(p: Principal, input: { title: string; content: string; tags?: string[]; repositories?: string[]; workflows?: string[] }): Promise<KnowledgeEntry>;
   /** Chat with the proposing agent to refine the entry (side-effect free; the human applies drafts). */
   startKnowledgeConversation(p: Principal, name: string): Promise<Conversation>;
+}
+
+export type FeedbackState = "draft" | "submitted" | "addressed";
+
+export interface FeedbackView {
+  feedback: InlineFeedback;
+  state: FeedbackState;
+  /** The run that received it (state `addressed`). */
+  addressedBy?: string;
+  /**
+   * Drafts on an artifact that a newer current version replaced: `current` is that version, `quoteFound` whether the
+   * quoted passage is still in it. The note is still sent with the version the human read.
+   */
+  outdated?: { current: string; quoteFound: boolean };
+}
+
+/**
+ * ADR-0071: submitting drafts at an open human gate whose reject route re-runs the producing stage rejects that gate
+ * (the comment says why); otherwise the item restarts from the earliest producing stage.
+ */
+export interface FeedbackPlan {
+  action: "reject" | "restart";
+  /** Stage that runs next (the reject route's target or the restart stage). */
+  stage: string;
+  /** Set for `reject`. */
+  approval?: string;
+  /** Agents that receive the notes. */
+  agents: string[];
+  drafts: number;
+}
+
+export interface NewFeedbackInput {
+  /** Artifact name; it must belong to the work item and come from a real (non-replay) run. */
+  artifact: string;
+  quote: string;
+  comment: string;
+}
+
+/** ADR-0071: humans annotate passages of artifacts, collect notes as drafts and submit them as one batch. */
+export interface FeedbackActions {
+  addFeedback(p: Principal, workItem: string, input: NewFeedbackInput): Promise<InlineFeedback>;
+  /** Drafts only; submitted notes are part of the record. */
+  updateFeedback(p: Principal, name: string, comment: string): Promise<InlineFeedback>;
+  deleteFeedback(p: Principal, name: string): Promise<void>;
+  submitFeedback(p: Principal, workItem: string): Promise<FeedbackPlan>;
 }

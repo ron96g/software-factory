@@ -103,6 +103,7 @@ import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/revi
 import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
 import { DEFAULT_RETROSPECTIVE_POLICY } from "./retrospectives/evidence.ts";
 import { PlanningService } from "./planning/service.ts";
+import { StoreDraftFeedbackBatch } from "./app/feedback-batch.ts";
 import { outputFeedbackContext } from "./agents/output-feedback.ts";
 import { planningContext } from "./planning/context.ts";
 import { planningReview } from "./planning/review.ts";
@@ -276,7 +277,8 @@ export async function createFactory(o: FactoryOptions) {
   }
   const workspaceReaders = new LocalWorkspaceReaders(new RipgrepCodeSearch());
   const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor,
-    schemas, schemaValidator, readers: workspaceReaders });
+    schemas, schemaValidator, readers: workspaceReaders,
+    notes: new StoreDraftFeedbackBatch({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store }) });
   // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
   const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
     snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning, recoveryChecks: recoveryCheckPort, logs: transcripts,
