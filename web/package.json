@@ -5,13 +5,16 @@
     "dev": "NODE_USE_ENV_PROXY=1 next dev",
     "build": "next build",
     "start": "NODE_USE_ENV_PROXY=1 next start",
+    "crds:generate": "node scripts/gen-crds.ts",
+    "gen:crds": "npm run crds:generate",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --test \"src/**/*.test.ts\"",
-    "test:integration": "node --test src/core/factory.test.ts src/core/planning-factory.test.ts src/core/checks-pr.test.ts src/core/v02.test.ts",
+    "test:integration": "node --test src/core/factory.test.ts src/core/planning-factory.test.ts src/core/checks-pr.test.ts src/core/v02.test.ts src/core/store/crd-envtest.test.ts",
     "test:acceptance": "ls src/acceptance/*.acceptance.test.ts >/dev/null && node --test \"src/acceptance/*.acceptance.test.ts\""
   },
   "type": "module",
   "dependencies": {
+    "@kubernetes/client-node": "^2.0.2",
     "@mantine/core": "^9.8.0",
     "@mantine/hooks": "^9.8.0",
     "@mantine/notifications": "^9.8.0",
@@ -35,7 +38,8 @@
     "postcss": "^8.5.32",
     "postcss-preset-mantine": "^1.18.0",
     "postcss-simple-vars": "^7.0.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "typescript-api": "npm:typescript@5.9.3"
   },
   "private": true
 }

@@ -564,3 +564,9 @@ flowchart LR
   shows the publication as "not configured" instead of retrying a delivery that can't succeed. Adding `git:` later
   keeps the item's plan and check evidence (they bind to the check definition version, ADR-0064); a preflight made
   stale by a check-definition change is rerun in place before publication.
+
+## Kubernetes definitions backend (ADR-0077)
+With `FACTORY_DEFINITIONS_BACKEND=kubernetes`, definitions are read and watched cluster-wide from CRs (managed by GitOps),
+and swapped in only as a valid whole (last good snapshot, `DefinitionsRejected` Warning otherwise). Secrets resolve only in
+`FACTORY_SECRET_NAMESPACE`, refreshed by a namespace-scoped watch plus a periodic re-list. CRDs are generated from the
+TS model with `npm run crds:generate`; a drift test keeps them in sync. Setup and RBAC: `docs/adr/0077-kubernetes-definitions-backend.md`.

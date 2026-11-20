@@ -241,3 +241,13 @@ flowchart LR
 2. Should Bolts be time-boxed in the spec, e.g. `timebox: 8h`?
 3. Do we need a **Risk** / **ADR** ArtifactType from day one?
 4. Should *Mob* rituals be explicit, e.g. a `mode: mob | solo` on stages?
+
+## Kubernetes definition backend (ADR-0077)
+- **DefinitionSource**: where definitions come from (`git` or `kubernetes`).
+- **DefinitionSnapshot**: an immutable, validated set of definition resources, swapped atomically on reload.
+- **DefinitionFeed**: port that lists (and optionally watches) definitions.
+- **SecretNamespace**: the single namespace (`FACTORY_SECRET_NAMESPACE`) in which `secretRef`s resolve in kubernetes mode.
+- **Last good snapshot**: the definition snapshot kept in use when a reload is rejected.
+- **DefinitionsRejected**: the Warning event recorded when a reload is rejected.
+- **SecretWatcher**: port that streams changes to the Secrets of the secret namespace; the resolver re-lists on every event and periodically.
+- **CRD generator**: the deterministic step (`npm run crds:generate`) that turns the TS model in `web/src/core/model/kinds.ts` into `deploy/kubernetes/crds.yaml`.

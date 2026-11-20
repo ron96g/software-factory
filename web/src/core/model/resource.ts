@@ -12,7 +12,10 @@ export const DEFAULT_NAMESPACE = "default";
 
 export interface Ref {
   name: string;
-  /** Only `factory-system` may be referenced explicitly. Omitted means same namespace, falling back to system. */
+  /** Only `factory-system` may be referenced explicitly. Omitted means same namespace, falling back to system.
+   * @maxLength 63
+   * @pattern ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+   */
   namespace?: string;
 }
 

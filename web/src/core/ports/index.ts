@@ -21,4 +21,5 @@ export * from "./schema.ts";
 export * from "./recovery.ts";
 export * from "./issues.ts";
 export * from "./notifications.ts";
+export * from "./definitions.ts";
 export * from "./capabilities.ts";

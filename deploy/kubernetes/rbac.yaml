@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: software-factory
+  namespace: factory-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: software-factory-definitions-reader
+rules:
+  - apiGroups: ["factory.ai-dlc.io"]
+    resources: ["agents", "skills", "workflows", "artifacttypes", "sources", "repositories", "modelproviders", "sandboxprofiles", "knowledgesources", "toolservers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: software-factory-definitions-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: software-factory-definitions-reader
+subjects:
+  - kind: ServiceAccount
+    name: software-factory
+    namespace: factory-system
+---
+# Secret access is namespaced to the single configured secret namespace (ADR-0077).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: software-factory-secrets-reader
+  namespace: factory-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: software-factory-secrets-reader
+  namespace: factory-secrets
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: software-factory-secrets-reader
+subjects:
+  - kind: ServiceAccount
+    name: software-factory
+    namespace: factory-system
