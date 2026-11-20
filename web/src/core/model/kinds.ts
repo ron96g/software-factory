@@ -610,8 +610,8 @@ export interface ConversationSpec {
   agentRef?: Ref;
   /** Set for `refine-knowledge` (ADR-0030). */
   knowledgeRef?: Ref;
-  /** Selects the registered responder or durable turn runner. */
-  purpose: "explain" | "explain-item" | "refine-knowledge" | "agent-chat";
+  /** Selects the registered responder or durable turn runner. `draft-ticket` records follow-up ticket drafts (ADR-0076). */
+  purpose: "explain" | "explain-item" | "refine-knowledge" | "agent-chat" | "draft-ticket";
   title?: string;
   turn?: { id: string; text: string; submittedBy: string };
   startedBy?: string;
@@ -809,8 +809,11 @@ export interface IssueProposalSpec {
   revision?: string;
   relatesTo?: string[];
   parent?: string;
-  provenance?: { agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean };
-  /** Human decision (rule 8); contentHash binds it to the publishing fields. */
+  provenance?: {
+    agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean;
+    /** ADR-0076: the agent that drafted the body the human approved, and its `draft-ticket` conversation. */
+    draftedBy?: { agent: string; conversation: string };
+  };
   review?: { decision: "approve" | "reject"; contentHash?: string; by?: string; at?: string; comment?: string };
   resolution?: { action: "create-again" | "link"; externalId?: string; by?: string; at?: string };
 }

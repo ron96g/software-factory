@@ -50,6 +50,7 @@ import { createIssueHandler, createIssueLinkHandler } from "./issues/handler.ts"
 import { createIssueProposalController } from "./issues/controller.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
+import { ProductOwnerTicketDrafter } from "./issues/ticket-drafter.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
@@ -498,6 +499,7 @@ export async function createFactory(o: FactoryOptions) {
     records: itemRecords,
     clock,
     baseConflicts: baseSync,
+    ticketDrafter: new ProductOwnerTicketDrafter({ reader: store, transcripts, recorders, models, redactor, agent: "product-owner", skill: "ticket-writing" }),
   });
 
   // ── Browser notifications (ADR-0069): projected from Events by registered rules ──
