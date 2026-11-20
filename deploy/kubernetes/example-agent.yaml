@@ -5,6 +5,7 @@ metadata:
   name: example-agent
   namespace: factory-system
 spec:
+  role: Example Assistant
   model:
     tier: standard
   body: |
@@ -17,5 +18,8 @@ metadata:
   name: example-provider
   namespace: factory-system
 spec:
+  type: anthropic
   secretRef:
     name: anthropic-api-key
+  models:
+    standard: claude-sonnet
