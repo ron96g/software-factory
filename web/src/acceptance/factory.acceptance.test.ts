@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory, type Factory } from "../core/factory.ts";
+import { testDefinitions } from "../core/testing/definitions.ts";
 import { ANONYMOUS as p } from "../core/ports/index.ts";
 import type { Workflow } from "../core/model/kinds.ts";
 
@@ -12,7 +13,7 @@ import type { Workflow } from "../core/model/kinds.ts";
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 async function withFactory(fn: (f: Factory) => Promise<void>) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
   await f.start();
   try { await fn(f); } finally { await f.stop(); }
 }
@@ -29,7 +30,7 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, what: string, ms = 8
 
 test("Human in the loop: a new work item stops for a human with recorded agent work", async () => {
   await withFactory(async (f) => {
-    const item = await f.app.createWorkItem(p, { title: "Acceptance: human in the loop", description: "short", workflowRef: "factory-loop" });
+    const item = await f.app.createWorkItem(p, { title: "Acceptance: human in the loop", description: "short", workflowRef: "test-loop" });
     const detail = await waitFor(async () => {
       const d = await f.app.getWorkItem(p, item.metadata.name);
       return d && ["Blocked", "AwaitingApproval"].includes(d.workItem.status?.phase ?? "") ? d : undefined;
@@ -99,7 +100,7 @@ test("AC-30: one planner run, independent review, and withdrawn answers no longe
       outcome: step === "triage-signal" ? "accept" : step === "ai-plan-review" ? "approve" : undefined,
     }) } }] });
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:",
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:",
     env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "test-planner-key", FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" },
     fetch: fetchImpl, log: () => {} });
   await f.start();

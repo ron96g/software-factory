@@ -26,7 +26,7 @@ subjects:
     name: software-factory
     namespace: factory-system
 ---
-# Secret access is namespaced to the single configured secret namespace (ADR-0071).
+# Secret access is namespaced to the single configured secret namespace (ADR-0077).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

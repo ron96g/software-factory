@@ -35,7 +35,7 @@ test("AC-1/AC-7/AC-11: kubernetes mode needs no definitionsRoot and reads secret
 
 test("kubernetes mode requires a secret namespace; unknown source is rejected", async () => {
   await assert.rejects(build({ FACTORY_DEFINITION_SOURCE: "kubernetes" }), /FACTORY_SECRET_NAMESPACE/);
-  await assert.rejects(build({ FACTORY_DEFINITION_SOURCE: "etcd" }), /FACTORY_DEFINITION_SOURCE/);
+  await assert.rejects(build({ FACTORY_DEFINITION_SOURCE: "etcd" }), /FACTORY_DEFINITIONS_BACKEND/);
 });
 
 test("AC-5/AC-8: a bad snapshot records a Warning; a good change refreshes derived caches", async () => {

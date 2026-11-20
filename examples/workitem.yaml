@@ -8,7 +8,7 @@ spec:
   description: Customers keep asking for PayPal at checkout.
   sourceRef: { name: jira-main }
   externalRef: { id: SHOP-1337, url: https://acme.atlassian.net/browse/SHOP-1337 }
-  workflowRef: { name: factory-loop }
+  workflowRef: { name: factory-plan }
   repositoryRefs:
     - name: shop-backend
     - name: shop-frontend

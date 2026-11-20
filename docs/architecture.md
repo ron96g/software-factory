@@ -5,7 +5,7 @@
 | Category | Kinds | Who writes them | Where they live |
 |---|---|---|---|
 | **Definitions** (the factory "as code") | `Agent`, `Skill`, `Workflow`, `ArtifactType`, `Source`, `Repository`, `KnowledgeSource`, `ToolServer` | Platform team, via Git | this repo |
-| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `RetrospectiveFeedback`, `CheckRun` | UI, sync, agents; controllers write status | the factory's store/API |
+| **Runtime objects** | `WorkItem` (plus its artifacts), `Conversation`, `KnowledgeEntry`, `RetrospectiveFeedback`, `CheckRun`, `InlineFeedback` | UI, sync, agents; controllers write status | the factory's store/API |
 
 Runtime objects follow the Kubernetes split: humans and sync write the **`spec`** (intent), and the factory
 controller writes the **`status`** (observed state). The UI is a view over `WorkItem` objects.
@@ -29,6 +29,8 @@ flowchart LR
   CR -- searches --> Repository
   Agent -- reads --> Repository
   Agent -- writes artifacts / context --> WorkItem
+  Human["Human reviewer"] -- inline notes on artifacts --> FB["InlineFeedback (submitted as a batch)"]
+  FB -- next run of the producing step --> Agent
   Agent -- proposes --> KE["KnowledgeEntry (human approves)"]
   KE -- approved, as context --> Agent
   Agent -- observations --> RF["RetrospectiveFeedback (untrusted evidence)"]
@@ -52,7 +54,8 @@ flowchart LR
 | **WorkItem** | One unit of demand (task, bug, feature) moving through a workflow. This is a row in the dashboard. |
 | **CheckRun** | A named repository check pinned to its workspace tree, configuration and environment. Standalone jobs never advance items; verification-enabled workflows and recorded `run_check` calls share durable jobs, with plan/stage/round/attempt identity (ADR-0042). |
 | **Conversation** | Append-only dialogue. Explanation chats use existing evidence; standalone `agent-chat` invokes an opted-in agent with a curated read-only MCP tool intersection (ADR-0036). The Conversation controller serializes durable turns and retries model unavailability. No hidden WorkItem or AgentRun is created. |
-| **IssueProposal** | A tracker issue proposed by an agent or human. Approval is bound to a hash of its publishing fields; creation runs through the recoverable outbox action `create-issue` and needs `Source.spec.writeBack.issues`. Unknown outcomes become `Uncertain` and are resolved by lookup or a human (ADR-0066). Purpose `follow-up` (ADR-0068): created Approved by the Create click in a work item's follow-up dialog, owned by that item; the controller tracks the ticket read-only in `status.tracked` and may link it to the origin (`writeBack.issues.linkOrigin`); "Start implementation" creates the linked WorkItem. |
+| **IssueProposal** | A tracker issue proposed by an agent or human. Approval is bound to a hash of its publishing fields; creation runs through the recoverable outbox action `create-issue` and needs `Source.spec.writeBack.issues`. Unknown outcomes become `Uncertain` and are resolved by lookup or a human (ADR-0066). Purpose `follow-up` (ADR-0068): created Approved by the Create click in a work item's follow-up dialog, owned by that item; the controller tracks the ticket read-only in `status.tracked` and may link it to the origin (`writeBack.issues.linkOrigin`); "Start implementation" creates the linked WorkItem. The body is the human-reviewed ticket draft (ADR-0076: drafted by the `product-owner`, origin links appended by the server), not the evidence snapshot. |
+| **InlineFeedback** | A human's note on a passage of an artifact. Drafts are submitted as one batch, which rejects the open gate or restarts from the producing stage; the producing step's next run receives them once (ADR-0071). |
 | **KnowledgeEntry** | A piece of reusable knowledge an agent proposed (or a human edited). Used by agents only after a human approves it (ADR-0030). It outlives the work item it came from. |
 | **RetrospectiveFeedback** | Immutable workflow observation with pinned origin identities and workflow versions. Untrusted evidence, not knowledge; independent lifetime. Its controller derives eligibility and durable investigation links (ADR-0041). |
 | **KnowledgeSource** | External docs agents can search, e.g. product docs or runbooks. `type: files` searches a local folder; other types (e.g. a vector store) plug in later. |
@@ -106,6 +109,13 @@ pull-request publication, and the human input it waits on. Above the chips, the 
 running check, a pending delivery, a human, or an agent) and says so plainly when that won't resolve by itself, e.g.
 agent tools that no sandbox provides, or a pull request that failed to deliver.
 
+Workflow-specific panels follow the item's **capabilities** (ADR-0075). `WorkItemDetail.capabilities` lists them
+(`planning`, `verification`, `checks`, `unit-execution`, `pull-requests`, `ticket-actions`, `retrospective`). They are
+derived by `CapabilityDetector`s registered in the composition root, from the compiled workflow, the item and its
+Source, and stay present once the item has records of them. The page renders panels from a registry
+(`web/src/ui/item-panels.tsx`) by region and required capabilities. A service desk item therefore shows its ticket
+actions but no verification contract, check evidence, Units or pull requests.
+
 **Ticket history** (ADR-0070): synced Jira items carry the ticket's comments (public/internal) and field changes in
 `spec.sourceHistory`; sync never imports or updates an item without it, every agent prompt includes it, and the item
 page shows it in the **Ticket history** tab.
@@ -120,10 +130,11 @@ reasons notify; history comes from `GET /api/notifications`, live frames from `/
 
 The `factory-plan` workflow (default for new manual items) makes the reviewed plan the primary work-item surface.
 Its single planner run produces requirements, Units, validation and implementation plan together, followed by one
-independent review and the existing verified human plan gate. `factory-planned` remains available for items already
-using its multi-stage planning chain; they are not migrated automatically. A human can explicitly migrate an eligible
-stopped item or an item paused in its planning stages, restarting at the one-planner stage and superseding the old
-workflow's planning and later evidence. ADR-0047 implements approved Units one at a time and
+independent review and the existing verified human plan gate. The multi-stage planning chain (`revisionStage` /
+`synthesisStage`) remains an engine capability, though no production workflow uses it since `factory-planned` was
+retired (ADR-0074). A human can explicitly migrate an eligible stopped item, or an item paused in its planning stages,
+from such a workflow. The migration restarts at the one-planner stage and supersedes the old workflow's planning and
+later evidence. ADR-0047 implements approved Units one at a time and
 keeps code review closed until every Unit is ready on the current candidate (see "Unit execution" below).
 The implementation plan is a JSON Artifact with readable Markdown sections and structured human decisions;
 the existing policy-controlled validation plan remains the verification contract. In `factory-plan` it is a focused
@@ -301,7 +312,7 @@ proposed resource, concurrency, provenance and acceptance contracts.
 
 ## Unit execution (ADR-0047)
 
-On `factory-planned`, the validation plan carries the approved Unit manifest. The implementation stage runs one
+On `factory-plan`, the validation plan carries the approved Unit manifest. The implementation stage runs one
 developer attempt per round, each assigned to the first Unit whose dependencies are ready; its `unit-progress` gate
 checks the structured result and runs the Unit's readiness checks before moving to the next Unit.
 
@@ -403,8 +414,9 @@ Checks accept a command string (15-minute default) or `{command, timeoutMs}` in 
 budgets must be positive integers no greater than 24 hours. Typed timeout/signal/spawn errors remain separate from
 generic UnknownFailure. Standalone evidence does not advance/restart items or satisfy a workflow gate automatically.
 
-X23b/c add the explicitly selected `factory-verified` workflow. Its architect writes a JSON `validation-plan` mapping
-every acceptance criterion to named policy checks. Human spec-review approves its exact artifact/specification,
+X23b/c add verification-enabled workflows (`spec.verification`; today `factory-plan`, whose planner writes the plan,
+since `factory-verified` was retired by ADR-0074). The JSON `validation-plan` maps every acceptance criterion to named
+policy checks. Human spec-review approves its exact artifact/specification,
 workflow versions and repository policy, then same-environment preflight runs before construction. Restarting directly
 into implementation cannot bypass this policy: entering any later stage with missing or stale preflight evidence (e.g.
 after a definition change and plan re-confirmation) reruns preflight in place, within its budgets, instead of asking a
@@ -435,12 +447,12 @@ genuine complete test-failure events. Preflight nonzero results are SetupFailed.
 Required checks without usable, current evidence cannot pass. Where repository policy explicitly permits it, a
 fresh human waiver names the exact missing requirements and needs a reason; it binds plan/policy/candidate/evidence
 revisions and remains **Waived**, not Passed. Non-waivable gaps and stale approvals block. Publication rechecks evidence
-before entering the outbox. Migrating a stopped item via **Use verified workflow** preserves workspace/history,
-restarts at validation planning with fresh human reviews, and sets a durable publication hold. It never approves
-anything or enables pushes.
+before entering the outbox. A durable publication hold (`publicationDisabled`) blocks publishing regardless of
+approvals. There is no migration into a verified workflow (ADR-0074). The **Verification contract** card appears only
+for workflows with a verification policy.
 
-Legacy gate caching, retry routing and warnings for unsupported checks remain unchanged for non-migrated workflows.
-No existing item is migrated or restarted automatically. Controlplane build/test checks retain explicit 30/60-minute
+Workflows without a verification policy keep the earlier gate caching, retry routing and warnings for unsupported
+checks; since ADR-0074 no production workflow runs checks without a policy. No existing item is restarted automatically. Controlplane build/test checks retain explicit 30/60-minute
 budgets; their module scope follows ADR-0044 below. Its existing preflight checks Go/make/gotestsum and prepares
 Rover envtest assets; selected modules' supported Makefile targets also prepare their own assets. Missing integration/acceptance/security
 checks remain visible requirements needing evidence or explicit permitted waivers.
@@ -552,3 +564,9 @@ flowchart LR
   shows the publication as "not configured" instead of retrying a delivery that can't succeed. Adding `git:` later
   keeps the item's plan and check evidence (they bind to the check definition version, ADR-0064); a preflight made
   stale by a check-definition change is rerun in place before publication.
+
+## Kubernetes definitions backend (ADR-0077)
+With `FACTORY_DEFINITIONS_BACKEND=kubernetes`, definitions are read and watched cluster-wide from CRs (managed by GitOps),
+and swapped in only as a valid whole (last good snapshot, `DefinitionsRejected` Warning otherwise). Secrets resolve only in
+`FACTORY_SECRET_NAMESPACE`, refreshed by a namespace-scoped watch plus a periodic re-list. CRDs are generated from the
+TS model with `npm run crds:generate`; a drift test keeps them in sync. Setup and RBAC: `docs/adr/0077-kubernetes-definitions-backend.md`.

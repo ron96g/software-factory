@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 async function withFactory(env: Record<string, string>, fn: (f: Factory) => Promise<void>, fetchImpl?: typeof fetch) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
   await f.start();
   try {
     await fn(f);
@@ -35,8 +36,8 @@ const phaseIs = (f: Factory, name: string, phase: string) => async () => {
 
 test("M2/M3: full loop on simulated executor incl. block/answer, reject/approve, research notes", async () => {
   await withFactory({}, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Transcript store redaction", description: "short", workflowRef: "factory-loop" });
-    assert.equal(wi.spec.workflowRef?.name, "factory-loop");
+    const wi = await f.app.createWorkItem(p, { title: "Transcript store redaction", description: "short", workflowRef: "test-loop" });
+    assert.equal(wi.spec.workflowRef?.name, "test-loop");
 
     // classify → triage (research + thin description) → Blocked
     let d = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
@@ -85,7 +86,7 @@ test("M2/M3: full loop on simulated executor incl. block/answer, reject/approve,
 
 test("M3: explain-mode conversation without LLM is grounded in the transcript and side-effect free", async () => {
   await withFactory({}, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Add dark mode", description: "x", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Add dark mode", description: "x", workflowRef: "test-loop" });
     const d = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
     const triageRun = d.runs.find((r) => r.spec.step === "triage-signal")!;
     const conv = await f.app.startConversation(p, triageRun.metadata.name);
@@ -114,7 +115,7 @@ test("M3: LLM executor via OpenAI-compatible provider; secret redacted; provenan
   await withFactory(
     { OPENAI_API_KEY: "sk-test-123456" },
     async (f) => {
-      const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "factory-loop" });
+      const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "test-loop" });
       const d = await waitFor(async () => {
         const x = await f.app.getWorkItem(p, wi.metadata.name);
         return x?.workItem.status?.stage === "spec" || x?.workItem.status?.phase === "AwaitingApproval" ? x : undefined;
@@ -173,7 +174,7 @@ test("ADR-0028: a provider's agentModels override the tier mapping for that agen
 
 test("restart from a stage: new round, earlier output of restarted stages superseded and not used as input", async () => {
   await withFactory({}, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Restart me", description: "A description long enough that triage does not ask questions.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Restart me", description: "A description long enough that triage does not ask questions.", workflowRef: "test-loop" });
     const before = await waitFor(phaseIs(f, wi.metadata.name, "AwaitingApproval"), "spec-review");
     const oldSpec = before.artifacts.find((a) => a.spec.artifactTypeRef.name === "spec")!;
     const oldNotes = before.artifacts.find((a) => a.spec.artifactTypeRef.name === "research-notes")!;
@@ -201,7 +202,7 @@ test("restart from a stage: new round, earlier output of restarted stages supers
 
 test("restart supersedes an open clarification of a restarted stage; answered history stays", async () => {
   await withFactory({}, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Thin item", description: "short", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Thin item", description: "short", workflowRef: "test-loop" });
     const blocked = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
     const open = blocked.clarifications[0];
     await f.app.restartWorkItem(p, wi.metadata.name, blocked.workItem.status!.stage!);
@@ -218,7 +219,7 @@ test("restart supersedes an open clarification of a restarted stage; answered hi
 
 test("restart revives a finished item; unknown stages are rejected", async () => {
   await withFactory({}, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Done then restarted", description: "A description long enough that triage does not ask questions.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Done then restarted", description: "A description long enough that triage does not ask questions.", workflowRef: "test-loop" });
     await assert.rejects(f.app.restartWorkItem(p, wi.metadata.name, "nope"), /stage "nope" not found/);
     for (const stage of ["spec-review", "code-review", "ship"]) {
       const d = await waitFor(async () => {
@@ -241,7 +242,7 @@ test("restart revives a finished item; unknown stages are rejected", async () =>
 
 test("FACTORY_SIMULATION=wait: runs without a real executor wait instead of producing placeholders", async () => {
   await withFactory({ FACTORY_SIMULATION: "wait" }, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Wait for an LLM", description: "A description long enough that triage does not ask questions.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Wait for an LLM", description: "A description long enough that triage does not ask questions.", workflowRef: "test-loop" });
     const d = await waitFor(async () => {
       const x = await f.app.getWorkItem(p, wi.metadata.name);
       return x?.runs.some((r) => r.status?.phase === "Pending" && /Waiting instead of simulating/.test(r.status.message ?? "")) ? x : undefined;
@@ -275,6 +276,7 @@ test("servicedesk workflow: response review rejects/redrafts, then a fresh publi
     const name = "jira-servicedesk-desk-1";
     let d = await waitFor(phaseIs(f, name, "AwaitingApproval"), "response-review");
     assert.equal(d.workItem.spec.workflowRef?.name, "servicedesk");
+    assert.deepEqual(d.capabilities, ["ticket-actions"], "ADR-0075: only the reviewed ticket actions, no code-pipeline panels");
     assert.deepEqual(d.stages.map((s) => s.name), ["classify", "investigate", "respond", "response-review", "publish-response"]);
     assert.equal(d.workItem.status?.stage, "response-review");
     for (const t of ["research-notes", "support-analysis", "customer-response"]) assert.ok(d.artifacts.some((a) => a.spec.artifactTypeRef.name === t), t);
@@ -300,12 +302,21 @@ test("servicedesk workflow: response review rejects/redrafts, then a fresh publi
   }, fetchImpl);
 });
 
+test("ADR-0075: item capabilities follow the production workflows", async () => {
+  await withFactory({}, async (f) => {
+    const caps = async (workflowRef: string) =>
+      (await f.app.getWorkItem(p, (await f.app.createWorkItem(p, { title: workflowRef, description: "x", workflowRef })).metadata.name))!.capabilities;
+    assert.deepEqual(await caps("factory-plan"), ["checks", "planning", "pull-requests", "unit-execution", "verification"]);
+    assert.deepEqual(await caps("servicedesk"), [], "no code-pipeline panels for a service request");
+  });
+});
+
 test("new item: offers top-level workflows and readable repositories, applies the picks, rejects unusable ones", async () => {
   await withFactory({}, async (f) => {
     const o = await f.app.newItemOptions(p);
     const names = (xs: { name: string }[]) => xs.map((x) => x.name).sort();
-    assert.ok(names(o.workflows).includes("servicedesk") && names(o.workflows).includes("factory-loop"));
-    assert.ok(!names(o.workflows).includes("construction-bolt"), "sub-workflows are not offered");
+    assert.ok(names(o.workflows).includes("servicedesk") && names(o.workflows).includes("test-loop"));
+    assert.ok(!names(o.workflows).includes("test-bolt"), "sub-workflows are not offered");
     assert.ok(names(o.repositories).includes("software-factory"));
     assert.ok(!names(o.repositories).includes("shop-backend"), "no local checkout, not offered");
     assert.deepEqual(o.defaults, { workflow: "factory-plan", repositories: ["software-factory"] });
@@ -315,7 +326,7 @@ test("new item: offers top-level workflows and readable repositories, applies th
     assert.deepEqual(wi.spec.repositoryRefs?.map((r) => r.name), ["software-factory"]);
     assert.equal((await f.app.createWorkItem(p, { title: "Defaults" })).spec.workflowRef?.name, "factory-plan");
 
-    await assert.rejects(f.app.createWorkItem(p, { title: "x", workflowRef: "construction-bolt" }), /can't be used for a new item/);
+    await assert.rejects(f.app.createWorkItem(p, { title: "x", workflowRef: "test-bolt" }), /can't be used for a new item/);
     await assert.rejects(f.app.createWorkItem(p, { title: "x", repositoryRefs: ["shop-backend"] }), /without a local checkout/);
   });
 });
@@ -329,7 +340,7 @@ test("model quota / rate limit (HTTP 429): the run waits and retries instead of 
     return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] });
   }) as typeof fetch;
   await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Survive a quota error", description: "A description long enough that triage does not ask questions.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Survive a quota error", description: "A description long enough that triage does not ask questions.", workflowRef: "test-loop" });
     const waiting = await waitFor(phaseIs(f, wi.metadata.name, "Waiting"), "item shows Waiting");
     assert.match(waiting.workItem.status?.message ?? "", /Waiting for the model: LLM HTTP 429/);
     const d = await waitFor(async () => {
@@ -355,11 +366,11 @@ test("model quota: Retry-After is capped, and a restart (e.g. with a new token) 
   const db = join(mkdtempSync(join(tmpdir(), "sf-quota-")), "factory.db");
   const exhausted = (async () => new Response("quota exceeded", { status: 429, headers: { "retry-after": "1209600" } })) as typeof fetch;
   const ok = (async () => Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] })) as typeof fetch;
-  const open = (fetchImpl: typeof fetch) => createFactory({ definitionsRoot: ROOT, databasePath: db, env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
+  const open = (fetchImpl: typeof fetch) => createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: db, env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
 
   let f = await open(exhausted);
   await f.start();
-  const wi = await f.app.createWorkItem(p, { title: "Quota then new token", description: "A description long enough that triage does not ask questions.", workflowRef: "factory-loop" });
+  const wi = await f.app.createWorkItem(p, { title: "Quota then new token", description: "A description long enough that triage does not ask questions.", workflowRef: "test-loop" });
   const waiting = await waitFor(phaseIs(f, wi.metadata.name, "Waiting"), "waiting");
   const run = waiting.runs.find((r) => r.status?.phase === "Pending")!;
   assert.ok(Date.parse(run.status!.retryAt!) - Date.now() <= 15 * 60_000 + 1000, "two weeks of Retry-After capped to 15 minutes");
@@ -382,7 +393,7 @@ test("additional context: every agent prompt carries it, so agents don't ask for
     return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] });
   }) as typeof fetch;
   await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Context please", description: "A description long enough that triage does not ask questions.", context: "Environment: prod, eu-central.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Context please", description: "A description long enough that triage does not ask questions.", context: "Environment: prod, eu-central.", workflowRef: "test-loop" });
     assert.equal(wi.spec.context, "Environment: prod, eu-central.");
     await waitFor(phaseIs(f, wi.metadata.name, "AwaitingApproval"), "spec-review");
     assert.ok(prompts.length > 2 && prompts.every((u) => u.includes("## Additional context from the team") && u.includes("Environment: prod, eu-central.")));
@@ -401,7 +412,7 @@ const triageWith = (questions: unknown[]) => (async (_url: string, init: Request
 
 test("AC-1: non-blocker triager questions create no Clarification and the item proceeds", async () => {
   await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "test-loop" });
     const d = await waitFor(async () => {
       const x = await f.app.getWorkItem(p, wi.metadata.name);
       return x?.workItem.status?.stage === "spec" || x?.workItem.status?.phase === "AwaitingApproval" ? x : undefined;
@@ -412,7 +423,7 @@ test("AC-1: non-blocker triager questions create no Clarification and the item p
 
 test("AC-2: blocker triager questions create a Clarification with default options", async () => {
   await withFactory({ OPENAI_API_KEY: "sk-test-123456" }, async (f) => {
-    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Crash on save", description: "The app crashes with an exception when saving a work item.", workflowRef: "test-loop" });
     const d = await waitFor(phaseIs(f, wi.metadata.name, "Blocked"), "Blocked");
     assert.deepEqual(d.clarifications[0].spec.questions, ["Which db?"]);
     assert.ok(d.clarifications[0].spec.options?.[0]?.length);

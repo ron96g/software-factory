@@ -74,15 +74,12 @@ test("AC-6: startup fails fast; outage keeps the last snapshot", async () => {
   store.close();
 });
 
-test("refs with an explicit non-default namespace resolve across namespaces", async () => {
+test("ADR-0011: definitions in any namespace load, but explicit refs to a namespace other than factory-system are rejected", async () => {
   const api = new FakeClusterApi();
   const ns = (o: ReturnType<typeof agent>, namespace: string) => ({ ...o, metadata: { ...o.metadata, namespace } });
   api.set("skills", [ns(agent("s", "1"), "team-a")]);
   api.set("agents", [ns(agent("a", "1", { skillRefs: [{ name: "s", namespace: "team-a" }] }), "team-b")]);
-  const rejected: string[] = [];
-  const store = new ReloadingDefinitionStore({ feed: new KubernetesDefinitionFeed(api), validator: refSnapshotValidator([refValidator()]), onRejected: (r) => rejected.push(r), debounceMs: 1 });
-  await store.init();
-  assert.deepEqual(rejected, []);
-  assert.ok(await store.get("Agent", "team-b", "a"));
+  const store = new ReloadingDefinitionStore({ feed: new KubernetesDefinitionFeed(api), validator: refSnapshotValidator([refValidator()]), debounceMs: 1 });
+  await assert.rejects(store.init(), /Skill "s" not found/);
   store.close();
 });

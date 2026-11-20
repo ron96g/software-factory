@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS, type PreparedWorkspace } from "./ports/index.ts";
 import type { Workspace } from "./model/kinds.ts";
 
@@ -24,10 +25,10 @@ test("S5a: workspace is created at start, agents wait for Ready, provenance pins
       removed.push(ws.metadata.name);
     },
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Workspace gating", description: "Long enough description so triage proceeds without questions.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Workspace gating", description: "Long enough description so triage proceeds without questions.", workflowRef: "test-loop" });
     await sleep(300);
     let d = (await f.app.getWorkItem(p, wi.metadata.name))!;
     assert.equal(d.workspaces.length, 1);
@@ -62,10 +63,10 @@ test("S5a: a failed workspace fails the item with a visible reason", async () =>
     },
     remove: async () => {},
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Broken setup", description: "x", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Broken setup", description: "x", workflowRef: "test-loop" });
     for (let i = 0; i < 200; i++) {
       const d = (await f.app.getWorkItem(p, wi.metadata.name))!;
       if (d.workItem.status?.phase === "Failed") {

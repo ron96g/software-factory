@@ -1,7 +1,7 @@
 import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
 import type { ClusterApi, ClusterKindRef, RawCustomResource, Unsubscribe } from "../../ports/index.ts";
 
-/** ADR-0071: cluster-wide list/watch of definition CRs (read-only ClusterRole). */
+/** ADR-0077: cluster-wide list/watch of definition CRs (read-only ClusterRole). */
 export class KubeClusterApi implements ClusterApi {
   private readonly api: CustomObjectsApi;
   private readonly watcher: Watch;

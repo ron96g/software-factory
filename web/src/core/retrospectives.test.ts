@@ -21,6 +21,7 @@ import { RetrospectiveActions } from "./retrospectives/actions.ts";
 import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/review.ts";
 import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const capturedAt = "2026-11-14T12:00:00.000Z";
@@ -256,15 +257,15 @@ test("X22 end to end: recorded feedback -> manual investigation -> independent r
     }) } }] });
   };
   const directory = mkdtempSync(join(tmpdir(), "retrospective-test-"));
-  const options = { definitionsRoot: ROOT, databasePath: join(directory, "factory.db"), env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-retrospective-fixture" }, fetch: fake };
+  const options = { definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: join(directory, "factory.db"), env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-retrospective-fixture" }, fetch: fake };
   let f: Factory = await createFactory(options);
   try {
     await f.start();
-    const origin = await f.app.createWorkItem(p, { title: "Investigate missing ticket history", description: "Investigate prior attempts and report whether the workflow supplied enough history.", workflowRef: "factory-loop" });
+    const origin = await f.app.createWorkItem(p, { title: "Investigate missing ticket history", description: "Investigate prior attempts and report whether the workflow supplied enough history.", workflowRef: "test-loop" });
     const group = await until(async () => (await f.retrospectives.list(p)).find((g) => g.issueCode === "missing-ticket-history"), "feedback capture");
     assert.equal(group.origins, 1); assert.equal(group.thresholdMet, false);
     assert.ok(group.reports[0].feedback.spec.verified);
-    assert.ok(group.reports[0].feedback.spec.target.workflowVersions["factory-system/factory-loop"]);
+    assert.ok(group.reports[0].feedback.spec.target.workflowVersions["factory-system/test-loop"]);
     await f.retrospectives.investigate(p, group.id, { requestId: "manual-investigation", revision: group.revision });
     const detail = await until(async () => {
       const item = (await f.retrospectives.list(p)).find((g) => g.id === group.id)?.investigations[0];
@@ -291,7 +292,7 @@ test("X22 end to end: recorded feedback -> manual investigation -> independent r
     assert.equal((await f.retrospectives.list(p)).flatMap((g) => g.reports).length, 1, "retrospectives never recursively report feedback");
     const preview = await f.app.previewWorkItemFollowUp(p, detail.workItem.metadata.name);
     const input = { requestId: "implementation", expectedRevision: preview.revision, title: "Implement reviewed improvement",
-      workflowRef: "factory-loop", repositoryRefs: ["software-factory"] };
+      workflowRef: "test-loop", repositoryRefs: ["software-factory"] };
     await assert.rejects(f.app.createWorkItemFollowUp(p, detail.workItem.metadata.name, input), /publication authorization/);
     const followup = await f.app.createWorkItemFollowUp(p, detail.workItem.metadata.name, { ...input, authorizePublication: true });
     assert.equal(followup.metadata.annotations?.["factory.ai-dlc.io/publication-authorized-by"], p.id);

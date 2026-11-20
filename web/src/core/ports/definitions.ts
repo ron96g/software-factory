@@ -44,3 +44,8 @@ export type { DefinitionLoader };
 export interface NamespacedSecretReader {
   readSecrets(namespace: string): Promise<Record<string, Record<string, string>>>;
 }
+
+/** Change stream for the Secrets of one namespace (ADR-0077). Kept apart from the reader (ISP). */
+export interface SecretWatcher {
+  watchSecrets(namespace: string, onChange: () => void, onClose: (err?: Error) => void): Unsubscribe;
+}

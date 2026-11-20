@@ -128,3 +128,25 @@ body {
 .sf-notification-row:focus-visible {
   background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-5));
 }
+
+/* ADR-0071: inline feedback. CSS Custom Highlights mark passages without touching the rendered Markdown. */
+.sf-annotatable {
+  position: relative;
+}
+::highlight(sf-selection) {
+  background-color: light-dark(var(--mantine-color-blue-1), var(--mantine-color-blue-9));
+}
+::highlight(sf-feedback-draft) {
+  background-color: light-dark(var(--mantine-color-yellow-2), rgba(250, 176, 5, 0.3));
+}
+::highlight(sf-feedback-submitted) {
+  text-decoration: underline wavy light-dark(var(--mantine-color-teal-6), var(--mantine-color-teal-4));
+  text-underline-offset: 3px;
+}
+.sf-quote {
+  border-left: 3px solid light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3));
+  padding-left: 8px;
+  color: var(--mantine-color-dimmed);
+  font-style: italic;
+  white-space: pre-wrap;
+}

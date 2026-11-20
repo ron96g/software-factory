@@ -44,7 +44,7 @@ spec:
             routes:
               resolvable:   { next: respond }
               needs-info:   { block: human-input }   # internal team answers in the UI; resumes investigate
-              needs-change: { next: respond }        # reply + a proposed change to file as a factory-loop item
+              needs-change: { next: respond }        # reply + a proposed change to file as a factory-plan item
               out-of-scope: { next: respond }        # reply says who can help
 
     - name: operations

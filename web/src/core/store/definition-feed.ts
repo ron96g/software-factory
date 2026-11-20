@@ -64,3 +64,10 @@ export class FeedDefinitionLoader implements DefinitionLoader {
     return (await this.feed.list()).resources;
   }
 }
+
+/** `FACTORY_DEFINITIONS_BACKEND` (spec name) wins over the older alias `FACTORY_DEFINITION_SOURCE`; default git. */
+export function definitionsBackend(env: Record<string, string | undefined>): "git" | "kubernetes" {
+  const v = env.FACTORY_DEFINITIONS_BACKEND ?? env.FACTORY_DEFINITION_SOURCE ?? "git";
+  if (v !== "git" && v !== "kubernetes") throw new Error(`FACTORY_DEFINITIONS_BACKEND must be "git" or "kubernetes", got "${v}"`);
+  return v;
+}

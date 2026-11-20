@@ -7,11 +7,12 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelProvider, ToolServer, Source, Repository, ArtifactType } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { DefinitionFeed, NamespacedSecretReader, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
+import { BUILTIN_CAPABILITY_DETECTORS } from "./capabilities/detectors.ts";
 import { CompositeStore, ScopeRouter } from "./store/composite-store.ts";
 import { ReloadingDefinitionStore, refSnapshotValidator } from "./store/reloading-store.ts";
 import { AdmissionChain, AdmittedStore } from "./admission/chain.ts";
@@ -22,7 +23,7 @@ import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from 
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
 import { NamespacedSecretResolver } from "./adapters/secrets/namespaced.ts";
 import { KubeClusterApi } from "./adapters/kubernetes/cluster-api.ts";
-import { KubeSecretReader } from "./adapters/kubernetes/secret-reader.ts";
+import { KubeSecretReader, KubeSecretWatcher } from "./adapters/kubernetes/secret-reader.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
 import { EventingReconcileErrorReporter } from "./runtime/reconcile-errors.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
@@ -53,6 +54,7 @@ import { createIssueHandler, createIssueLinkHandler } from "./issues/handler.ts"
 import { createIssueProposalController } from "./issues/controller.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
+import { ProductOwnerTicketDrafter } from "./issues/ticket-drafter.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
@@ -77,7 +79,7 @@ import { OpenCodeHost } from "./adapters/opencode/host.ts";
 import { OpenCodeExecutor } from "./adapters/opencode/executor.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
-import type { ConversationTurnRunner, FinishValidator } from "./ports/index.ts";
+import type { CapabilityDetector, ConversationTurnRunner, DefinitionLoader, FinishValidator } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 import { TicketActions } from "./tickets/actions.ts";
@@ -107,6 +109,7 @@ import { RetrospectiveReview, retrospectiveContext } from "./retrospectives/revi
 import { feedbackDeletionGuard, retrospectiveValidator } from "./retrospectives/admission.ts";
 import { DEFAULT_RETROSPECTIVE_POLICY } from "./retrospectives/evidence.ts";
 import { PlanningService } from "./planning/service.ts";
+import { StoreDraftFeedbackBatch } from "./app/feedback-batch.ts";
 import { outputFeedbackContext } from "./agents/output-feedback.ts";
 import { planningContext } from "./planning/context.ts";
 import { planningReview } from "./planning/review.ts";
@@ -124,7 +127,7 @@ import type { RecoveryCheckAuthorization, RecoveryNeedHandler } from "./ports/in
 import type { NotificationClassifier, NotificationQueries, NotificationRule } from "./ports/index.ts";
 import { EventNotificationFeed, RuleBasedNotificationClassifier } from "./notifications/classifier.ts";
 import { registerNotificationRules } from "./notifications/rules.ts";
-import { FeedDefinitionLoader, GitDefinitionFeed, KubernetesDefinitionFeed } from "./store/definition-feed.ts";
+import { FeedDefinitionLoader, GitDefinitionFeed, KubernetesDefinitionFeed, definitionsBackend } from "./store/definition-feed.ts";
 import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
 import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
 import { persistedArtifactCheck, RegistryFinishValidator, schemaArtifactCheck } from "./artifacts/output-checks.ts";
@@ -138,12 +141,16 @@ export interface FactoryOptions {
   retrospectivePolicy?: RetrospectivePolicy;
   /** Repo root containing agents/, skills/, workflows/, … Required for git mode only. */
   definitionsRoot?: string;
+  /** Definition source override for git mode, e.g. repository definitions plus test fixtures. */
+  definitionLoader?: DefinitionLoader;
   /** Directory for workspaces and file knowledge (AC-7). Default: `FACTORY_LOCAL_ROOT`, else the definitions root. */
   localRoot?: string;
   /** Definition origin override (e.g. a fake cluster feed). Without it, `FACTORY_DEFINITION_SOURCE=git|kubernetes` selects; default git. */
   definitionFeed?: DefinitionFeed;
   /** Secret source for kubernetes mode (tests); default reads `FACTORY_SECRET_NAMESPACE` from the cluster. */
   secretReader?: NamespacedSecretReader;
+  /** Secret change stream for kubernetes mode (tests); default watches `FACTORY_SECRET_NAMESPACE`. */
+  secretWatcher?: SecretWatcher;
   /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
   workspacesDir?: string;
   /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
@@ -180,16 +187,15 @@ export async function createFactory(o: FactoryOptions) {
   const kinds = new KindRegistry();
   BUILTIN_KINDS.forEach((k) => kinds.register(k));
   const runtime = new SqliteStore(db, clock, [feedbackDeletionGuard]);
-  const definitionSource = (o.env ?? process.env).FACTORY_DEFINITION_SOURCE ?? "git";
-  if (definitionSource !== "git" && definitionSource !== "kubernetes") throw new Error(`FACTORY_DEFINITION_SOURCE must be "git" or "kubernetes", got "${definitionSource}"`);
-  if (definitionSource === "git" && !o.definitionFeed && !o.definitionsRoot) throw new Error("definitionsRoot is required in git mode");
+  const definitionSource = definitionsBackend(o.env ?? process.env);
+  if (definitionSource === "git" && !o.definitionFeed && !o.definitionLoader && !o.definitionsRoot) throw new Error("definitionsRoot is required in git mode");
   const localRoot = o.localRoot ?? (o.env ?? process.env).FACTORY_LOCAL_ROOT ?? o.definitionsRoot;
   if (!localRoot) throw new Error("FACTORY_LOCAL_ROOT (or localRoot) is required without a definitions root");
   const definitionFeed =
     o.definitionFeed ??
     (definitionSource === "kubernetes"
       ? new KubernetesDefinitionFeed(new KubeClusterApi())
-      : new GitDefinitionFeed(new GitDefinitionLoader(o.definitionsRoot!)));
+      : new GitDefinitionFeed(o.definitionLoader ?? new GitDefinitionLoader(o.definitionsRoot!)));
   let rejectDefinitions: (reason: string) => void = () => {};
   const definitions = await new ReloadingDefinitionStore({
     feed: definitionFeed,
@@ -228,6 +234,8 @@ export async function createFactory(o: FactoryOptions) {
     if (!secretNamespace) throw new Error("FACTORY_SECRET_NAMESPACE is required in kubernetes mode");
     secretRefresh = new NamespacedSecretResolver(o.secretReader ?? new KubeSecretReader(), secretNamespace);
     await secretRefresh.refresh();
+    const relistMs = Number((o.env ?? process.env).FACTORY_SECRET_RELIST_MS) || undefined;
+    secretRefresh.start({ watcher: o.secretWatcher ?? (o.secretReader ? undefined : new KubeSecretWatcher()), relistMs, log: o.log });
     inner = secretRefresh;
   }
   const secrets = new RedactingSecretResolver(inner, redactor);
@@ -328,9 +336,10 @@ export async function createFactory(o: FactoryOptions) {
   });
   const workspaceReaders = new LocalWorkspaceReaders(new RipgrepCodeSearch());
   const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor,
-    schemas, schemaValidator, readers: workspaceReaders });
+    schemas, schemaValidator, readers: workspaceReaders,
+    notes: new StoreDraftFeedbackBatch({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store }) });
   // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
-  const verification = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
+  const verification: VerificationService = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
     snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning, recoveryChecks: recoveryCheckPort, logs: transcripts,
     completeness: { beforeCandidate: (...a) => units.beforeCandidate(...a), assertComplete: (...a) => units.assertComplete(...a) } });
   const recoveryRouter = new ValidatedRecoveryRouter({ reader: store, schemas, validator: schemaValidator, contracts: verification,
@@ -341,7 +350,7 @@ export async function createFactory(o: FactoryOptions) {
   const recoveryNeeds = new Registry<RecoveryNeedHandler>();
   const runtimeNeed = runtimeRecoveryNeed(environments);
   recoveryNeeds.register(runtimeNeed.type, runtimeNeed);
-  const units = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
+  const units: UnitExecutionService = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
     scheduler: checkScheduler, readers: workspaceReaders, events, clock, redactor });
   // ADR-0055/0057: one check per artifact type, applied when the agent calls `finish` and again after the run.
   const proposedChecks = new Registry<ProposedArtifactCheck>();
@@ -527,7 +536,10 @@ export async function createFactory(o: FactoryOptions) {
   responders.register("explain-item", new ItemExplainResponder({ records: itemRecords, transcripts, recorders, models, redactor }));
   responders.register("refine-knowledge", new KnowledgeRefineResponder({ reader: store, transcripts, recorders, models, redactor }));
 
+  const capabilities = new Registry<CapabilityDetector>();
+  for (const [name, detector] of Object.entries(BUILTIN_CAPABILITY_DETECTORS)) capabilities.register(name, detector);
   const app = new FactoryApp({
+    capabilities,
     approvalGuards: [retrospectiveReview],
     verificationGuard: verification,
     reader: store,
@@ -547,6 +559,7 @@ export async function createFactory(o: FactoryOptions) {
     records: itemRecords,
     clock,
     baseConflicts: baseSync,
+    ticketDrafter: new ProductOwnerTicketDrafter({ reader: store, transcripts, recorders, models, redactor, agent: "product-owner", skill: "ticket-writing" }),
   });
 
   // ── Browser notifications (ADR-0069): projected from Events by registered rules ──
@@ -588,6 +601,7 @@ export async function createFactory(o: FactoryOptions) {
       await manager.start();
     },
     async stop() {
+      secretRefresh?.stop();
       await manager.stop();
       await Promise.all([agentRunController.stop(), conversationController.stop(), checkRunController.stop()]);
       await opencode?.close();

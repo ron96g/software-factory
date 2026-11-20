@@ -508,19 +508,13 @@ test("missing required evidence needs an explicit revision-bound waiver; waiver 
   } finally { f.db.close(); }
 });
 
-test("migration is explicit, deduplicated and preserves a durable publication hold", async () => {
+test("a durable publication hold keeps a restarted item from publishing", async () => {
   const f = await fixture();
   try {
     const wi = await f.current();
-    await f.store.updateStatus({ ...wi, status: { phase: "Failed", stage: "verify", round: 20 } });
-    const migrated = await f.service.migrate(ANONYMOUS, "item", { workflow: "verified", requestId: "migration" });
-    assert.equal(migrated.spec.publicationDisabled, true);
-    assert.equal(migrated.spec.restart?.stage, "validation-plan");
-    const again = await f.service.migrate(ANONYMOUS, "item", { workflow: "verified", requestId: "migration" });
-    assert.equal(again.metadata.resourceVersion, migrated.metadata.resourceVersion);
-    await assert.rejects(f.service.migrate(ANONYMOUS, "item", { workflow: "other", requestId: "migration" }), /different workflow/);
+    await f.store.update<WorkItem>({ ...wi, spec: { ...wi.spec, publicationDisabled: true, restart: { id: "hold", stage: "validation-plan", requestedBy: "human" } } });
     const current = await f.current();
-    await f.store.updateStatus({ ...current, status: { ...current.status!, stage: "ship", phase: "Running", restartHandled: current.spec.restart!.id } });
+    await f.store.updateStatus({ ...current, status: { ...current.status!, stage: "ship", phase: "Running", restartHandled: "hold" } });
     const controller = createWorkItemController({ reader: f.store, writer: f.store, status: f.store, compiler: f.compiler, clock: f.clock,
       events: f.events, gates: new Registry<GateEvaluator>(), outbox: { enqueue: async () => { throw new Error("publication must stay disabled"); } }, workspaces: { supports: () => false } });
     await controller.reconcile(keyOf(current));

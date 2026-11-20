@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeClusterApi } from "../adapters/kubernetes/fake-cluster-api.ts";
-import { FeedDefinitionLoader, KubernetesDefinitionFeed } from "./definition-feed.ts";
+import { FeedDefinitionLoader, KubernetesDefinitionFeed, definitionsBackend } from "./definition-feed.ts";
 import { DefinitionStore } from "./composite-store.ts";
 
 function fixture() {
@@ -36,4 +36,12 @@ test("list failure surfaces as an error", async () => {
   const api = fixture();
   api.failWith = new Error("unreachable");
   await assert.rejects(new KubernetesDefinitionFeed(api).list(), /unreachable/);
+});
+
+test("AC-1/AC-9: FACTORY_DEFINITIONS_BACKEND selects the backend, old name stays an alias, git is the default", () => {
+  assert.equal(definitionsBackend({}), "git");
+  assert.equal(definitionsBackend({ FACTORY_DEFINITIONS_BACKEND: "kubernetes" }), "kubernetes");
+  assert.equal(definitionsBackend({ FACTORY_DEFINITION_SOURCE: "kubernetes" }), "kubernetes");
+  assert.equal(definitionsBackend({ FACTORY_DEFINITIONS_BACKEND: "git", FACTORY_DEFINITION_SOURCE: "kubernetes" }), "git");
+  assert.throws(() => definitionsBackend({ FACTORY_DEFINITIONS_BACKEND: "etcd" }), /must be "git" or "kubernetes"/);
 });

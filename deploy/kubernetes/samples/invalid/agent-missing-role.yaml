@@ -1,0 +1,6 @@
+# expect: spec.role: Required value
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Agent
+metadata: { name: no-role, namespace: default }
+spec:
+  body: "An agent without a role."

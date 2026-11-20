@@ -96,5 +96,4 @@ export interface VerificationActions {
   inspect(p: Principal, item: string): Promise<{ enabled: boolean; workflow?: string; publicationDisabled: boolean; plan?: ValidationPlan; error?: string;
     /** Checks in the plan whose repository has no configured command: they stay NotVerified (policy gaps). */
     gaps?: import("../model/verification-policy.ts").PolicyGap[] }>;
-  migrate(p: Principal, item: string, input: { workflow: string; requestId: string }): Promise<WorkItem>;
 }

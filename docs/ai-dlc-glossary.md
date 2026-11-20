@@ -95,8 +95,9 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Restart** | Re-run a work item's workflow from the first or a chosen stage in a new round (ADR-0029). Unlike a replay, it advances the workflow. |
 | **Superseded** | Label on runs and artifacts that a restart replaced. Kept as history, but never agent input or gate evidence again. |
 | **Simulation policy** | `FACTORY_SIMULATION`: `allow` falls back to simulated placeholder output; `wait` keeps runs Pending until an LLM or sandbox can take them. |
-| **Conversation** | A persistent dialogue with an append-only transcript. `explain` / `explain-item` answer from recorded run/item evidence; `refine-knowledge` reviews a knowledge draft; `agent-chat` directly investigates with an opted-in agent's read-only MCP tools (ADR-0036). |
+| **Conversation** | A persistent dialogue with an append-only transcript. `explain` / `explain-item` answer from recorded run/item evidence; `refine-knowledge` reviews a knowledge draft; `agent-chat` directly investigates with an opted-in agent's read-only MCP tools (ADR-0036); `draft-ticket` records the product owner's follow-up ticket drafts (ADR-0076). |
 | **Agent chat** | A standalone Conversation, not a workflow run. One durable turn at a time, resumable history, visible tools and model waiting. Explicit answer completion distinguishes interim announcements from a finished turn (ADR-0038). An optional `workItemRef` supplies refreshed item evidence without workflow changes (ADR-0037); otherwise a human can convert reviewed findings into a WorkItem with `conversationRef`. |
+| **Feedback (inline)** | A human's note on a selected passage of an artifact (`InlineFeedback`). Collected as drafts and submitted as one batch: it rejects the open gate or restarts from the producing stage, and the next run of the producing step receives the quotes, comments and the version read, once (ADR-0071). Asking about a passage instead is read-only (explain conversation). A planning revision takes the drafts on the stages it re-runs along (ADR-0073). |
 | **Outbox** | Persisted queue (`OutboxMessage`) for effects in external systems, e.g. posting questions to GitHub or Jira. Delivered with retries, and each message is idempotent. |
 | **Echo suppression** | The factory marks its own comments, so syncing replies back never treats them as human answers. |
 | **Answer at source** | A human reply on the original issue (GitHub or Jira) that answers an open clarification and resumes the item. |
@@ -116,6 +117,7 @@ Part A covers the AI-DLC method itself. Part B covers the terms *this factory* a
 | **Check scope** | The modules a scoped check covers: `changed`, `affected` (changed plus transitive dependents, ADR-0044) or `full`. Chosen by the tier (policy may raise it with `minScope`), widened to `full` for shared or unknown paths. |
 | **Check worker** | The process that executes CheckRuns outside the web server, claiming them with fenced leases and limiting concurrency (ADR-0062). |
 | **Bound tool** | A tool instance bound to only the capabilities it declares: `read`/`search` (workspace, no sandbox) or `write`/`exec`/`artifacts` (sandbox only) (ADR-0022). |
+| **Item capability** | A named feature a work item supports (`planning`, `verification`, `checks`, `pull-requests`, `ticket-actions`, …). Derived by registered detectors from the compiled workflow, the item and its Source; present when declared **or** already used. The item page shows a workflow-specific panel only when its capabilities are present (ADR-0075). |
 | **Gate evidence** | What a human sees at a gate: structured verdicts (e.g. verifier pass/partial/fail), check results, open questions. Graded ok/warning/blocking (ADR-0027). |
 | **Delegation (at a gate)** | "Approve & let agents decide": open decisions are resolved by agents with the recommended/conservative default, documented under "Decisions taken". Gate comments are input for later agents. |
 | **Agent model mapping** | `ModelProvider.agentModels`: assigns a specific model to an agent, overriding its tier (ADR-0028). |
@@ -189,6 +191,7 @@ flowchart LR
 | **Issue proposal** | A tracker issue (`IssueProposal`) proposed by an agent (a *finding*) or written by a human. A human approves it; the factory then creates it in GitHub or Jira at most once through the outbox (ADR-0066). Not an ADR-0039 follow-up WorkItem. |
 | **Tracker follow-up** | An `IssueProposal` with purpose `follow-up`, owned by the origin work item, created Approved by the human Create click in the follow-up dialog and bound to the ADR-0039 preview revision; its ticket status is tracked read-only on the origin item (ADR-0068). |
 | **Start implementation** | Explicit command that creates the WorkItem for a created tracker follow-up ticket, carrying `originWorkItemRef` and the origin snapshot. Never automatic (ADR-0068). |
+| **Ticket draft** | The title and body the `product-owner` agent writes for a tracker follow-up with the `ticket-writing` skill (problem, user story, SMART goal, Given/When/Then acceptance criteria). Only a proposal: the human edits it and Create approves exactly the reviewed text; the server appends the origin links. Recorded in a `draft-ticket` conversation (ADR-0076). |
 | **Issue target** | A `Source` whose `spec.writeBack.issues` permits creating issues (project, type, labels live there, never in code). |
 | **Mirror** | An issue proposal with purpose `mirror` that creates a tracker issue for a manual work item and links it back (`sourceRef`, `externalRef`) so the sync never imports it twice. |
 | **Knowledge entry** | Reusable knowledge (`KnowledgeEntry`) that an agent proposed while working: where something lives in the code, how a recurring request is resolved, a pitfall. `Proposed → Approved / Rejected → Retired`; only approved entries reach agents (ADR-0030). |
@@ -200,7 +203,7 @@ flowchart LR
 | **Validation plan** (ADR-0042) | A human-reviewed JSON artifact mapping acceptance criteria to operator-approved named checks and preflights. Approval binds the exact specification, plan, workflow versions and repository policy; agents cannot weaken mandatory checks or invent commands/budgets. |
 | **Planning workspace** (ADR-0045, ADR-0050) | Primary view for plan-first items: readable proposal, editable human intent, consolidated decisions, revision comparison and exact-revision approval. Chat is optional; existing construction/publication gates remain. `factory-plan` produces its proposal in one run and is the default for new manual items; eligible legacy planning items can migrate with an explicit restart. |
 | **Implementation plan** (ADR-0045, ADR-0051) | JSON Artifact with Markdown outcome, scope, approach, ordered delivery, acceptance and risks plus stable human decision IDs/options/recommendations. It explains the proposal; it never replaces the policy-controlled validation plan. In `factory-plan` it is a decision sheet. |
-| **Decision sheet** (ADR-0051) | Focused implementation-plan format (`planning.planFormat: decision-sheet`): only risks/assumptions/open points and human decisions. Spec, Units and validation plan are shown as sources instead of being restated; the design is left to the design stage. |
+| **Decision sheet** (ADR-0051) | Focused implementation-plan format (`planning.planFormat: decision-sheet`): only risks/assumptions/open points and human decisions. Spec, Units and validation plan are shown as sources instead of being restated; the design is left to the design stage. While required decisions are open, the plan gate waits for answers instead of offering approval; an answer stays bound to the same question (ADR-0072). |
 | **Logical design** (ADR-0051) | Section the architect adds to the `domain-model` in `factory-plan`: approach, considered alternatives with citations, per-Unit notes, NFRs and open points. A tech lead approves it at the design `human-approval` gate before construction. |
 | **Decision batch** (ADR-0046) | A consolidated submission of human planning choices, shared across agents with semantically unchanged answers preserved across revisions/restarts. New required decisions are directly answerable without reopening discovery; submitting answers updates the proposal but never approves it. |
 | **Plan revision** (ADR-0045, ADR-0050) | Human edits, context, feedback, answers or answer withdrawals saved as WorkItem intent, followed by a fresh planner run and independent review on `factory-plan`. Previous artifacts remain history; the regenerated proposal needs explicit approval. |
@@ -228,7 +231,7 @@ flowchart LR
 | Phase (Inception / Construction / Operations) | `Workflow.spec.phases[]` |
 | Mob Elaboration / Mob Construction | `stage` + `human-approval` gate |
 | Intent, Story, Unit, Domain Model, … | `ArtifactType` |
-| Bolt | Sub-`Workflow` (`construction-bolt`) fanned out per Unit |
+| Bolt | One Unit's construction: `factory-plan` implements approved Units one at a time (ADR-0047); `forEach` sub-workflow fan-out stays an engine capability (ADR-0074) |
 | Human oversight | `gate.type: human-approval` |
 | Persistent context | Step `inputs` / `outputs` via `artifactRef` |
 | Human roles | `Agent.spec.humanCounterpart`, `gate.approvers` |
@@ -239,8 +242,12 @@ flowchart LR
 3. Do we need a **Risk** / **ADR** ArtifactType from day one?
 4. Should *Mob* rituals be explicit, e.g. a `mode: mob | solo` on stages?
 
-## Kubernetes definition backend (ADR-0071)
+## Kubernetes definition backend (ADR-0077)
 - **DefinitionSource**: where definitions come from (`git` or `kubernetes`).
 - **DefinitionSnapshot**: an immutable, validated set of definition resources, swapped atomically on reload.
 - **DefinitionFeed**: port that lists (and optionally watches) definitions.
-- **SecretNamespace**: the single namespace in which `secretRef`s resolve in kubernetes mode.
+- **SecretNamespace**: the single namespace (`FACTORY_SECRET_NAMESPACE`) in which `secretRef`s resolve in kubernetes mode.
+- **Last good snapshot**: the definition snapshot kept in use when a reload is rejected.
+- **DefinitionsRejected**: the Warning event recorded when a reload is rejected.
+- **SecretWatcher**: port that streams changes to the Secrets of the secret namespace; the resolver re-lists on every event and periodically.
+- **CRD generator**: the deterministic step (`npm run crds:generate`) that turns the TS model in `web/src/core/model/kinds.ts` into `deploy/kubernetes/crds.yaml`.

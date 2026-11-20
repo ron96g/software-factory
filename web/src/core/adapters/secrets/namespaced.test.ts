@@ -37,3 +37,57 @@ test("AC-9: a CRD exists per definition kind and RBAC has no cluster-wide secret
   assert.ok(!cluster.includes("secrets"));
   assert.ok(ns.includes("secrets"));
 });
+
+test("AC-10: rotated Secrets are picked up by watch, watch close and periodic re-list; cache swapped atomically", async () => {
+  let value = "v1";
+  let reads = 0;
+  const rotating: NamespacedSecretReader = { readSecrets: async () => { reads++; return { tok: { value } }; } };
+  let onChange: (() => void) | undefined;
+  let onClose: ((err?: Error) => void) | undefined;
+  const watched: string[] = [];
+  let unsubscribed = 0;
+  const watcher = { watchSecrets: (ns: string, c: () => void, cl: (err?: Error) => void) => { watched.push(ns); onChange = c; onClose = cl; return () => { unsubscribed++; }; } };
+  const logs: string[] = [];
+  const r = new NamespacedSecretResolver(rotating, "factory-secrets");
+  await r.refresh();
+  r.start({ watcher, relistMs: 20, rewatchMs: 5, log: (m) => logs.push(m) });
+  assert.deepEqual(watched, ["factory-secrets"]);
+  value = "v2";
+  onChange!();
+  await new Promise((res) => setTimeout(res, 1));
+  assert.equal(r.resolve({ name: "tok" }), "v2");
+  value = "v3";
+  onClose!(new Error("gone"));
+  await new Promise((res) => setTimeout(res, 15));
+  assert.equal(r.resolve({ name: "tok" }), "v3");
+  assert.equal(watched.length, 2, "watch re-opened after close");
+  value = "v4";
+  const before = reads;
+  await new Promise((res) => setTimeout(res, 50));
+  assert.ok(reads > before, "periodic re-list ran");
+  assert.equal(r.resolve({ name: "tok" }), "v4");
+  r.stop();
+  assert.ok(unsubscribed >= 1);
+  assert.ok(logs.every((l) => !/v[1-4]/.test(l)), "secret values never logged");
+  const after = reads;
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(reads, after, "stopped: no more re-lists");
+});
+
+test("a failed refresh keeps the last cache", async () => {
+  let fail = false;
+  const r = new NamespacedSecretResolver({ readSecrets: async () => { if (fail) throw new Error("x"); return { tok: { value: "a" } }; } }, "ns");
+  await r.refresh();
+  fail = true;
+  await assert.rejects(r.refresh());
+  assert.equal(r.resolve({ name: "tok" }), "a");
+});
+
+test("AC-10: RBAC grants get/list/watch on secrets only via a namespaced Role, never a ClusterRole", () => {
+  const rbac = readFileSync(new URL("../../../../../deploy/kubernetes/rbac.yaml", import.meta.url), "utf8");
+  const docs = rbac.split(/^---$/m);
+  for (const d of docs.filter((x) => /kind: ClusterRole\n/.test(x))) assert.ok(!d.includes("secrets"));
+  const role = docs.find((x) => /kind: Role\n/.test(x) && x.includes("secrets"))!;
+  assert.ok(role.includes("namespace: factory-secrets"));
+  assert.ok(role.includes('verbs: ["get", "list", "watch"]'));
+});

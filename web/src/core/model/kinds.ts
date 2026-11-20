@@ -20,10 +20,20 @@ export interface AgentSpec {
   /** Opt-in, human-curated read-only MCP tool names for direct conversations (ADR-0036). */
   chat?: { allowedTools: string[] };
   humanCounterpart?: { role: string };
+  permissions?: { repositories?: string };
+  /**
+   * How a shared agent is called (e.g. `delegate` from other agents).
+   * @preserveUnknownFields the input/output contract is documentation for delegating agents, not interpreted by the factory
+   */
+  invocation?: Record<string, unknown>;
 }
 export type Agent = DocumentResource<AgentSpec>;
 
-/** ADR-0034 (ADR-0011): an MCP server agents can use. */
+/**
+ * ADR-0034 (ADR-0011): an MCP server agents can use.
+ * @validation rule="self.transport != 'http' || has(self.url)" message="http transport needs url"
+ * @validation rule="self.transport != 'stdio' || has(self.command)" message="stdio transport needs command"
+ */
 export interface ToolServerSpec {
   transport: "http" | "stdio";
   /** `http`: Streamable HTTP endpoint. */
@@ -49,7 +59,7 @@ export interface ArtifactTypeSpec {
   format: string;
   collection?: boolean;
   description?: string;
-  schema?: { version: string; jsonSchema: Record<string, unknown> };
+  schema?: { version: string; /** @preserveUnknownFields arbitrary JSON Schema */ jsonSchema: Record<string, unknown> };
 }
 export type ArtifactType = Resource<ArtifactTypeSpec>;
 
@@ -66,45 +76,56 @@ export interface StepSpec {
   outputs?: { artifactRef: Ref }[];
 }
 
+/** @validation rule="(has(self.next) ? 1 : 0) + (has(self.block) ? 1 : 0) + (has(self.end) ? 1 : 0) == 1" message="exactly one of next, block, end must be set" */
 export interface GateRoute {
   next?: string;
   block?: string;
   end?: string;
 }
 
+/** @validation rule="self.type != 'human-approval' || (has(self.approvers) && self.approvers.size() > 0)" message="a human-approval gate needs at least one approver" */
 export interface GateSpec {
   type: string; // "decision" | "human-approval" | "automated" | extensible
+  /** @maxProperties 32 */
   routes?: Record<string, GateRoute>;
   approvers?: { role: string }[];
   criteria?: string[];
   checks?: string[];
   onReject?: GateRoute;
+  /** @preserveUnknownFields failure routing is interpreted by registered gate evaluators */
   onFailure?: Record<string, unknown>;
   publication?: { artifactRef: Ref; reviewStage: string };
 }
 
 export interface StageSpec {
   name: string;
+  /** Phase the WorkItem shows while this stage runs. */
+  sets?: { phase: string };
   mode?: string;
   /** Q1: if the stage's last outcome matches, go back to `goto` (bounded by `maxAttempts`) before the gate. */
-  loop?: { when: { outcome: string }; goto: string; maxAttempts: number };
+  loop?: { when: { outcome: string }; goto: string; /** @minimum 1 */ maxAttempts: number };
   /** ADR-0023: on entering the stage, publish the item's workspaces (outbox). */
   publish?: {
     pullRequest?: {
       draft?: boolean;
       /** ADR-0053: a conflict with the current base goes back to `next` (bounded); without it, a human resolves. */
-      onConflict?: { next: string; maxAttempts?: number };
+      onConflict?: { next: string; /** @minimum 1 */ maxAttempts?: number };
     };
   };
   steps?: StepSpec[];
   gate?: GateSpec;
   workflowRef?: Ref;
-  forEach?: { artifactRef: Ref; as: string; parallelism?: number };
+  forEach?: { artifactRef: Ref; as: string; /** @minimum 1 */ parallelism?: number };
 }
 
+/** @validation rule="!has(self.unitExecution) || has(self.verification)" message="unitExecution requires verification" */
 export interface WorkflowSpec {
   /** Opt-in technical recovery, independent of the approved verification budgets. */
   recovery?: import("./recovery.ts").RecoveryPolicy;
+  /**
+   * @validation rule="has(self.plannerStage) != (has(self.revisionStage) || has(self.synthesisStage))" message="set plannerStage, or revisionStage together with synthesisStage"
+   * @validation rule="has(self.revisionStage) == has(self.synthesisStage)" message="revisionStage and synthesisStage go together"
+   */
   planning?: { reviewStage: string; planFormat?: import("./planning.ts").PlanFormat } & (
     | { plannerStage: string; revisionStage?: never; synthesisStage?: never }
     | { plannerStage?: never; revisionStage: string; synthesisStage: string }
@@ -117,29 +138,45 @@ export interface WorkflowSpec {
     implementationStage: string;
     /** Named checks prepare the candidate on entry, before this stage's AI and human review. */
     preparationStage?: string;
+    /** @minimum 1 */
     maxCodeAttempts: number;
+    /** @minimum 1 */
     maxExecutionAttempts: number;
+    /** @minimum 0 */
     retryDelayMs: number;
   };
   /**
    * ADR-0047: implement approved Units one at a time and require current readiness evidence for every Unit before
    * `barrierStage` (the first stage after implementation) starts any review. Requires `verification`.
    */
-  unitExecution?: { barrierStage: string; maxCodeAttempts: number; maxExecutionAttempts: number };
+  unitExecution?: { barrierStage: string; /** @minimum 1 */ maxCodeAttempts: number; /** @minimum 1 */ maxExecutionAttempts: number };
   timebox?: string;
-  trigger?: { sourceRefs?: Ref[] };
-  phases: { name: string; stages: StageSpec[] }[];
+  trigger?: { sourceRefs?: Ref[]; output?: { artifactRef: Ref } };
+  /**
+   * @minItems 1
+   * @maxItems 20
+   */
+  phases: {
+    name: string;
+    /** @maxItems 50 */
+    stages: StageSpec[];
+  }[];
+  /** @preserveUnknownFields legacy, ignored by the workflow compiler */
   humanInput?: Record<string, unknown>;
+  /** @preserveUnknownFields legacy, ignored by the workflow compiler */
   loop?: Record<string, unknown>;
 }
 export type Workflow = Resource<WorkflowSpec>;
 
+/** @validation rule="!has(self.sync) || !has(self.sync.mode) || self.sync.mode != 'poll' || has(self.sync.pollInterval)" message="poll mode needs sync.pollInterval" */
 export interface SourceSpec {
   type: string;
+  /** @preserveUnknownFields connection settings differ per registered source connector */
   connection?: Record<string, unknown> & { secretRef?: Ref };
   sync?: {
     mode?: "webhook" | "poll";
     pollInterval?: string;
+    /** @preserveUnknownFields filters differ per registered source connector */
     filter?: Record<string, unknown>;
     bidirectional?: boolean;
   };
@@ -148,17 +185,21 @@ export interface SourceSpec {
   /** Explicit human-reviewed actions, independent of automatic clarification synchronization. */
   writeBack?: { replyVisibilities?: ("public" | "internal")[]; transitions?: boolean;
     /** ADR-0066: permits creating issues here. The project key and defaults live in config, never in code. */
-    issues?: { project?: string; issueType?: string; labels?: string[]; pickUpLabels?: string[]; fields?: Record<string, unknown>;
+    issues?: { project?: string; issueType?: string; labels?: string[]; pickUpLabels?: string[];
+      /** @preserveUnknownFields tracker-specific issue fields */
+      fields?: Record<string, unknown>;
       /** ADR-0068: link a created follow-up ticket to its origin ticket (Jira, same instance). Off by default. */
       linkOrigin?: boolean } };
 }
 export type Source = Resource<SourceSpec>;
 
+/** @validation rule="has(self.git) || has(self.local)" message="a repository needs a git remote or a local path" */
 export interface RepositorySpec {
   git?: { url: string; defaultBranch?: string; secretRef?: Ref };
   local?: { path: string };
-  index?: { enabled?: boolean; type?: string; include?: string[]; exclude?: string[] };
+  index?: { enabled?: boolean; type?: string; refreshOn?: string[]; include?: string[]; exclude?: string[] };
   context?: { docs?: string[]; owners?: { role: string; team?: string }[] };
+  /** @preserveUnknownFields settings differ per monitoring backend */
   observability?: Record<string, unknown>;
   /** Default sandbox for agents working on this repository. */
   sandboxRef?: Ref;
@@ -168,6 +209,7 @@ export interface RepositorySpec {
    * ADR-0023: check name → command run in the workspace, e.g. `build: cd web && npx tsc --noEmit -p .`.
    * `scoped` (ADR-0061): the command takes a module selection whose scope follows the verification tier.
    * `moduleScoped` (legacy, ADR-0044): always the affected scope, whatever the tier.
+   * @preserveUnknownValues a check is either a command string or an object, which a structural schema cannot express
    */
   checks?: Record<string, string | { command: string; timeoutMs?: number; maxOutputBytes?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
@@ -191,6 +233,7 @@ export interface ModelProviderSpec {
   type: string; // "openai-compatible" | "anthropic" | …
   baseUrl?: string;
   secretRef?: Ref;
+  /** @minProperties 1 */
   models: Record<string, string>; // tier → model
   /** Optional agent name → model, overrides the tier mapping for that agent (ADR-0028). */
   agentModels?: Record<string, string>;
@@ -201,7 +244,8 @@ export type ModelProvider = Resource<ModelProviderSpec>;
 /** Runtime-neutral sandbox definition; adapters translate it (ADR-0019). */
 export interface SandboxProfileSpec {
   image: string;
-  resources?: { cpu?: string; memory?: string; pids?: number; timeout?: string };
+  resources?: { cpu?: string; memory?: string; /** @minimum 1 */ pids?: number; timeout?: string };
+  /** @validation rule="self.mode == 'allowlist' || !has(self.allow) || self.allow.size() == 0" message="allow is only valid with mode allowlist" */
   network?: { mode: "none" | "allowlist"; allow?: string[] };
   filesystem?: { workspace?: string; rootReadOnly?: boolean; tmpfs?: string[] };
   user?: string;
@@ -550,6 +594,8 @@ export interface RunProvenance {
   inputs: Record<string, string>;
   contexts?: Record<string, string>;
   clarifications?: string[];
+  /** Submitted InlineFeedback names this run received (ADR-0071); each note reaches one run of its step only. */
+  feedback?: string[];
   promptHash?: string;
   /** Set when this run is a re-run of another. */
   replayOf?: Ref;
@@ -590,6 +636,7 @@ export interface KnowledgeEntryStatus {
 export type KnowledgeEntry = Resource<KnowledgeEntrySpec, KnowledgeEntryStatus>;
 
 /** ADR-0030: external docs (runbooks, product docs). `type` selects the registered search (`files` = ripgrep). */
+/** @validation rule="self.type != 'files' || has(self.local)" message="a files knowledge source needs local.path" */
 export interface KnowledgeSourceSpec {
   type: string;
   description?: string;
@@ -608,8 +655,8 @@ export interface ConversationSpec {
   agentRef?: Ref;
   /** Set for `refine-knowledge` (ADR-0030). */
   knowledgeRef?: Ref;
-  /** Selects the registered responder or durable turn runner. */
-  purpose: "explain" | "explain-item" | "refine-knowledge" | "agent-chat";
+  /** Selects the registered responder or durable turn runner. `draft-ticket` records follow-up ticket drafts (ADR-0076). */
+  purpose: "explain" | "explain-item" | "refine-knowledge" | "agent-chat" | "draft-ticket";
   title?: string;
   turn?: { id: string; text: string; submittedBy: string };
   startedBy?: string;
@@ -642,6 +689,26 @@ export interface ArtifactSpec {
   content: string;
 }
 export type Artifact = Resource<ArtifactSpec>;
+
+/**
+ * ADR-0071: a human's inline note on a passage of an artifact. Drafts collect until the human submits them as one
+ * batch; the next run of the producing step then receives them (once, recorded in its provenance). Humans write the
+ * spec; the state (draft / submitted / addressed) is derived from `submitted` and run provenance, so there's no status.
+ */
+export interface InlineFeedbackSpec {
+  workItemRef: Ref;
+  /** The Artifact (exact version) the human read and annotated. */
+  targetRef: Ref;
+  /** Producer of the target: the next run of this stage/step receives the feedback. */
+  producedBy: { agentRunRef: Ref; agentRef: Ref; stage: string; step: string };
+  /** The selected passage, as plain text. */
+  quote: string;
+  comment: string;
+  author?: string;
+  /** Set when the human submits the batch; drafts have none. */
+  submitted?: { id: string; at: string; by: string };
+}
+export type InlineFeedback = Resource<InlineFeedbackSpec>;
 
 export interface ClarificationSpec {
   workItemRef: Ref;
@@ -787,8 +854,11 @@ export interface IssueProposalSpec {
   revision?: string;
   relatesTo?: string[];
   parent?: string;
-  provenance?: { agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean };
-  /** Human decision (rule 8); contentHash binds it to the publishing fields. */
+  provenance?: {
+    agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean;
+    /** ADR-0076: the agent that drafted the body the human approved, and its `draft-ticket` conversation. */
+    draftedBy?: { agent: string; conversation: string };
+  };
   review?: { decision: "approve" | "reject"; contentHash?: string; by?: string; at?: string; comment?: string };
   resolution?: { action: "create-again" | "link"; externalId?: string; by?: string; at?: string };
 }

@@ -1,9 +1,9 @@
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: Workflow
 metadata:
-  name: factory-planned
+  name: test-planned
   annotations:
-    description: Plan-first AI-DLC with editable proposals, one consolidated decision sheet and exact-revision human review (ADR-0045); approved Units are implemented one at a time and review starts only when all are ready (ADR-0047).
+    description: Test fixture only (ADR-0074; formerly `factory-planned`, superseded by factory-plan in ADR-0050) for the two-stage revision/synthesis planning path. Plan-first AI-DLC with editable proposals, one consolidated decision sheet and exact-revision human review (ADR-0045); approved Units are implemented one at a time and review starts only when all are ready (ADR-0047).
 spec:
   planning:
     revisionStage: spec

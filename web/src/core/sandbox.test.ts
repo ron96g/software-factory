@@ -5,6 +5,7 @@ import { InMemorySandboxEnvironment, NoSandboxEnvironment } from "./adapters/san
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { Registry } from "./registry/registry.ts";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS, SandboxUnavailableError, type ExecutionEnvironment, type SandboxSpec } from "./ports/index.ts";
 
 const spec = { run: { metadata: { name: "r1" } }, profile: {}, repositories: [] } as unknown as SandboxSpec;
@@ -46,7 +47,7 @@ test("selector: auto picks the first available runtime; explicit unavailable fal
 });
 
 test("S2: without a runtime, construction agents are simulated with a visible reason; health is reported", async () => {
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: {}, log: () => {} });
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
   await f.start();
   try {
     const h = await f.app.systemHealth(ANONYMOUS);
@@ -54,7 +55,7 @@ test("S2: without a runtime, construction agents are simulated with a visible re
     assert.equal(h.sandbox.available, false);
     assert.equal(h.llm.available, false);
 
-    const wi = await f.app.createWorkItem(ANONYMOUS, { title: "Sandbox reason", description: "A long enough description so triage accepts it right away.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(ANONYMOUS, { title: "Sandbox reason", description: "A long enough description so triage accepts it right away.", workflowRef: "test-loop" });
     for (let i = 0; i < 400; i++) {
       const d = await f.app.getWorkItem(ANONYMOUS, wi.metadata.name);
       if (d?.workItem.status?.stage === "spec-review" && d.workItem.status.phase === "AwaitingApproval") {

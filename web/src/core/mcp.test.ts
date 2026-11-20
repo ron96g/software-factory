@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createFactory, type Factory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS, type PreparedWorkspace } from "./ports/index.ts";
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -40,12 +41,12 @@ async function connect(f: Factory, headers: Record<string, string> = {}) {
 const json = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content)[0].text);
 
 test("MCP server: token required; harness creates items, proposes and searches knowledge; no gate tools", async () => {
-  const off = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, log: () => {} });
+  const off = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
   assert.equal((await off.mcp(new Request(MCP_URL, { method: "POST", body: "{}" }))).status, 503, "disabled without FACTORY_MCP_TOKEN");
   await off.stop();
 
   let f!: Factory;
-  f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_MCP_TOKEN: TOKEN }, log: () => {} });
+  f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_MCP_TOKEN: TOKEN }, log: () => {} });
   await f.start();
   try {
     assert.equal((await f.mcp(new Request(MCP_URL, { method: "POST", headers: { authorization: "Bearer wrong" }, body: "{}" }))).status, 401);
@@ -56,7 +57,7 @@ test("MCP server: token required; harness creates items, proposes and searches k
     assert.ok(!names.some((n) => /approve|reject|decide|delete/.test(n)), `no gate tools: ${names.join(", ")}`);
 
     const created = json(await client.callTool({ name: "create_work_item", arguments: {
-      title: "From my harness", description: "short", context: "Env: prod", workflow: "factory-loop",
+      title: "From my harness", description: "short", context: "Env: prod", workflow: "test-loop",
     } }));
     const wi = await f.app.getWorkItem(ANONYMOUS, created.name);
     assert.equal(wi?.workItem.spec.context, "Env: prod");
@@ -122,7 +123,7 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
     prepare: async (): Promise<PreparedWorkspace> => ({ path: ROOT, baseCommit: "c0ffee", headCommit: "c0ffee", preparedBy: "fake", setupCompleted: true }),
   };
   f = await createFactory({
-    definitionsRoot: ROOT,
+    definitionsRoot: ROOT, definitionLoader: testDefinitions(),
     databasePath: ":memory:",
     env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
     fetch: routing(() => f, llm),

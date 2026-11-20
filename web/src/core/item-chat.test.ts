@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 
@@ -9,9 +10,9 @@ const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
 
 async function blockedItem(env: Record<string, string>, fetchImpl?: typeof fetch) {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
   await f.start();
-  const wi = await f.app.createWorkItem(p, { title: "Ask the item", description: "x", workflowRef: "factory-loop" });
+  const wi = await f.app.createWorkItem(p, { title: "Ask the item", description: "x", workflowRef: "test-loop" });
   for (let i = 0; i < 400; i++) {
     const d = await f.app.getWorkItem(p, wi.metadata.name);
     if (d?.workItem.status?.phase === "Blocked") break;

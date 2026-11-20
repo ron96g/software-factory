@@ -7,10 +7,12 @@ import type {
   Clarification,
   Conversation,
   FactoryEvent,
+  InlineFeedback,
   KnowledgeEntry,
   IssueProposal,
   Repository,
   Source,
+  CheckRun,
   WorkItem,
   Workflow,
   Workspace,
@@ -37,8 +39,14 @@ import type {
   ModelResolver,
   ControllerHealth,
   EventRecorder,
+  FeedbackActions,
+  FeedbackPlan,
+  NewFeedbackInput,
   ItemConversationActions,
   Lookup,
+  CapabilityDetector,
+  CapabilityFacts,
+  CompiledWorkflow,
   KindLookup,
   KnowledgeActions,
   IssueProposalActions,
@@ -71,6 +79,10 @@ import type {
   NewFollowUpInput,
   NewFollowUpTicketInput,
   FollowUpRelations,
+  FollowUpTicketDrafting,
+  FollowUpTicketDrafter,
+  FollowUpTicketDraft,
+  DraftFollowUpTicketInput,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
   BaseConflictDetector,
@@ -80,11 +92,12 @@ import type {
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
 import { deriveGateEvidence } from "./gate-evidence.ts";
-import { renderFollowUpTicketBody } from "../issues/followup-body.ts";
+import { renderFollowUpTicketBody, templateFollowUpTicketBody } from "../issues/followup-body.ts";
 import { originOf } from "../issues/origin.ts";
 import { workItemNameFor } from "../sources/syncer.ts";
 import { externalRefLabel } from "../issues/mirror.ts";
 import { fingerprint, followUpPreview, FOLLOW_UP_INPUT, LABEL_ORIGIN_UID } from "./work-item-followups.ts";
+import { feedbackViews, planFeedbackSubmission } from "./feedback.ts";
 
 export interface FactoryAppDeps {
   approvalGuards?: ApprovalDecisionGuard[];
@@ -110,9 +123,15 @@ export interface FactoryAppDeps {
   clock: Clock;
   /** ADR-0054: compares published pull requests with the current base. */
   baseConflicts?: BaseConflictDetector;
+  /** ADR-0075: item capability detectors by name. Without them an item reports no capabilities. */
+  capabilities?: Lookup<CapabilityDetector>;
+  /** ADR-0076: drafts follow-up tickets; without it, drafting is unavailable and Create uses the template. */
+  ticketDrafter?: FollowUpTicketDrafter;
 }
 
 const MAX_CONTEXT = 20_000;
+const MAX_QUOTE = 4_000;
+const MAX_COMMENT = 4_000;
 
 const slug = (s: string) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "") || "item";
@@ -143,7 +162,9 @@ export class FactoryApp
     ChatWorkItemCreator,
     WorkItemFollowUpQueries,
     WorkItemFollowUpCommands,
-    PullRequestMaintenance
+    FollowUpTicketDrafting,
+    PullRequestMaintenance,
+    FeedbackActions
 {
   private readonly d: FactoryAppDeps;
   private readonly ns = DEFAULT_NAMESPACE;
@@ -161,7 +182,7 @@ export class FactoryApp
     const workItem = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
     if (!workItem) return null;
     const owned = { kind: "WorkItem", name, namespace: this.ns };
-    const [runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, events] = await Promise.all([
+    const [runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, events, feedback] = await Promise.all([
       this.d.reader.list<AgentRun>("AgentRun", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Artifact>("Artifact", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<Clarification>("Clarification", { namespace: this.ns, ownedBy: owned }),
@@ -170,15 +191,21 @@ export class FactoryApp
       this.d.reader.list<Workspace>("Workspace", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<OutboxMessage>("OutboxMessage", { namespace: this.ns, ownedBy: owned }),
       this.d.reader.list<FactoryEvent>("Event", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: name } }),
+      this.d.reader.list<InlineFeedback>("InlineFeedback", { namespace: this.ns, ownedBy: owned }),
     ]);
     let stages: WorkItemDetail["stages"] = [];
     let verified = false;
+    let feedbackPlan: FeedbackPlan | undefined;
+    let workflow: CompiledWorkflow | undefined;
     if (workItem.spec.workflowRef) {
       try {
-        const wf = await this.d.compiler.compile(workItem.spec.workflowRef, this.ns);
+        const wf = workflow = await this.d.compiler.compile(workItem.spec.workflowRef, this.ns);
         verified = !!wf.verification;
         stages = wf.stages.map((s) => ({ name: s.name, lifecyclePhase: s.lifecyclePhase, gate: s.gate?.type,
           steps: s.steps.map((step) => ({ name: step.name, agent: step.agentRef.name })), ...(s.publish?.pullRequest ? { publishes: true } : {}) }));
+        const drafts = feedback.filter((f) => !f.spec.submitted);
+        const open = approvals.find((a) => a.metadata.name === workItem.status?.blockedBy?.name);
+        if (drafts.length) feedbackPlan = planFeedbackSubmission(drafts, workItem, wf, open);
       } catch {
         // a broken workflow is surfaced through the item's status
       }
@@ -190,7 +217,24 @@ export class FactoryApp
       return { name: repo, publishable: !!resolved && isPublishable(resolved) };
     }));
     const issues = await this.d.reader.list<IssueProposal>("IssueProposal", { namespace: this.ns, ownedBy: { kind: "WorkItem", name, namespace: this.ns } });
-    return { workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge, issues };
+    const capabilities = await this.capabilities({ workItem, workflow, runs, outbox });
+    return {
+      workItem, runs, artifacts, clarifications, approvals, conversations, workspaces, outbox, evidence, events, stages, repositories, knowledge, issues,
+      feedback: feedbackViews(feedback, runs, artifacts).sort((a, b) => (a.feedback.metadata.creationTimestamp ?? "").localeCompare(b.feedback.metadata.creationTimestamp ?? "")),
+      feedbackPlan, capabilities,
+    };
+  }
+
+  private async capabilities(facts: Omit<CapabilityFacts, "source" | "checkRuns">): Promise<string[]> {
+    const detectors = this.d.capabilities;
+    if (!detectors?.keys().length) return [];
+    const { workItem } = facts;
+    const [source, checkRuns] = await Promise.all([
+      resolveRef<Source>(this.d.reader, "Source", workItem.spec.sourceRef, this.ns),
+      this.d.reader.list<CheckRun>("CheckRun", { namespace: this.ns, ownedBy: { kind: "WorkItem", name: workItem.metadata.name, namespace: this.ns } }),
+    ]);
+    const all = { ...facts, source: source ?? undefined, checkRuns };
+    return detectors.keys().filter((name) => detectors.get(name)!.detect(all)).sort();
   }
 
   async newItemOptions(_p: Principal): Promise<NewItemOptions> {
@@ -406,31 +450,44 @@ export class FactoryApp
     if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
     if (typeof input.title !== "string" || !input.title.trim()) throw new Error("title is required");
     if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    if (input.body !== undefined && (typeof input.body !== "string" || !input.body.trim())) throw new Error("body must be non-empty text");
+    if ((input.body?.length ?? 0) > MAX_CONTEXT) throw new Error(`body is too long (max ${MAX_CONTEXT} characters)`);
+    if (input.draftConversation !== undefined && typeof input.draftConversation !== "string") throw new Error("draftConversation must be a name");
     const targets = await this.listIssueTargets(p);
     if (!targets.some((t) => t.source === input.targetSource)) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
     const target = await this.d.reader.get<Source>("Source", SYSTEM_NAMESPACE, input.targetSource);
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const r = this.d.redactor;
+    const title = r.redact(input.title.trim()).slice(0, 200);
+    const reviewed = input.body ?? templateFollowUpTicketBody({ instructions: r.redact(input.instructions ?? ""), originTitle: origin.spec.title, originDescription: origin.spec.description });
+    const body = r.redact(renderFollowUpTicketBody({ body: reviewed, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL }));
     const proposalName = `${name}-followup-${input.requestId}`;
     const existing = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
     if (existing) {
-      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource) throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      if (existing.spec.revision !== input.expectedRevision || existing.spec.targetRef?.name !== input.targetSource || existing.spec.title !== title || existing.spec.body !== body) {
+        throw new StoreError("requestId was already used with different follow-up input", "Conflict");
+      }
       return existing;
     }
     const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
     if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before creating the ticket.", "Conflict");
-    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
-    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
-    const r = this.d.redactor;
+    const conversation = input.draftConversation ? await this.draftConversationOf(name, input.draftConversation) : undefined;
+    const answered = conversation?.status?.transcriptRef && conversation.spec.agentRef
+      && (await this.d.transcripts.read(conversation.status.transcriptRef)).some((m) => m.role === "assistant" && m.author.id === conversation.spec.agentRef?.name);
+    const draftedBy = answered ? { agent: conversation.spec.agentRef!.name, conversation: conversation.metadata.name } : undefined;
     const cfg = target?.spec.writeBack?.issues;
     const spec: IssueProposal["spec"] = {
       purpose: "follow-up",
       targetRef: { name: input.targetSource },
-      title: r.redact(input.title.trim()).slice(0, 200),
-      body: r.redact(renderFollowUpTicketBody({ instructions: preview.instructions, snapshot: preview.snapshot, originUrl: origin.spec.externalRef?.url, originName: name, factoryUrl: process.env.FACTORY_PUBLIC_URL })),
+      title,
+      body,
       issueType: input.issueType?.trim() ? r.redact(input.issueType.trim()) : cfg?.issueType,
       ...(input.labels?.length ? { labels: input.labels.map((l) => r.redact(l.trim())).filter(Boolean).slice(0, 10) } : {}),
       pickUp: false,
       revision: preview.revision,
-      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString() },
+      provenance: { proposedBy: p.id, human: true, workItem: name, proposedAt: new Date().toISOString(),
+        ...(draftedBy ? { draftedBy } : {}) },
     };
     const at = new Date().toISOString();
     try {
@@ -443,6 +500,45 @@ export class FactoryApp
       if (!isStoreError(e, "AlreadyExists")) throw e;
       return (await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName))!;
     }
+  }
+
+  private async draftConversationOf(workItem: string, name: string): Promise<Conversation> {
+    const c = await this.d.reader.get<Conversation>("Conversation", this.ns, name);
+    if (!c || c.spec.purpose !== "draft-ticket" || c.spec.workItemRef?.name !== workItem) throw new Error(`draft conversation ${name} does not belong to work item ${workItem}`);
+    return c;
+  }
+
+  async draftFollowUpTicket(p: Principal, name: string, input: DraftFollowUpTicketInput): Promise<FollowUpTicketDraft> {
+    const drafter = this.d.ticketDrafter;
+    if (!drafter) throw new Error("ticket drafting is not configured");
+    if (typeof input.expectedRevision !== "string" || !input.expectedRevision) throw new Error("a reviewed context preview is required");
+    if (typeof input.targetSource !== "string" || !input.targetSource) throw new Error("select a destination source");
+    for (const [field, value] of [["title", input.title], ["instructions", input.instructions], ["feedback", input.feedback], ["conversation", input.conversation]] as const) {
+      if (value !== undefined && typeof value !== "string") throw new Error(`${field} must be text`);
+    }
+    if (input.previous !== undefined && (typeof input.previous !== "object" || typeof input.previous?.title !== "string" || typeof input.previous.body !== "string")) throw new Error("previous must have a title and a body");
+    if ((input.feedback?.length ?? 0) + (input.previous?.body.length ?? 0) > MAX_CONTEXT) throw new Error(`draft and feedback are too long (max ${MAX_CONTEXT} characters)`);
+    const target = (await this.listIssueTargets(p)).find((t) => t.source === input.targetSource);
+    if (!target) throw new Error(`source "${input.targetSource}" does not permit creating issues`);
+    const preview = await this.previewWorkItemFollowUp(p, name, input.instructions ?? "");
+    if (preview.revision !== input.expectedRevision) throw new StoreError("Origin evidence or instructions changed. Refresh the context preview before drafting.", "Conflict");
+    const origin = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+    if (!origin) throw new StoreError(`work item ${name} not found`, "NotFound");
+    const conversation = input.conversation
+      ? await this.draftConversationOf(name, input.conversation)
+      : await this.awaitTranscript(await this.d.writer.create<Conversation>({
+        apiVersion: API_VERSION, kind: "Conversation",
+        metadata: { name: "", generateName: `${name.slice(0, 50)}-draft-`, namespace: this.ns, ownerReferences: [ownerRef(origin)] },
+        spec: { workItemRef: { name }, agentRef: { name: drafter.agent }, purpose: "draft-ticket", startedBy: p.id,
+          title: this.d.redactor.redact(`Ticket draft: ${origin.spec.title}`).slice(0, 200) },
+      }));
+    const draft = await drafter.draft(conversation, {
+      namespace: this.ns, originTitle: origin.spec.title, originDescription: origin.spec.description,
+      instructions: preview.instructions, evidence: preview.snapshot.content,
+      target: { source: target.source, type: target.type, project: target.project, issueType: target.issueType },
+      title: input.title, previous: input.previous, feedback: input.feedback,
+    }, { type: "human", id: p.id });
+    return { ...draft, conversation: conversation.metadata.name };
   }
 
   async startImplementation(_p: Principal, proposalName: string, input: StartImplementationInput = {}): Promise<WorkItem> {
@@ -619,6 +715,103 @@ export class FactoryApp
       .some((m) => m.spec.action === "open-pull-request" && typeof m.status?.result?.url === "string");
     if (!published) throw new Error("no pull request was published for this item yet");
     return this.restartWorkItem(p, name, publish.name);
+  }
+
+  async addFeedback(p: Principal, workItem: string, input: NewFeedbackInput): Promise<InlineFeedback> {
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, workItem);
+    if (!wi) throw new Error(`work item ${workItem} not found`);
+    const quote = input.quote?.trim();
+    const comment = input.comment?.trim();
+    if (!quote) throw new Error("select the passage the feedback is about");
+    if (!comment) throw new Error("feedback is empty");
+    if (comment.length > MAX_COMMENT) throw new Error(`feedback is too long (max ${MAX_COMMENT} characters)`);
+    const artifact = await this.d.reader.get<Artifact>("Artifact", this.ns, input.artifact);
+    if (!artifact || artifact.spec.workItemRef.name !== workItem) throw new Error(`artifact ${input.artifact} does not belong to ${workItem}`);
+    // Replays never advance the workflow (ADR-0012), so there is no step that could act on feedback about them.
+    if (artifact.metadata.labels?.["factory.ai-dlc.io/replay"]) throw new Error("feedback on a replay's output can't reach an agent; comment on the original");
+    const runRef = artifact.spec.producedBy?.agentRunRef;
+    const run = runRef ? await this.d.reader.get<AgentRun>("AgentRun", this.ns, runRef.name) : null;
+    if (!run) throw new Error("the run that produced this artifact no longer exists");
+    return this.d.writer.create<InlineFeedback>({
+      apiVersion: API_VERSION,
+      kind: "InlineFeedback",
+      metadata: {
+        name: "",
+        generateName: `${artifact.metadata.name.slice(0, 50)}-fb-`,
+        namespace: this.ns,
+        ownerReferences: [ownerRef(wi)],
+        labels: { [LABEL_WORKITEM]: workItem },
+      },
+      spec: {
+        workItemRef: { name: workItem },
+        targetRef: { name: artifact.metadata.name },
+        producedBy: { agentRunRef: { name: run.metadata.name }, agentRef: run.spec.agentRef, stage: run.spec.stage, step: run.spec.step },
+        quote: quote.slice(0, MAX_QUOTE),
+        comment,
+        author: p.id,
+      },
+    });
+  }
+
+  async updateFeedback(_p: Principal, name: string, comment: string): Promise<InlineFeedback> {
+    const f = await this.draftOrThrow(name);
+    const text = comment?.trim();
+    if (!text) throw new Error("feedback is empty");
+    if (text.length > MAX_COMMENT) throw new Error(`feedback is too long (max ${MAX_COMMENT} characters)`);
+    return this.d.writer.update<InlineFeedback>({ ...f, spec: { ...f.spec, comment: text } });
+  }
+
+  async deleteFeedback(_p: Principal, name: string): Promise<void> {
+    await this.draftOrThrow(name);
+    await this.d.writer.delete("InlineFeedback", this.ns, name);
+  }
+
+  async submitFeedback(p: Principal, workItem: string): Promise<FeedbackPlan> {
+    const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, workItem);
+    if (!wi) throw new Error(`work item ${workItem} not found`);
+    if (!wi.spec.workflowRef) throw new Error(`work item ${workItem} has no workflow`);
+    const owned = { kind: "WorkItem", name: workItem, namespace: this.ns };
+    const drafts = (await this.d.reader.list<InlineFeedback>("InlineFeedback", { namespace: this.ns, ownedBy: owned })).filter((f) => !f.spec.submitted);
+    const open = wi.status?.blockedBy?.kind === "Approval" ? await this.d.reader.get<Approval>("Approval", this.ns, wi.status.blockedBy.name) : null;
+    const plan = planFeedbackSubmission(drafts, wi, await this.d.compiler.compile(wi.spec.workflowRef, this.ns), open ?? undefined);
+    // Mark first: the re-run triggered below must already see the notes as submitted.
+    const submitted = { id: randomUUID(), at: new Date().toISOString(), by: p.id };
+    const marked: string[] = [];
+    try {
+      for (const f of drafts) {
+        await this.d.writer.update<InlineFeedback>({ ...f, spec: { ...f.spec, submitted } });
+        marked.push(f.metadata.name);
+      }
+      if (plan.action === "reject") {
+        await this.decideApproval(p, plan.approval!, "reject", `Changes requested through ${drafts.length} inline feedback note(s) (see "Human feedback").`);
+      } else {
+        await this.restartWorkItem(p, workItem, plan.stage);
+      }
+    } catch (e) {
+      // Nothing re-runs, so the notes must stay editable drafts (e.g. the gate was decided meanwhile).
+      await this.unmarkFeedback(marked, submitted.id);
+      throw e;
+    }
+    await this.d.events.normal(
+      wi,
+      "FeedbackSubmitted",
+      `${drafts.length} note(s) for ${plan.agents.join(", ")} by ${p.id}: ${plan.action === "reject" ? `changes requested at ${open?.spec.stage}` : "restart"} → ${plan.stage}`,
+    );
+    return plan;
+  }
+
+  private async unmarkFeedback(names: string[], batch: string) {
+    for (const name of names) {
+      const f = await this.d.reader.get<InlineFeedback>("InlineFeedback", this.ns, name);
+      if (f?.spec.submitted?.id === batch) await this.d.writer.update<InlineFeedback>({ ...f, spec: { ...f.spec, submitted: undefined } });
+    }
+  }
+
+  private async draftOrThrow(name: string): Promise<InlineFeedback> {
+    const f = await this.d.reader.get<InlineFeedback>("InlineFeedback", this.ns, name);
+    if (!f) throw new Error(`feedback ${name} not found`);
+    if (f.spec.submitted) throw new Error("submitted feedback can't be changed");
+    return f;
   }
 
   async listKnowledge(_p: Principal): Promise<KnowledgeEntry[]> {

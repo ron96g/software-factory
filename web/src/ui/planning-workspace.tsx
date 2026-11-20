@@ -11,6 +11,8 @@ import { parsePlanningRevision } from "@/planning-request.ts";
 import { api, ApiError } from "./api.ts";
 import { MarkdownView } from "./markdown.tsx";
 import { EvidenceArtifacts } from "./evidence-artifacts.tsx";
+import { AnnotatedArtifact, travellingNotes } from "./selection-feedback.tsx";
+import { LABEL_SUPERSEDED } from "@/core/model/kinds.ts";
 
 const fullSections = ["outcome", "scope", "approach", "delivery", "acceptance", "risks"] as const;
 const sectionsOf = (format: PlanFormat): readonly (keyof PlanningSections)[] => format === "decision-sheet" ? ["risks"] : fullSections;
@@ -47,7 +49,7 @@ interface Edit {
 }
 
 /** After plan approval the plan is reference material: one compact card, full text on demand. */
-function ApprovedPlan({ workspace }: { workspace: Workspace }) {
+function ApprovedPlan({ workspace, detail }: { workspace: Workspace; detail: WorkItemDetail }) {
   const labels = labelsOf(workspace.format);
   const document = workspace.document;
   return <Card className="sf-surface" withBorder>
@@ -58,11 +60,11 @@ function ApprovedPlan({ workspace }: { workspace: Workspace }) {
         <Accordion variant="contained">
           {workspace.sources.map((source) => <Accordion.Item key={source.artifact} value={source.artifact}>
             <Accordion.Control>{sourceLabels[source.type] ?? source.type}</Accordion.Control>
-            <Accordion.Panel><SourceView source={source} /></Accordion.Panel>
+            <Accordion.Panel><AnnotatedArtifact detail={detail} artifact={source.artifact}><SourceView source={source} /></AnnotatedArtifact></Accordion.Panel>
           </Accordion.Item>)}
           <Accordion.Item value="plan">
             <Accordion.Control>{workspace.format === "decision-sheet" ? "Decisions and risks" : "Full plan"}</Accordion.Control>
-            <Accordion.Panel><Stack>{shownSections(workspace.format, document).filter((key) => key !== "outcome").map((key) => <div key={key}>
+            <Accordion.Panel><AnnotatedArtifact detail={detail} artifact={planArtifact(detail)}><Stack>{shownSections(workspace.format, document).filter((key) => key !== "outcome").map((key) => <div key={key}>
               <Title order={5}>{labels[key]}</Title>
               <MarkdownView>{document[key] || "_Not specified._"}</MarkdownView>
             </div>)}
@@ -70,13 +72,17 @@ function ApprovedPlan({ workspace }: { workspace: Workspace }) {
               <Text size="sm" fw={600}>{decision.id}</Text>
               <MarkdownView>{decision.question}</MarkdownView>
               <MarkdownView>{`**Answer:** ${decision.answer ?? (decision.required ? "_none_" : `${decision.recommendation ?? ""} (recommended default)`)}`}</MarkdownView>
-            </div>)}</Stack></Accordion.Panel>
+            </div>)}</Stack></AnnotatedArtifact></Accordion.Panel>
           </Accordion.Item>
         </Accordion>
       </> : <Text size="sm" c="dimmed">The approved plan is not available in this revision.</Text>}
     </Stack>
   </Card>;
 }
+
+/** The planner's current implementation-plan artifact: the plan sections and decisions are rendered from it. */
+const planArtifact = (d: WorkItemDetail) =>
+  [...d.artifacts].reverse().find((a) => a.spec.artifactTypeRef.name === "implementation-plan" && !a.metadata.labels?.[LABEL_SUPERSEDED] && !a.metadata.labels?.["factory.ai-dlc.io/replay"])?.metadata.name ?? "";
 
 function SourceView({ source }: { source: Workspace["sources"][number] }) {
   const json = source.format === "json" || /^\s*[[{]/.test(source.content);
@@ -212,7 +218,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
   }
 
   if (!workspace?.enabled) return error ? <Alert color="red" title="Planning workspace unavailable">{error}<Button variant="subtle" onClick={() => void reload()}>Retry</Button></Alert> : null;
-  if (summary) return <ApprovedPlan workspace={workspace} />;
+  if (summary) return <ApprovedPlan workspace={workspace} detail={detail} />;
 
   const sections = sectionsOf(workspace.format);
   const labels = labelsOf(workspace.format);
@@ -235,6 +241,12 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
         : "Submit your answers or save your edits, then review the updated plan before approving. Cancel edits to keep the current proposal."]
       : !workspace.ready ? workspace.issues
         : !approval ? ["There is no pending plan approval at the current workflow stage."] : [];
+
+  const travelling = travellingNotes(detail, workspace.revisionStage);
+  const waitsForAnswers = !!approval && workspace.readiness === "needs-answers" && !edit;
+  // The gate card already lists the open questions and the answer instruction.
+  const remaining = waitsForAnswers ? workspace.issues.filter((issue) => !/^Answer \d+ required planning decision/.test(issue))
+    : [...workspace.issues, ...workspace.unansweredQuestions];
 
   async function approve() {
     if (!approval || !canApprove || inFlight.current) return;
@@ -337,7 +349,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       {workspace.format === "decision-sheet" && workspace.sources.length > 0 && <Accordion variant="contained" multiple defaultValue={["spec"]}>
         {workspace.sources.map((source) => <Accordion.Item key={source.artifact} value={source.type}>
           <Accordion.Control>{sourceLabels[source.type] ?? source.type}</Accordion.Control>
-          <Accordion.Panel><SourceView source={source} /></Accordion.Panel>
+          <Accordion.Panel><AnnotatedArtifact detail={detail} artifact={source.artifact}><SourceView source={source} /></AnnotatedArtifact></Accordion.Panel>
         </Accordion.Item>)}
       </Accordion>}
       {workspace.format === "decision-sheet" && <Text size="sm" c="dimmed">The technical design is produced and approved separately after this plan, before any code is written.</Text>}
@@ -348,7 +360,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
           onChange={(event) => {
             const text = event.currentTarget.value;
             setEdit((current) => current && { ...current, draft: { ...(current.draft ?? pick({}, sections)), [key]: text } });
-          }} /> : <MarkdownView>{workspace.document?.[key] || "_Not yet specified._"}</MarkdownView>}
+          }} /> : <AnnotatedArtifact detail={detail} artifact={planArtifact(detail)}><MarkdownView>{workspace.document?.[key] || "_Not yet specified._"}</MarkdownView></AnnotatedArtifact>}
       </Stack>) : <Alert color="blue">The planning agents are preparing a proposal. No plan is ready for approval yet.</Alert>}
       {workspace.historyError && <Alert color="yellow" title="Previous proposal unavailable">
         {workspace.historyError} Current proposal readiness is evaluated independently.
@@ -376,7 +388,7 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       </Accordion>}
 
       {decisions.length > 0 && <>
-      <Title order={4}>Your decisions</Title>
+      <Title order={4} id="planning-decisions">Your decisions</Title>
       <Text size="sm" c="dimmed">Answer the required ones together; pick an option or write your own. Recommendations are not chosen for you.</Text>
       {decisions.map((decision) => <Card key={decision.id} withBorder p="sm">
         <Stack gap="xs">
@@ -431,8 +443,8 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
           </Stack></Accordion.Panel>
         </Accordion.Item>
       </Accordion>}
-      {(workspace.issues.length > 0 || workspace.unansweredQuestions.length > 0) && <Alert color="yellow" title="Remaining issues / unanswered questions">
-        <List size="sm">{[...workspace.issues, ...workspace.unansweredQuestions].map((issue, index) => <List.Item key={index}><MarkdownView>{issue}</MarkdownView></List.Item>)}</List>
+      {remaining.length > 0 && <Alert color="yellow" title="Remaining issues / unanswered questions">
+        <List size="sm">{remaining.map((issue, index) => <List.Item key={index}><MarkdownView>{issue}</MarkdownView></List.Item>)}</List>
       </Alert>}
 
       {(workspace.canRevise || !!edit) && <>
@@ -459,10 +471,25 @@ export default function PlanningWorkspace({ workspace, error, reload, detail, on
       {missingRequired.length > 0 && <Text size="sm" c="red">
         Answer all {missingRequired.length} remaining required decision(s), then select Submit answers &amp; update plan. Optional recommendations can remain untouched.
       </Text>}
+      {travelling > 0 && <Text size="sm">
+        Your {travelling} inline feedback note{travelling === 1 ? "" : "s"} on the plan go{travelling === 1 ? "es" : ""} to the planner with this revision.
+      </Text>}
       {edit && <Text size="xs" c="dimmed">“Save edits” does not submit decision answers. “Submit answers &amp; update plan” includes your section edits, context and feedback in one revision.</Text>}
       </>}
 
-      {approval && <Card withBorder p="sm">
+      {/* ADR-0072: with required decisions open, the gate is a request for answers, not an approval form. */}
+      {waitsForAnswers && <Card withBorder p="sm">
+        <Stack gap="xs">
+          <Title order={4}>Approval waits for your answers</Title>
+          <Text size="sm">
+            Answer {workspace.unansweredQuestions.length} required decision{workspace.unansweredQuestions.length === 1 ? "" : "s"} and
+            select Submit answers &amp; update plan. The planner then updates the plan, and you approve the updated revision here.
+          </Text>
+          <List size="sm">{workspace.unansweredQuestions.map((q, index) => <List.Item key={index}><MarkdownView>{q}</MarkdownView></List.Item>)}</List>
+          <Group><Button size="xs" variant="light" component="a" href="#planning-decisions">Go to decisions</Button></Group>
+        </Stack>
+      </Card>}
+      {approval && !waitsForAnswers && <Card withBorder p="sm">
         <Stack gap="sm">
           <Title order={4}>Approve this plan</Title>
           <Badge color={blocking ? "red" : detail.evidence.status === "warning" ? "yellow" : "teal"}>{detail.evidence.status}</Badge>

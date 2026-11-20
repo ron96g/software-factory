@@ -18,7 +18,7 @@ spec:
     externalId: number
     labels: labels[*].name
   defaults:
-    workflowRef: { name: factory-loop }
+    workflowRef: { name: factory-plan }
     repositoryRefs:
       - name: software-factory
 ---
@@ -104,4 +104,4 @@ metadata:
 spec:
   type: internal             # signals emitted by the monitor stage (closes the loop)
   defaults:
-    workflowRef: { name: factory-loop }
+    workflowRef: { name: factory-plan }

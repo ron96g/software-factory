@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
 import { createFactory } from "./factory.ts";
+import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
 
 const p = ANONYMOUS;
@@ -13,10 +14,10 @@ test("X7: gate comments reach later agents (delegation on approve; feedback on r
     prompts.push(String(body.messages.map((m: { content: string }) => m.content).join("\n")));
     return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", outcome: "accept", artifacts: [], questions: [] }) } }] });
   }) as typeof fetch;
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
   await f.start();
   try {
-    const wi = await f.app.createWorkItem(p, { title: "Delegate decisions", description: "A long enough description for triage to accept it directly.", workflowRef: "factory-loop" });
+    const wi = await f.app.createWorkItem(p, { title: "Delegate decisions", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
     let decided = 0;
     for (let i = 0; i < 1000 && decided < 2; i++) {
       const d = (await f.app.getWorkItem(p, wi.metadata.name))!;
