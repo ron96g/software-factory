@@ -1,0 +1,35 @@
+web/src/core/adapters/kubernetes/fake-cluster-api.ts
+  s_8feb2417cda658::t_cae10fc990420f 1-34
+web/src/core/store/crd-generator.ts
+  s_8feb2417cda658::t_a86ab45a81a050 1-30
+web/src/core/store/definition-feed.ts
+  s_8feb2417cda658::t_f24a797bbccaa6 1-66
+web/src/core/store/reloading-store.ts
+  s_8feb2417cda658::t_92caf9ba1a5b32 1-150
+web/package-lock.json
+  s_1cbdfb0255f61a::t_32d8c1d9cb7ef0 11,1571-1679,4145-4150,4184-4192,4864-4869,4876-4889,4909-4998,5390-5401,6139-6147,6546-6554,6649-6663,6726-6734,6861-6866,7003-7039,7371-7385,7459-7467,7869-7877,7951-7968,9612-9620,9717-9729,10167-10176,10496-10501,11056-11075,11290-11333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c1257876bf56e36d9a5ec91500481c3436c827af",
+  "prompts": {},
+  "sessions": {
+    "s_1cbdfb0255f61a": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9ca580c2-0035-4236-94b1-2bd6e51d87d8",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_8feb2417cda658": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9bb37df4-6e82-48b0-9c1d-85435181678e",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
