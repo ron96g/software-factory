@@ -1,0 +1,27 @@
+deploy/kubernetes/samples/invalid/agent-missing-role.yaml
+  s_e66436374034b0::t_8677b655f4f230 1-6
+deploy/kubernetes/samples/invalid/agent-unknown-field.yaml
+  s_e66436374034b0::t_2e2e6dd74ba0dd 1-8
+deploy/kubernetes/samples/invalid/repository-without-location.yaml
+  s_e66436374034b0::t_70c76e6da4e676 1-5
+deploy/kubernetes/samples/invalid/toolserver-http-without-url.yaml
+  s_e66436374034b0::t_8ede3d50862f2e 1-6
+web/src/core/store/crd-envtest.test.ts
+  s_e66436374034b0::t_5c11d8aaeba84b 1-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "b49694aec2dd5fd76c7d8a1700784b8f83db1d0b",
+  "prompts": {},
+  "sessions": {
+    "s_e66436374034b0": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "e03035ba-2ffb-4dca-8997-943cd05c43e8",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
