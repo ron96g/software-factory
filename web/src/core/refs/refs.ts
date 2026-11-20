@@ -33,7 +33,7 @@ export async function resolveRef<R extends Resource>(
   fromNamespace: string,
 ): Promise<R | null> {
   if (ref.namespace) {
-    return ref.namespace === SYSTEM_NAMESPACE ? reader.get<R>(kind, SYSTEM_NAMESPACE, ref.name) : null;
+    return reader.get<R>(kind, ref.namespace, ref.name);
   }
   return (await reader.get<R>(kind, fromNamespace, ref.name)) ?? (await reader.get<R>(kind, SYSTEM_NAMESPACE, ref.name));
 }

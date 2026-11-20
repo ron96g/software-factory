@@ -238,3 +238,9 @@ flowchart LR
 2. Should Bolts be time-boxed in the spec, e.g. `timebox: 8h`?
 3. Do we need a **Risk** / **ADR** ArtifactType from day one?
 4. Should *Mob* rituals be explicit, e.g. a `mode: mob | solo` on stages?
+
+## Kubernetes definition backend (ADR-0071)
+- **DefinitionSource**: where definitions come from (`git` or `kubernetes`).
+- **DefinitionSnapshot**: an immutable, validated set of definition resources, swapped atomically on reload.
+- **DefinitionFeed**: port that lists (and optionally watches) definitions.
+- **SecretNamespace**: the single namespace in which `secretRef`s resolve in kubernetes mode.

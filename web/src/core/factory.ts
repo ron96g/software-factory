@@ -7,18 +7,22 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelProvider, ToolServer, Source, Repository, ArtifactType } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { DefinitionFeed, NamespacedSecretReader, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
-import { CompositeStore, DefinitionStore, ScopeRouter } from "./store/composite-store.ts";
+import { CompositeStore, ScopeRouter } from "./store/composite-store.ts";
+import { ReloadingDefinitionStore, refSnapshotValidator } from "./store/reloading-store.ts";
 import { AdmissionChain, AdmittedStore } from "./admission/chain.ts";
 import { nameValidator, namespaceDefaulter, recoveryPolicyValidator, refValidator, requiredFieldsValidator, sourceDefaultsMutator } from "./admission/builtins.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from "./transcripts/recorder.ts";
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
+import { NamespacedSecretResolver } from "./adapters/secrets/namespaced.ts";
+import { KubeClusterApi } from "./adapters/kubernetes/cluster-api.ts";
+import { KubeSecretReader } from "./adapters/kubernetes/secret-reader.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
 import { EventingReconcileErrorReporter } from "./runtime/reconcile-errors.ts";
 import { DefaultWorkflowCompiler } from "./workflow/compiler.ts";
@@ -120,6 +124,7 @@ import type { RecoveryCheckAuthorization, RecoveryNeedHandler } from "./ports/in
 import type { NotificationClassifier, NotificationQueries, NotificationRule } from "./ports/index.ts";
 import { EventNotificationFeed, RuleBasedNotificationClassifier } from "./notifications/classifier.ts";
 import { registerNotificationRules } from "./notifications/rules.ts";
+import { FeedDefinitionLoader, GitDefinitionFeed, KubernetesDefinitionFeed } from "./store/definition-feed.ts";
 import { AjvSchemaValidator } from "./adapters/schema/ajv.ts";
 import { DefinitionArtifactSchemas } from "./artifacts/schemas.ts";
 import { persistedArtifactCheck, RegistryFinishValidator, schemaArtifactCheck } from "./artifacts/output-checks.ts";
@@ -131,8 +136,14 @@ type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport 
 
 export interface FactoryOptions {
   retrospectivePolicy?: RetrospectivePolicy;
-  /** Repo root containing agents/, skills/, workflows/, … */
-  definitionsRoot: string;
+  /** Repo root containing agents/, skills/, workflows/, … Required for git mode only. */
+  definitionsRoot?: string;
+  /** Directory for workspaces and file knowledge (AC-7). Default: `FACTORY_LOCAL_ROOT`, else the definitions root. */
+  localRoot?: string;
+  /** Definition origin override (e.g. a fake cluster feed). Without it, `FACTORY_DEFINITION_SOURCE=git|kubernetes` selects; default git. */
+  definitionFeed?: DefinitionFeed;
+  /** Secret source for kubernetes mode (tests); default reads `FACTORY_SECRET_NAMESPACE` from the cluster. */
+  secretReader?: NamespacedSecretReader;
   /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
   workspacesDir?: string;
   /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
@@ -169,7 +180,23 @@ export async function createFactory(o: FactoryOptions) {
   const kinds = new KindRegistry();
   BUILTIN_KINDS.forEach((k) => kinds.register(k));
   const runtime = new SqliteStore(db, clock, [feedbackDeletionGuard]);
-  const definitions = await new DefinitionStore(new GitDefinitionLoader(o.definitionsRoot)).init();
+  const definitionSource = (o.env ?? process.env).FACTORY_DEFINITION_SOURCE ?? "git";
+  if (definitionSource !== "git" && definitionSource !== "kubernetes") throw new Error(`FACTORY_DEFINITION_SOURCE must be "git" or "kubernetes", got "${definitionSource}"`);
+  if (definitionSource === "git" && !o.definitionFeed && !o.definitionsRoot) throw new Error("definitionsRoot is required in git mode");
+  const localRoot = o.localRoot ?? (o.env ?? process.env).FACTORY_LOCAL_ROOT ?? o.definitionsRoot;
+  if (!localRoot) throw new Error("FACTORY_LOCAL_ROOT (or localRoot) is required without a definitions root");
+  const definitionFeed =
+    o.definitionFeed ??
+    (definitionSource === "kubernetes"
+      ? new KubernetesDefinitionFeed(new KubeClusterApi())
+      : new GitDefinitionFeed(new GitDefinitionLoader(o.definitionsRoot!)));
+  let rejectDefinitions: (reason: string) => void = () => {};
+  const definitions = await new ReloadingDefinitionStore({
+    feed: definitionFeed,
+    validator: refSnapshotValidator([refValidator()]),
+    onRejected: (reason) => rejectDefinitions(reason),
+    log: o.log,
+  }).init();
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
   const scopes = new GitModuleScopePlanner();
@@ -186,19 +213,36 @@ export async function createFactory(o: FactoryOptions) {
   admission.addValidator(issueProposalValidator());
   const store = new AdmittedStore(composite, admission);
   const events = new StoreEventRecorder(store);
+  rejectDefinitions = (reason) => {
+    o.log?.(`definitions: ${reason}`);
+    const involved = { apiVersion: "factory.ai-dlc.io/v1alpha1", kind: "DefinitionSnapshot", metadata: { name: "definitions", namespace: "factory-system", uid: "def-snapshot" }, spec: {} };
+    void events.warning(involved as never, "DefinitionsRejected", reason).catch((err) => o.log?.("could not record DefinitionsRejected", err));
+  };
 
   // ── secrets & transcripts ────────────────────────────────────────────
   const redactor = new SecretRedactor();
-  const secrets = new RedactingSecretResolver(new EnvSecretResolver(o.env ?? process.env), redactor);
+  let inner: SecretResolver = new EnvSecretResolver(o.env ?? process.env);
+  let secretRefresh: NamespacedSecretResolver | undefined;
+  if (definitionSource === "kubernetes") {
+    const secretNamespace = (o.env ?? process.env).FACTORY_SECRET_NAMESPACE;
+    if (!secretNamespace) throw new Error("FACTORY_SECRET_NAMESPACE is required in kubernetes mode");
+    secretRefresh = new NamespacedSecretResolver(o.secretReader ?? new KubeSecretReader(), secretNamespace);
+    await secretRefresh.refresh();
+    inner = secretRefresh;
+  }
+  const secrets = new RedactingSecretResolver(inner, redactor);
   // Queued chat text is persisted before any model/tool connection resolves its credentials.
-  const [providers, servers, sources, repositories] = await Promise.all([
-    store.list<ModelProvider>("ModelProvider"), store.list<ToolServer>("ToolServer"),
-    store.list<Source>("Source"), store.list<Repository>("Repository"),
-  ]);
-  for (const ref of [
-    ...providers.map((r) => r.spec.secretRef), ...servers.map((r) => r.spec.secretRef),
-    ...sources.map((r) => r.spec.connection?.secretRef), ...repositories.map((r) => r.spec.git?.secretRef),
-  ]) secrets.resolve(ref);
+  const preResolveSecrets = async () => {
+    const [providers, servers, sources, repositories] = await Promise.all([
+      store.list<ModelProvider>("ModelProvider"), store.list<ToolServer>("ToolServer"),
+      store.list<Source>("Source"), store.list<Repository>("Repository"),
+    ]);
+    for (const ref of [
+      ...providers.map((r) => r.spec.secretRef), ...servers.map((r) => r.spec.secretRef),
+      ...sources.map((r) => r.spec.connection?.secretRef), ...repositories.map((r) => r.spec.git?.secretRef),
+    ]) secrets.resolve(ref);
+  };
+  await preResolveSecrets();
   const transcripts = new SqliteTranscriptStore(db, clock);
   const recorders = new DefaultRecorderFactory(transcripts, redactor);
   const feedbackCapture = new DefaultFeedbackCapture(redactor, clock);
@@ -250,30 +294,38 @@ export async function createFactory(o: FactoryOptions) {
     o.workspaceBackend ??
     (env.FACTORY_SANDBOX_RUNTIME === "host"
       ? new GitWorktreeWorkspaces({
-          definitionsRoot: o.definitionsRoot,
+          definitionsRoot: localRoot,
           // Outside the web app, so Next.js/tsc never pick up workspace copies of the code.
-          workspacesDir: o.workspacesDir ?? env.FACTORY_WORKSPACES_DIR ?? join(o.definitionsRoot, ".workspaces"),
+          workspacesDir: o.workspacesDir ?? env.FACTORY_WORKSPACES_DIR ?? join(localRoot, ".workspaces"),
         })
       : noWorkspaces);
 
   // ── knowledge base (ADR-0030): search per KnowledgeSource.type; only approved entries are ever returned ──
   const knowledgeSources = new Registry<KnowledgeSourceSearch>();
-  const filesKnowledge = new FilesKnowledgeSearch(o.definitionsRoot);
+  const filesKnowledge = new FilesKnowledgeSearch(localRoot);
   knowledgeSources.register(filesKnowledge.type, filesKnowledge);
   const knowledge = new DefaultKnowledgeSearcher({ reader: store, sources: knowledgeSources, redactor });
 
-  const workspaces = new LocalWorkspaceProvider(o.definitionsRoot);
+  const workspaces = new LocalWorkspaceProvider(localRoot);
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
   const jobs = new SerializedWorkspaceJobs(store);
   const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes, jobs, recoveryChecks: recoveryCheckPort });
   const schemas = new DefinitionArtifactSchemas(store);
   const schemaValidator = new AjvSchemaValidator();
-  const artifactTypes = await store.list<ArtifactType>("ArtifactType");
-  for (const type of artifactTypes) {
-    const schema = await schemas.get(type.metadata.name, type.metadata.namespace!);
-    if (schema) schemaValidator.validate(schema.jsonSchema, null);
-  }
+  const checkArtifactSchemas = async () => {
+    for (const type of await store.list<ArtifactType>("ArtifactType")) {
+      const schema = await schemas.get(type.metadata.name, type.metadata.namespace!);
+      if (schema) schemaValidator.validate(schema.jsonSchema, null);
+    }
+  };
+  await checkArtifactSchemas();
+  // AC-8: caches derived from definitions are refreshed after every reload.
+  if (secretRefresh) definitions.onReload(() => void secretRefresh.refresh().then(preResolveSecrets).catch((err) => o.log?.("secret refresh after reload failed", err)));
+  definitions.onReload(() => {
+    preResolveSecrets().catch((err) => o.log?.("secret pre-resolve after reload failed", err));
+    checkArtifactSchemas().catch((err) => o.log?.("artifact schema check after reload failed", err));
+  });
   const workspaceReaders = new LocalWorkspaceReaders(new RipgrepCodeSearch());
   const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor,
     schemas, schemaValidator, readers: workspaceReaders });
@@ -295,11 +347,16 @@ export async function createFactory(o: FactoryOptions) {
   const proposedChecks = new Registry<ProposedArtifactCheck>();
   const artifactChecks = new Registry<ArtifactCheck>();
   const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck].map((check) => [check.artifactType, check]));
-  for (const type of new Set([...artifactTypes.filter((type) => type.spec.schema).map((type) => type.metadata.name), ...domainChecks.keys()])) {
-    const check = schemaArtifactCheck(type, schemas, schemaValidator, domainChecks.get(type));
-    proposedChecks.register(type, check);
-    artifactChecks.register(type, persistedArtifactCheck(check, { reader: store, readers: workspaceReaders }));
-  }
+  const registerArtifactChecks = async () => {
+    const artifactTypes = await store.list<ArtifactType>("ArtifactType");
+    for (const type of new Set([...artifactTypes.filter((type) => type.spec.schema).map((type) => type.metadata.name), ...domainChecks.keys()])) {
+      const check = schemaArtifactCheck(type, schemas, schemaValidator, domainChecks.get(type));
+      proposedChecks.register(type, check);
+      artifactChecks.register(type, persistedArtifactCheck(check, { reader: store, readers: workspaceReaders }));
+    }
+  };
+  await registerArtifactChecks();
+  definitions.onReload(() => void registerArtifactChecks().catch((err) => o.log?.("artifact check refresh after reload failed", err)));
   const contexts = new DefaultContextFactory({
     reader: store,
     providers: [codeSearchProvider(workspaces, new RipgrepCodeSearch()), repositoryDocsProvider(workspaces), knowledgeProvider(knowledge),

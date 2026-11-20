@@ -1,0 +1,1270 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Agent
+    plural: agents
+    singular: agent
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                role:
+                  type: string
+                  minLength: 1
+                retrospectiveFeedback:
+                  type: boolean
+                sandboxRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  required:
+                    - name
+                model:
+                  type: object
+                  properties:
+                    tier:
+                      type: string
+                      minLength: 1
+                    providerRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      required:
+                        - name
+                skillRefs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    required:
+                      - name
+                delegates:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      agentRef:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                          namespace:
+                            type: string
+                            minLength: 1
+                            maxLength: 63
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        required:
+                          - name
+                    required:
+                      - agentRef
+                tools:
+                  type: array
+                  items:
+                    type: string
+                toolServerRefs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    required:
+                      - name
+                chat:
+                  type: object
+                  properties:
+                    allowedTools:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                    - allowedTools
+                humanCounterpart:
+                  type: object
+                  properties:
+                    role:
+                      type: string
+                      minLength: 1
+                  required:
+                    - role
+                body:
+                  type: string
+                  minLength: 1
+                  description: Markdown body (the file body in Git mode)
+              required:
+                - role
+                - body
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: skills.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Skill
+    plural: skills
+    singular: skill
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                  minLength: 1
+                requires:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    required:
+                      - name
+                body:
+                  type: string
+                  minLength: 1
+                  description: Markdown body (the file body in Git mode)
+              required:
+                - description
+                - body
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workflows.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Workflow
+    plural: workflows
+    singular: workflow
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                recovery:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                planning:
+                  type: object
+                  properties:
+                    reviewStage:
+                      type: string
+                      minLength: 1
+                    planFormat:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    plannerStage:
+                      type: string
+                      minLength: 1
+                    revisionStage:
+                      type: string
+                      minLength: 1
+                    synthesisStage:
+                      type: string
+                      minLength: 1
+                  required:
+                    - reviewStage
+                  x-kubernetes-validations:
+                    - rule: has(self.plannerStage) != (has(self.revisionStage) ||
+                        has(self.synthesisStage))
+                      message: set plannerStage, or revisionStage together with synthesisStage
+                    - rule: has(self.revisionStage) == has(self.synthesisStage)
+                      message: revisionStage and synthesisStage go together
+                verification:
+                  type: object
+                  properties:
+                    planningStage:
+                      type: string
+                      minLength: 1
+                    reviewStage:
+                      type: string
+                      minLength: 1
+                    preflightStage:
+                      type: string
+                      minLength: 1
+                    verifyStage:
+                      type: string
+                      minLength: 1
+                    implementationStage:
+                      type: string
+                      minLength: 1
+                    preparationStage:
+                      type: string
+                      minLength: 1
+                    maxCodeAttempts:
+                      type: integer
+                      minimum: 1
+                    maxExecutionAttempts:
+                      type: integer
+                      minimum: 1
+                    retryDelayMs:
+                      type: integer
+                      minimum: 0
+                  required:
+                    - planningStage
+                    - reviewStage
+                    - preflightStage
+                    - verifyStage
+                    - implementationStage
+                    - maxCodeAttempts
+                    - maxExecutionAttempts
+                    - retryDelayMs
+                unitExecution:
+                  type: object
+                  properties:
+                    barrierStage:
+                      type: string
+                      minLength: 1
+                    maxCodeAttempts:
+                      type: integer
+                      minimum: 1
+                    maxExecutionAttempts:
+                      type: integer
+                      minimum: 1
+                  required:
+                    - barrierStage
+                    - maxCodeAttempts
+                    - maxExecutionAttempts
+                timebox:
+                  type: string
+                  minLength: 1
+                trigger:
+                  type: object
+                  properties:
+                    sourceRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                          namespace:
+                            type: string
+                            minLength: 1
+                            maxLength: 63
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        required:
+                          - name
+                phases:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                      stages:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name:
+                              type: string
+                              minLength: 1
+                            mode:
+                              type: string
+                              minLength: 1
+                            loop:
+                              type: object
+                              properties:
+                                when:
+                                  type: object
+                                  properties:
+                                    outcome:
+                                      type: string
+                                      minLength: 1
+                                  required:
+                                    - outcome
+                                goto:
+                                  type: string
+                                  minLength: 1
+                                maxAttempts:
+                                  type: integer
+                                  minimum: 1
+                              required:
+                                - when
+                                - goto
+                                - maxAttempts
+                            publish:
+                              type: object
+                              properties:
+                                pullRequest:
+                                  type: object
+                                  properties:
+                                    draft:
+                                      type: boolean
+                                    onConflict:
+                                      type: object
+                                      properties:
+                                        next:
+                                          type: string
+                                          minLength: 1
+                                        maxAttempts:
+                                          type: integer
+                                          minimum: 1
+                                      required:
+                                        - next
+                            steps:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                    minLength: 1
+                                  agentRef:
+                                    type: object
+                                    properties:
+                                      name:
+                                        type: string
+                                        minLength: 1
+                                      namespace:
+                                        type: string
+                                        minLength: 1
+                                        maxLength: 63
+                                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                    required:
+                                      - name
+                                  skillRefs:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                        namespace:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                      required:
+                                        - name
+                                  tools:
+                                    type: array
+                                    items:
+                                      type: string
+                                  outcomes:
+                                    type: array
+                                    items:
+                                      type: string
+                                      minLength: 1
+                                  model:
+                                    type: object
+                                    properties:
+                                      tier:
+                                        type: string
+                                        minLength: 1
+                                  inputs:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        artifactRef:
+                                          type: object
+                                          properties:
+                                            name:
+                                              type: string
+                                              minLength: 1
+                                            namespace:
+                                              type: string
+                                              minLength: 1
+                                              maxLength: 63
+                                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                          required:
+                                            - name
+                                      required:
+                                        - artifactRef
+                                  outputs:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        artifactRef:
+                                          type: object
+                                          properties:
+                                            name:
+                                              type: string
+                                              minLength: 1
+                                            namespace:
+                                              type: string
+                                              minLength: 1
+                                              maxLength: 63
+                                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                          required:
+                                            - name
+                                      required:
+                                        - artifactRef
+                                required:
+                                  - name
+                                  - agentRef
+                            gate:
+                              type: object
+                              properties:
+                                type:
+                                  type: string
+                                  minLength: 1
+                                routes:
+                                  type: object
+                                  additionalProperties:
+                                    type: object
+                                    properties:
+                                      next:
+                                        type: string
+                                        minLength: 1
+                                      block:
+                                        type: string
+                                        minLength: 1
+                                      end:
+                                        type: string
+                                        minLength: 1
+                                    x-kubernetes-validations:
+                                      - rule: "[has(self.next), has(self.block), has(self.end)].filter(x, x).size() ==
+                                          1"
+                                        message: exactly one of next, block, end must be set
+                                approvers:
+                                  type: array
+                                  items:
+                                    type: object
+                                    properties:
+                                      role:
+                                        type: string
+                                        minLength: 1
+                                    required:
+                                      - role
+                                criteria:
+                                  type: array
+                                  items:
+                                    type: string
+                                    minLength: 1
+                                checks:
+                                  type: array
+                                  items:
+                                    type: string
+                                    minLength: 1
+                                onReject:
+                                  type: object
+                                  properties:
+                                    next:
+                                      type: string
+                                      minLength: 1
+                                    block:
+                                      type: string
+                                      minLength: 1
+                                    end:
+                                      type: string
+                                      minLength: 1
+                                  x-kubernetes-validations:
+                                    - rule: "[has(self.next), has(self.block), has(self.end)].filter(x, x).size() ==
+                                        1"
+                                      message: exactly one of next, block, end must be set
+                                onFailure:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                publication:
+                                  type: object
+                                  properties:
+                                    artifactRef:
+                                      type: object
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                        namespace:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                      required:
+                                        - name
+                                    reviewStage:
+                                      type: string
+                                      minLength: 1
+                                  required:
+                                    - artifactRef
+                                    - reviewStage
+                              required:
+                                - type
+                              x-kubernetes-validations:
+                                - rule: self.type != 'human-approval' || (has(self.approvers) &&
+                                    self.approvers.size() > 0)
+                                  message: a human-approval gate needs at least one approver
+                            workflowRef:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                  minLength: 1
+                                namespace:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 63
+                                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                              required:
+                                - name
+                            forEach:
+                              type: object
+                              properties:
+                                artifactRef:
+                                  type: object
+                                  properties:
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                    namespace:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 63
+                                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                  required:
+                                    - name
+                                as:
+                                  type: string
+                                  minLength: 1
+                                parallelism:
+                                  type: integer
+                                  minimum: 1
+                              required:
+                                - artifactRef
+                                - as
+                          required:
+                            - name
+                    required:
+                      - name
+                      - stages
+                  minItems: 1
+                humanInput:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                loop:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+              required:
+                - phases
+              x-kubernetes-validations:
+                - rule: "!has(self.unitExecution) || has(self.verification)"
+                  message: unitExecution requires verification
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: artifacttypes.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ArtifactType
+    plural: artifacttypes
+    singular: artifacttype
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                format:
+                  type: string
+                  minLength: 1
+                collection:
+                  type: boolean
+                description:
+                  type: string
+                schema:
+                  type: object
+                  properties:
+                    version:
+                      type: string
+                      minLength: 1
+                    jsonSchema:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                    - version
+                    - jsonSchema
+              required:
+                - format
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sources.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Source
+    plural: sources
+    singular: source
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                type:
+                  type: string
+                  minLength: 1
+                connection:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                sync:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - webhook
+                        - poll
+                    pollInterval:
+                      type: string
+                      minLength: 1
+                    filter:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    bidirectional:
+                      type: boolean
+                mapping:
+                  type: object
+                  additionalProperties:
+                    type: string
+                defaults:
+                  type: object
+                  properties:
+                    workflowRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      required:
+                        - name
+                    repositoryRefs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            minLength: 1
+                          namespace:
+                            type: string
+                            minLength: 1
+                            maxLength: 63
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        required:
+                          - name
+                writeBack:
+                  type: object
+                  properties:
+                    replyVisibilities:
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                          - public
+                          - internal
+                    transitions:
+                      type: boolean
+                    issues:
+                      type: object
+                      properties:
+                        project:
+                          type: string
+                          minLength: 1
+                        issueType:
+                          type: string
+                          minLength: 1
+                        labels:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                        pickUpLabels:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                        fields:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        linkOrigin:
+                          type: boolean
+              required:
+                - type
+              x-kubernetes-validations:
+                - rule: "!has(self.sync) || !has(self.sync.mode) || self.sync.mode != 'poll' ||
+                    has(self.sync.pollInterval)"
+                  message: poll mode needs sync.pollInterval
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: repositories.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: Repository
+    plural: repositories
+    singular: repository
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                git:
+                  type: object
+                  properties:
+                    url:
+                      type: string
+                      minLength: 1
+                    defaultBranch:
+                      type: string
+                      minLength: 1
+                    secretRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      required:
+                        - name
+                  required:
+                    - url
+                local:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                      minLength: 1
+                  required:
+                    - path
+                index:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    type:
+                      type: string
+                      minLength: 1
+                    include:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    exclude:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                context:
+                  type: object
+                  properties:
+                    docs:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    owners:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          role:
+                            type: string
+                            minLength: 1
+                          team:
+                            type: string
+                            minLength: 1
+                        required:
+                          - role
+                observability:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                sandboxRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  required:
+                    - name
+                issueTrackerRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  required:
+                    - name
+                checks:
+                  type: object
+                  additionalProperties:
+                    x-kubernetes-preserve-unknown-fields: true
+                    x-kubernetes-validations:
+                      - rule: type(self) == string || (type(self) == map && 'command' in self &&
+                          type(self.command) == string)
+                        message: a check is a command string or an object with a command
+                moduleScope:
+                  type: object
+                  properties:
+                    graph:
+                      type: string
+                      minLength: 1
+                    sharedPaths:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    nonBuildPaths:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                  required:
+                    - graph
+                    - sharedPaths
+                verification:
+                  type: object
+                  properties:
+                    requiredChecks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    preflightChecks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    preparationChecks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    waivableChecks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    autoWaive:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    readinessChecks:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    minScope:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        additionalProperties:
+                          type: string
+                          enum:
+                            - affected
+                            - full
+                  required:
+                    - requiredChecks
+                    - preflightChecks
+                workspace:
+                  type: object
+                  properties:
+                    baseRef:
+                      type: string
+                      minLength: 1
+                    setup:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+              x-kubernetes-validations:
+                - rule: has(self.git) || has(self.local)
+                  message: a repository needs a git remote or a local path
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelproviders.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ModelProvider
+    plural: modelproviders
+    singular: modelprovider
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                type:
+                  type: string
+                  minLength: 1
+                baseUrl:
+                  type: string
+                  minLength: 1
+                secretRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  required:
+                    - name
+                models:
+                  type: object
+                  additionalProperties:
+                    type: string
+                    minLength: 1
+                  minProperties: 1
+                agentModels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                default:
+                  type: boolean
+              required:
+                - type
+                - models
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sandboxprofiles.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: SandboxProfile
+    plural: sandboxprofiles
+    singular: sandboxprofile
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                image:
+                  type: string
+                  minLength: 1
+                resources:
+                  type: object
+                  properties:
+                    cpu:
+                      type: string
+                      minLength: 1
+                    memory:
+                      type: string
+                      minLength: 1
+                    pids:
+                      type: integer
+                      minimum: 1
+                    timeout:
+                      type: string
+                      minLength: 1
+                network:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - none
+                        - allowlist
+                    allow:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                  required:
+                    - mode
+                  x-kubernetes-validations:
+                    - rule: self.mode == 'allowlist' || !has(self.allow) || self.allow.size() == 0
+                      message: allow is only valid with mode allowlist
+                filesystem:
+                  type: object
+                  properties:
+                    workspace:
+                      type: string
+                      minLength: 1
+                    rootReadOnly:
+                      type: boolean
+                    tmpfs:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                user:
+                  type: string
+                  minLength: 1
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                isolation:
+                  type: string
+                  enum:
+                    - process
+                    - container
+                    - microvm
+              required:
+                - image
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: knowledgesources.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: KnowledgeSource
+    plural: knowledgesources
+    singular: knowledgesource
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                type:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                local:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                      minLength: 1
+                  required:
+                    - path
+                include:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                exclude:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                scope:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+              required:
+                - type
+              x-kubernetes-validations:
+                - rule: self.type != 'files' || has(self.local)
+                  message: a files knowledge source needs local.path
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: toolservers.factory.ai-dlc.io
+spec:
+  group: factory.ai-dlc.io
+  scope: Namespaced
+  names:
+    kind: ToolServer
+    plural: toolservers
+    singular: toolserver
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              properties:
+                transport:
+                  type: string
+                  enum:
+                    - http
+                    - stdio
+                url:
+                  type: string
+                  minLength: 1
+                command:
+                  type: string
+                  minLength: 1
+                args:
+                  type: array
+                  items:
+                    type: string
+                secretRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                  required:
+                    - name
+                allowedTools:
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                description:
+                  type: string
+              required:
+                - transport
+              x-kubernetes-validations:
+                - rule: self.transport != 'http' || has(self.url)
+                  message: http transport needs url
+                - rule: self.transport != 'stdio' || has(self.command)
+                  message: stdio transport needs command
