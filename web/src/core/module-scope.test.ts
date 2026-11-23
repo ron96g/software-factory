@@ -17,6 +17,8 @@ import { scopeSatisfies } from "./model/check-scope.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { CheckActions } from "./checks/actions.ts";
 import { createCheckRunController } from "./checks/controller.ts";
+import { SqliteWorkspaceLock } from "./store/workspace-lock.ts";
+import { SqliteFencedStatusWriter } from "./store/fenced-status.ts";
 import { checkRunValidator } from "./checks/admission.ts";
 import { automatedGate } from "./workflow/checks.ts";
 import { Registry } from "./registry/registry.ts";
@@ -215,9 +217,11 @@ test("preparation, gate, agent and standalone jobs pin and revalidate the same s
       const environments = new DefaultEnvironmentSelector(runtimes, "in-memory", []);
       const errors: string[] = [];
       const executed: string[] = [];
+      const lock = new SqliteWorkspaceLock(new DatabaseSync(":memory:"), clock);
       const controller = createCheckRunController({
         reader: store, status: store, logs, scopes: f.scopes, snapshots, clock, redactor,
         events: new StoreEventRecorder(store), onError: (message) => errors.push(message),
+        claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test",
         runner: { execute: async (run) => {
           executed.push(run.spec.command);
           return { exitCode: 0, stdout: "", stderr: "", truncated: false, durationMs: 1 };

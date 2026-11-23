@@ -143,6 +143,79 @@ export class AnthropicClient implements LLMClient, ToolCallingLLM {
   }
 }
 
+const toGoogle = (msgs: ToolLoopMessage[]) => {
+  const names = new Map<string, string>();
+  const out: { role: "user" | "model"; parts: unknown[] }[] = [];
+  for (const m of msgs) {
+    if (m.role === "system") continue;
+    if (m.role === "tool") {
+      const part = { functionResponse: { name: names.get(m.toolCallId) ?? m.toolCallId, response: { output: m.content } } };
+      const last = out.at(-1);
+      if (last?.role === "user") last.parts.push(part);
+      else out.push({ role: "user", parts: [part] });
+    } else if ("toolCalls" in m) {
+      for (const c of m.toolCalls) names.set(c.id, c.name);
+      out.push({
+        role: "model",
+        parts: [
+          ...(m.content ? [{ text: m.content }] : []),
+          ...m.toolCalls.map((c) => ({ functionCall: { name: c.name, args: c.arguments } })),
+        ],
+      });
+    } else {
+      out.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
+    }
+  }
+  return out;
+};
+
+/** Google Gemini generateContent API. */
+export class GoogleClient implements LLMClient, ToolCallingLLM {
+  private readonly baseUrl: string;
+  private readonly model: (tier?: string) => string;
+  private readonly apiKey?: string;
+  private readonly f: Fetch;
+  constructor(o: { baseUrl: string; model: (tier?: string) => string; apiKey?: string; fetch?: Fetch }) {
+    this.baseUrl = o.baseUrl.replace(/\/$/, "");
+    this.model = o.model;
+    this.apiKey = o.apiKey;
+    this.f = o.fetch ?? fetch;
+  }
+  private headers(): Record<string, string> {
+    return this.apiKey ? { "x-goog-api-key": this.apiKey } : {};
+  }
+  private url(tier?: string) {
+    return `${this.baseUrl}/models/${encodeURIComponent(this.model(tier))}:generateContent`;
+  }
+  async complete(req: CompletionRequest): Promise<string> {
+    const system = req.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+    const contents = req.messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    const r = await postJson(this.f, this.url(req.tier), this.headers(), {
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      contents,
+      ...(req.json ? { generationConfig: { responseMimeType: "application/json" } } : {}),
+    });
+    const parts = ((r.candidates as { content?: { parts?: { text?: string }[] } }[] | undefined)?.[0]?.content?.parts) ?? [];
+    return parts.map((p) => p.text ?? "").join("");
+  }
+  async completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }) {
+    const system = req.messages.filter((m) => m.role === "system").map((m) => ("content" in m ? m.content : "")).join("\n\n");
+    const r = await postJson(this.f, this.url(req.tier), this.headers(), {
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      contents: toGoogle(req.messages),
+      tools: [{ functionDeclarations: req.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }],
+    });
+    const parts = ((r.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }[] } }[] | undefined)?.[0]?.content?.parts) ?? [];
+    const text = parts.filter((p) => p.text).map((p) => p.text).join("") || undefined;
+    const toolCalls: ToolCall[] = parts
+      .filter((p) => p.functionCall)
+      .map((p, i) => ({ id: `google-call-${i}-${p.functionCall!.name}`, name: p.functionCall!.name, arguments: p.functionCall!.args ?? {} }));
+    return { text, toolCalls };
+  }
+}
+
 const tierModel = (p: ModelProvider) => (tier?: string) =>
   p.spec.models[tier ?? ""] ?? p.spec.models.default ?? Object.values(p.spec.models)[0];
 
@@ -152,4 +225,8 @@ export const openAICompatibleFactory = (f?: Fetch): LLMClientFactory => ({
 
 export const anthropicFactory = (f?: Fetch): LLMClientFactory => ({
   create: (p, apiKey) => new AnthropicClient({ baseUrl: p.spec.baseUrl ?? "https://api.anthropic.com", model: tierModel(p), apiKey, fetch: f }),
+});
+
+export const googleFactory = (f?: Fetch): LLMClientFactory => ({
+  create: (p, apiKey) => new GoogleClient({ baseUrl: p.spec.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta", model: tierModel(p), apiKey, fetch: f }),
 });

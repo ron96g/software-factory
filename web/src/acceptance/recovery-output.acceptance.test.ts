@@ -18,6 +18,8 @@ import { API_VERSION } from "../core/model/resource.ts";
 import { ANONYMOUS, type AgentTool, type ArtifactCheck, type CompiledWorkflow, type ExecutionContext, type ExecutionEnvironment, type ProposedArtifactCheck, type VerificationContracts } from "../core/ports/index.ts";
 import { Registry } from "../core/registry/registry.ts";
 import { createCheckRunController } from "../core/checks/controller.ts";
+import { SqliteWorkspaceLock } from "../core/store/workspace-lock.ts";
+import { SqliteFencedStatusWriter } from "../core/store/fenced-status.ts";
 import { WorkflowCheckScheduler } from "../core/checks/scheduler.ts";
 import { SerializedWorkspaceJobs } from "../core/checks/workspace-jobs.ts";
 import { recoveryFailureSignature, ValidatedRecoveryRouter } from "../core/recovery/router.ts";
@@ -228,8 +230,10 @@ test("AC-39-3/4: recorded malformed diagnosis self-corrects, repairs, runs a nam
   const snapshots = { fingerprint: async () => "tree" };
   const jobs = new SerializedWorkspaceJobs(store);
   const scheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, jobs });
+  const lock = new SqliteWorkspaceLock(new DatabaseSync(":memory:"), clock);
   const checkController = createCheckRunController({ reader: store, status: store, logs: transcripts, runner: new SandboxCheckRunner(store, environments),
-    snapshots, clock, events, redactor, contracts, onError: (message) => { throw new Error(message); } });
+    snapshots, clock, events, redactor, contracts, onError: (message) => { throw new Error(message); },
+    claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test" });
   const readers = { forWorkspaces: () => ({
     readFile: async (path: string) => {
       if (candidate[path] === undefined) throw new Error(`Missing evidence file: ${path}`);

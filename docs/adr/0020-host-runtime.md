@@ -1,6 +1,6 @@
 # ADR-0020: Explicit, unsandboxed `host` runtime for local development
 
-- **Status:** Accepted (amends ADR-0019 §5 "no host execution"). The lazy per-item worktree is superseded by the Workspace resource in ADR-0021; the safeguards remain.
+- **Status:** **Superseded by ADR-0080 §10.** The `host` runtime was removed (no execution without a primitive; `FACTORY_SANDBOX_RUNTIME=host` now fails loudly). Its code survives only as a test helper under `web/src/core/testing/`. It had amended ADR-0019 §5 "no host execution"; the lazy per-item worktree was superseded by the Workspace resource in ADR-0021.
 - **Date:** 2026-11-11
 - **Deciders:** project owner
 

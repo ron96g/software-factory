@@ -1,6 +1,7 @@
 # ADR-0060: OpenCode v2 as the agent runtime
 
 - **Status:** Accepted
+- **Amended by ADR-0080 §10:** §4's `host` clause is removed — OpenCode writes and executes only on a shell-confining runtime; the unsandboxed `host` runtime no longer exists.
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Builds on:** ADR-0012, ADR-0014, ADR-0019, ADR-0020, ADR-0028, ADR-0031, ADR-0033, ADR-0034, ADR-0057, ADR-0058, ADR-0059

@@ -1,5 +1,4 @@
 import {
-  ISOLATION_RANK,
   canCallTools,
   type AgentExecutor,
   type AgentResult,
@@ -11,6 +10,8 @@ import {
   type PromptBuilder,
   type ResourceReader,
   type ToolCapabilities,
+  type ToolSession,
+  type EgressProxy,
   type WorkspaceReaderFactory,
   type Sandbox,
   SANDBOX_CAPABILITIES,
@@ -31,8 +32,13 @@ import { scopedSearcher } from "../knowledge/context.ts";
 import {
   CITATION_GUIDE, CONTINUE_PROMPT, DEFAULT_MAX_FINISH_CORRECTIONS, DEFAULT_MAX_STEPS, FINISH, FINISH_GUIDE, WRAP_UP_WARNING,
   budgetGuide, finishRejection, finishResult, guardedMutation, lastStepNotice, mcpGuide, mutates, neededCapabilities,
-  openToolServers, resolveSandboxProfile, selectTools, validateFinish, workspaceGuide, wrapUpWarning,
+  openToolServers, resolveSandboxProfile, selectTools, validateFinish, workspaceGuide, wrapUpWarning, bindEgress,
 } from "./run-harness.ts";
+import { decideIsolation, weakerIsolationNote } from "./sandbox-isolation.ts";
+
+/** ADR-0080 §12: record ToolServers that ran a host process in this run's provenance. */
+const withHostExecution = (result: AgentResult, session: ToolSession | undefined): AgentResult =>
+  session?.hostExecution.length ? { ...result, provenance: { ...result.provenance, hostExecution: session.hostExecution } } : result;
 
 export interface ToolLoopDeps {
   reader: ResourceReader;
@@ -44,6 +50,8 @@ export interface ToolLoopDeps {
   knowledge?: KnowledgeSearcher;
   /** ADR-0034: opens the agent's ToolServers (MCP). */
   toolProvider?: ToolProvider;
+  /** ADR-0080 §7: the egress proxy backing `fetch_url`. */
+  egress?: EgressProxy;
   turns: RecordedToolTurns;
   maxSteps?: number;
   checks?: AgentCheckRequests;
@@ -110,30 +118,23 @@ export class ToolLoopExecutor implements AgentExecutor {
     if (!this.needsSandbox(ctx)) {
       const prompt = this.d.prompts.build(ctx, "tools");
       await ctx.transcript.record({ role: "note", author: sys, content: `read-only workspace access: ${ctx.workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10)}`).join(", ")}` });
-      return this.loop(ctx, prompt, { read: reader, search: reader, knowledge: this.knowledgeFor(ctx) }, async () => "");
+      return this.loop(ctx, prompt, { read: reader, search: reader, knowledge: this.knowledgeFor(ctx), egress: bindEgress(ctx, this.d.egress) }, async () => "");
     }
 
     const { profile, fromRepository } = await resolveSandboxProfile(ctx, this.d.reader);
     const { environment, health } = await this.d.environments.select();
-    const required = profile.spec.isolation ?? "container";
-    const insufficient = ISOLATION_RANK[health.isolation] < ISOLATION_RANK[required];
-    if (insufficient && !health.waivesIsolation) {
-      throw new Error(`sandbox runtime "${health.runtime}" provides isolation "${health.isolation}", profile requires "${required}"`);
-    }
+    const isolation = decideIsolation(health, profile);
 
     const prompt = this.d.prompts.build(ctx, "tools");
 
-    if (insufficient) {
-      await ctx.transcript.record({
-        role: "note",
-        author: sys,
-        content: `WARNING: runtime "${health.runtime}" is unsandboxed (isolation ${health.isolation}); profile minimum "${required}" waived by explicit opt-in (ADR-0020).`,
-      });
+    if (isolation.acceptedWeaker) {
+      await ctx.transcript.record({ role: "note", author: sys, content: weakerIsolationNote(health, isolation) });
     }
     const sandbox: Sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
     await ctx.transcript.record({ role: "note", author: sys, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name}${fromRepository ? " from the repository" : " from the agent"})` });
     try {
-      return await this.loop(ctx, prompt, { read: sandbox, write: sandbox, exec: sandbox, artifacts: sandbox, search: reader, knowledge: this.knowledgeFor(ctx) }, () => sandbox.diff());
+      const result = await this.loop(ctx, prompt, { read: sandbox, write: sandbox, exec: sandbox, artifacts: sandbox, search: reader, knowledge: this.knowledgeFor(ctx), egress: bindEgress(ctx, this.d.egress) }, () => sandbox.diff());
+      return { ...result, provenance: { ...result.provenance, isolation } };
     } catch (e) {
       await ctx.transcript.record({ role: "note", author: sys, content: `tool loop failed: ${e instanceof Error ? e.message : String(e)}` });
       throw e;
@@ -232,7 +233,7 @@ export class ToolLoopExecutor implements AgentExecutor {
                 toolUse: { steps: step, calls: { ...calls }, finishCorrections: corrections, ...(final ? { wrapUp: true } : {}) } });
               // Once the corrections are used up, the post-run output checks decide (ADR-0049/0055).
               const problems = corrections < maxCorrections ? await validateFinish(ctx, this.d.finish, result, "tool-loop") : [];
-              if (!problems.length) return result;
+              if (!problems.length) return withHostExecution(result, session);
               lastFinish = result;
               corrections++;
               const content = finishRejection(problems, corrections, maxCorrections);
@@ -249,7 +250,7 @@ export class ToolLoopExecutor implements AgentExecutor {
           }
         }
         // A rejected finish on the last step still goes to the post-run checks (ADR-0057 §4).
-        if (lastFinish) return lastFinish;
+        if (lastFinish) return withHostExecution(lastFinish, session);
         // ADR-0067: one finish-only correction step when the budget ended without any finish call.
         const note = "[harness] The step budget is used up and no finish was received. Call finish now with what is done and what is not.";
         await say(note, maxSteps);
@@ -258,8 +259,8 @@ export class ToolLoopExecutor implements AgentExecutor {
         const call = last.toolCalls.find((c) => c.name === "finish");
         if (call) {
           await ctx.transcript.record({ role: "tool-call", author: agentAuthor, content: JSON.stringify(call.arguments), meta: { tool: call.name, step: maxSteps + 1 } });
-          return finishResult(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: maxSteps + 1,
-            toolUse: { steps: maxSteps + 1, calls: { ...calls }, finishCorrections: corrections, wrapUp: true } });
+          return withHostExecution(await finishResult(ctx, call.arguments, diff, { model, promptHash: promptHash(prompt), steps: maxSteps + 1,
+            toolUse: { steps: maxSteps + 1, calls: { ...calls }, finishCorrections: corrections, wrapUp: true } }), session);
         }
         throw new Error(`tool loop did not finish within ${maxSteps} steps`);
       } finally {

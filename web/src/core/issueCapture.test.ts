@@ -32,7 +32,7 @@ test("AC-6: agents with the issue-proposal skill propose findings: max 5, redact
     const result = { summary: "ok", artifacts: [], outcome: "resolvable", questions: [], issues };
     return Response.json({ choices: [{ message: { content: JSON.stringify(result) } }] });
   }) as typeof fetch;
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fake, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "sk-test-123456" }, fetch: fake, log: () => {} });
   await f.start();
   try {
     const wi = await f.app.createWorkItem(ANONYMOUS, { title: "Review me", description: "Find issues in the code base please.", workflowRef: "servicedesk" });

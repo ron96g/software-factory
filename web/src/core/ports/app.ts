@@ -192,6 +192,8 @@ export interface SystemHealth {
   failing: FailingReconcile[];
   /** Checks repository policy relies on without a configured command (they can never pass). */
   policyGaps: import("../model/verification-policy.ts").PolicyGap[];
+  /** ADR-0062 §3: live check workers. Zero workers means Pending checks wait for one. */
+  checks: { workers: number; running: number };
 }
 
 export interface SystemQueries {

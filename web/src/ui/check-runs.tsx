@@ -143,7 +143,7 @@ function CheckRunCard({ run }: { run: CheckRun }) {
         Scope: {run.spec.scope.mode === "full" ? "full repository" : `${run.spec.scope.mode}: ${run.spec.scope.modules.join(", ")}`} · {run.spec.scope.reason} Base: {run.spec.scope.baseCommit}
       </Text>}
       <Text size="xs" ff="monospace" style={{ overflowWrap: "anywhere" }}>{run.spec.command}</Text>
-      <Text size="xs" c="dimmed">Runtime: {run.spec.environment.runtime}{run.spec.environment.version ? ` ${run.spec.environment.version}` : ""} · profile {run.spec.environment.profileVersion}{status?.exitCode != null ? ` · exit ${status.exitCode}` : ""}{status?.signal ? ` · signal ${status.signal}` : ""}</Text>
+      <Text size="xs" c="dimmed">Runtime: {run.spec.environment.runtime}{run.spec.environment.version ? ` ${run.spec.environment.version}` : ""} · profile {run.spec.environment.profileVersion}{run.spec.environment.isolation ? ` · isolation ${run.spec.environment.isolation}${run.spec.environment.declaredIsolation && run.spec.environment.declaredIsolation !== run.spec.environment.isolation ? ` (profile asks ${run.spec.environment.declaredIsolation})` : ""}` : ""}{status?.exitCode != null ? ` · exit ${status.exitCode}` : ""}{status?.signal ? ` · signal ${status.signal}` : ""}</Text>
       {preparationFinished && <Alert color="yellow">Preparation command succeeded. Its resulting tree requires review; this is not final verification evidence.</Alert>}
       {status?.message && <Alert color={preparationFinished ? "yellow" : status.outcome === "Passed" ? "blue" : "red"}>{status.message}</Alert>}
       {status?.logsIncomplete && <Alert color="yellow">Log evidence is incomplete.</Alert>}

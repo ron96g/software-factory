@@ -41,12 +41,12 @@ async function connect(f: Factory, headers: Record<string, string> = {}) {
 const json = (r: unknown) => JSON.parse(((r as { content: { text: string }[] }).content)[0].text);
 
 test("MCP server: token required; harness creates items, proposes and searches knowledge; no gate tools", async () => {
-  const off = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
+  const off = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
   assert.equal((await off.mcp(new Request(MCP_URL, { method: "POST", body: "{}" }))).status, 503, "disabled without FACTORY_MCP_TOKEN");
   await off.stop();
 
   let f!: Factory;
-  f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_MCP_TOKEN: TOKEN }, log: () => {} });
+  f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_MCP_TOKEN: TOKEN, FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
   await f.start();
   try {
     assert.equal((await f.mcp(new Request(MCP_URL, { method: "POST", headers: { authorization: "Bearer wrong" }, body: "{}" }))).status, 401);
@@ -125,7 +125,7 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
   f = await createFactory({
     definitionsRoot: ROOT, definitionLoader: testDefinitions(),
     databasePath: ":memory:",
-    env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "sk-test-123456", FACTORY_MCP_TOKEN: TOKEN },
     fetch: routing(() => f, llm),
     workspaceBackend: backend,
     mcpTransportFor: (definition) => {
@@ -180,13 +180,13 @@ test("MCP client: an agent calls its ToolServer's allowed tools in the tool loop
   }
 });
 
-test("MCP client: stdio servers (local processes) only with the host opt-in; no allowedTools = nothing offered", async () => {
+test("MCP client: stdio servers (local processes) only with `spec.hostExecution`; no allowedTools = nothing offered", async () => {
   const { McpToolProvider } = await import("./adapters/mcp/client.ts");
   const provider = new McpToolProvider({ secrets: { resolve: () => undefined }, redactor: { redact: (x: string) => x } });
   const server = (name: string, spec: object) => ({ metadata: { name }, spec }) as never;
-  const s = await provider.open([server("local", { transport: "stdio", command: "node", allowedTools: ["x"] }), server("none", { transport: "http", url: MCP_URL })], { allowStdio: false });
+  const s = await provider.open([server("local", { transport: "stdio", command: "node", allowedTools: ["x"] }), server("none", { transport: "http", url: MCP_URL })], {});
   assert.deepEqual(s.tools, []);
-  assert.match(s.unavailable.find((u) => u.server === "local")!.reason, /FACTORY_SANDBOX_RUNTIME=host/);
+  assert.match(s.unavailable.find((u) => u.server === "local")!.reason, /spec\.hostExecution/);
   assert.match(s.unavailable.find((u) => u.server === "none")!.reason, /no allowedTools/);
   await s.close();
 });

@@ -22,6 +22,10 @@ export const PROVIDER_PACKAGES: Readonly<Record<string, { package: string; baseU
     package: "@opencode/ai/providers/anthropic",
     baseURL: (b) => `${(b ?? "https://api.anthropic.com").replace(/\/$/, "")}/v1`,
   },
+  google: {
+    package: "@opencode/ai/providers/google",
+    baseURL: (b) => (b ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, ""),
+  },
 };
 
 export interface BuiltinGroup {
@@ -45,8 +49,12 @@ export const BUILTIN_EQUIVALENTS: Readonly<Record<string, BuiltinGroup>> = {
   run: EXEC,
 };
 
-/** Every session gets skills and sub-agents (ADR-0060 §3). */
-export const ALWAYS: BuiltinGroup = { tools: ["skill", "subagent"], rules: [allowTool("skill"), allowTool("subagent")], mutating: false };
+/** Every session gets skills, sub-agents, Code Mode and web research tools (ADR-0060 §3, ADR-0078). */
+export const ALWAYS: BuiltinGroup = {
+  tools: ["skill", "subagent", "execute", "webfetch", "websearch"],
+  rules: [allowTool("skill"), allowTool("subagent"), allowTool("execute"), allowTool("webfetch"), allowTool("websearch")],
+  mutating: false,
+};
 
 /** Not offered to sub-agents: one level of delegation, and only the parent reports the result. */
 export const PARENT_ONLY: ReadonlySet<string> = new Set(["subagent", "finish"]);

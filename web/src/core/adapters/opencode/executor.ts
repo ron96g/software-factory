@@ -6,8 +6,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
-  ISOLATION_RANK,
   SANDBOX_CAPABILITIES,
+  canConfineShell,
   type AgentBaselineRequests,
   type AgentCheckLogReader,
   type AgentCheckRequests,
@@ -18,12 +18,14 @@ import {
   type BoundTool,
   type ExecutionContext,
   type ExecutionEnvironmentSelector,
+  type EgressProxy,
   type FinishValidator,
   type KnowledgeSearcher,
   type Lookup,
   type PromptBuilder,
   type ResourceReader,
   type Sandbox,
+  type ShellConfiner,
   type ToolCapabilities,
   type ToolProvider,
   type ToolSession,
@@ -36,8 +38,9 @@ import { scopedSearcher } from "../../knowledge/context.ts";
 import {
   CITATION_GUIDE, CONTINUE_PROMPT, DEFAULT_MAX_FINISH_CORRECTIONS, DEFAULT_MAX_STEPS, FINISH, FINISH_GUIDE,
   budgetGuide, finishRejection, finishResult, guardedMutation, mcpGuide, mutates, neededCapabilities, openToolServers,
-  resolveSandboxProfile, selectTools, validateFinish, workspaceGuide,
+  resolveSandboxProfile, selectTools, validateFinish, workspaceGuide, bindEgress,
 } from "../../agents/run-harness.ts";
+import { decideIsolation, weakerIsolationNote, type IsolationDecision } from "../../agents/sandbox-isolation.ts";
 import { ALWAYS, BUILTIN_EQUIVALENTS, DENY_ALL, PARENT_ONLY, PROTECTED, PROVIDER_PACKAGES, allowTool, type PermissionRule } from "./mapping.ts";
 import type { OpenCodeHost } from "./host.ts";
 
@@ -52,6 +55,8 @@ export interface OpenCodeExecutorDeps {
   scratchDir: string;
   knowledge?: KnowledgeSearcher;
   toolProvider?: ToolProvider;
+  /** ADR-0080 §7: the egress proxy backing `fetch_url`. */
+  egress?: EgressProxy;
   checks?: AgentCheckRequests;
   checkLogs?: AgentCheckLogReader;
   baseline?: AgentBaselineRequests;
@@ -74,6 +79,9 @@ const BUILTIN_GUIDE: Readonly<Record<string, string>> = {
   shell: "`shell`: run commands in the workspace (build, test, git); commands see no factory secrets",
   skill: "`skill`: load one of the repository's skills when it matches the task",
   subagent: "`subagent`: delegate a focused, independent sub-task to a background sub-agent; it inherits your permissions and reports back",
+  execute: "`execute`: run JavaScript in Code Mode to batch, filter and compose factory/MCP tools from `tools.*`",
+  webfetch: "`webfetch`: fetch a documentation or reference URL as markdown, text or HTML",
+  websearch: "`websearch`: search the web for documentation or current information",
 };
 
 export class OpenCodeExecutor implements AgentExecutor {
@@ -94,9 +102,12 @@ export class OpenCodeExecutor implements AgentExecutor {
     if (!endpoint || !PROVIDER_PACKAGES[endpoint.type]) return false;
     if (tools.includes(FINISH.name) || !tools.every((t) => !!this.d.tools.get(t))) return false;
     if (!this.needsSandbox(ctx)) return true;
-    // ADR-0060 §4: OpenCode writes and executes only where the host runtime would (ADR-0020); isolated runtimes keep
-    // the tool loop until a workspace driver bridges into the sandbox.
-    return !!ctx.agent.spec.sandboxRef && !!ctx.sandbox?.available && ctx.sandbox.runtime === "host" && this.readyWorkspaces(ctx).length > 0;
+    // ADR-0060 §4, ADR-0079 §3: OpenCode writes and executes on a runtime that can confine its shell (process-level
+    // isolation, e.g. `bwrap`); container/microvm runtimes keep the tool loop until a workspace driver bridges into
+    // the sandbox (ADR-0080 §10 removed the unsandboxed `host` runtime).
+    return !!ctx.agent.spec.sandboxRef && !!ctx.sandbox?.available
+      && ctx.sandbox.confinesShell === true
+      && this.readyWorkspaces(ctx).length > 0;
   }
 
   private readyWorkspaces(ctx: ExecutionContext) {
@@ -109,18 +120,21 @@ export class OpenCodeExecutor implements AgentExecutor {
     const reader = workspaces.length ? this.d.readers.forWorkspaces(ctx.workspaces) : undefined;
     let sandbox: Sandbox | undefined;
     let env: Record<string, string> = {};
+    let confineShell: ShellConfiner["confineShell"] | undefined;
+    let isolation: IsolationDecision | undefined;
     if (this.needsSandbox(ctx)) {
       const { profile, fromRepository } = await resolveSandboxProfile(ctx, this.d.reader);
       const { environment, health } = await this.d.environments.select();
-      if (health.runtime !== "host") throw new Error(`the OpenCode runtime writes only on the host runtime (ADR-0060), selected "${health.runtime}"`);
-      const required = profile.spec.isolation ?? "container";
-      if (ISOLATION_RANK[health.isolation] < ISOLATION_RANK[required]) {
-        if (!health.waivesIsolation) throw new Error(`sandbox runtime "${health.runtime}" provides isolation "${health.isolation}", profile requires "${required}"`);
-        await ctx.transcript.record({ role: "note", author: SYSTEM,
-          content: `WARNING: runtime "${health.runtime}" is unsandboxed (isolation ${health.isolation}); profile minimum "${required}" waived by explicit opt-in (ADR-0020).` });
+      if (!canConfineShell(environment)) {
+        throw new Error(`the OpenCode runtime writes only on shell-confining runtimes (ADR-0060, ADR-0079), selected "${health.runtime}"`);
+      }
+      isolation = decideIsolation(health, profile);
+      if (isolation.acceptedWeaker) {
+        await ctx.transcript.record({ role: "note", author: SYSTEM, content: weakerIsolationNote(health, isolation) });
       }
       sandbox = await environment.prepare({ run: ctx.run, profile, repositories: ctx.repositories, workspaces: ctx.workspaces });
       env = { ...(profile.spec.env ?? {}) };
+      if (canConfineShell(environment)) confineShell = (input) => environment.confineShell(input);
       await ctx.transcript.record({ role: "note", author: SYSTEM, content: `sandbox ${sandbox.id} prepared (${health.runtime}, profile ${profile.metadata.name}${fromRepository ? " from the repository" : " from the agent"})` });
     } else if (workspaces.length) {
       await ctx.transcript.record({ role: "note", author: SYSTEM, content: `read-only workspace access: ${workspaces.map((w) => `${w.spec.repositoryRef.name}@${w.status?.baseCommit?.slice(0, 10)}`).join(", ")}` });
@@ -130,6 +144,7 @@ export class OpenCodeExecutor implements AgentExecutor {
       const all: ToolCapabilities = {
         read: sandbox ?? reader, search: reader, write: sandbox, exec: sandbox, artifacts: sandbox,
         knowledge: this.d.knowledge ? scopedSearcher(this.d.knowledge, ctx) : undefined,
+        egress: bindEgress(ctx, this.d.egress),
         ...(this.d.checks ? { checks: { run: (input) => this.d.checks!.run(ctx, input) } } : {}),
         ...(this.d.checkLogs ? { checkLogs: { read: (input) => this.d.checkLogs!.read(ctx, input) } } : {}),
         ...(this.d.baseline ? { baseline: { run: (input) => this.d.baseline!.runBaseline(ctx, input) } } : {}),
@@ -218,6 +233,7 @@ export class OpenCodeExecutor implements AgentExecutor {
         factoryTools,
         guard: (operation) => guardedMutation(ctx, this.d, operation),
         env,
+        confineShell,
         maxSteps,
         continuePrompt: CONTINUE_PROMPT,
         transcript: ctx.transcript,
@@ -242,7 +258,12 @@ export class OpenCodeExecutor implements AgentExecutor {
       const result = accepted ?? lastFinish;
       // A rejected finish on the last step still goes to the post-run checks (ADR-0057 §4).
       if (!result) throw new Error(`OpenCode run did not finish within ${maxSteps} steps (${outcome.steps} model steps)`);
-      return result;
+      const provenance = {
+        ...result.provenance,
+        ...(isolation ? { isolation } : {}),
+        ...(toolSession?.hostExecution.length ? { hostExecution: toolSession.hostExecution } : {}),
+      };
+      return { ...result, provenance };
     } catch (e) {
       await ctx.transcript.record({ role: "note", author: SYSTEM, content: `OpenCode run failed: ${e instanceof Error ? e.message : String(e)}` });
       throw e;

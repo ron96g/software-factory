@@ -3,14 +3,19 @@
  */
 import { CREATE_ISSUE_ACTION, createIssuePolicy } from "./issues/policy.ts";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { ModelProvider, ToolServer, Source, Repository, ArtifactType } from "./model/kinds.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch } from "./ports/index.ts";
+import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch, ResourceWatcher, AgentProcessKiller } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
+import { SqliteChangeFeed } from "./store/change-feed.ts";
+import { SqliteWorkspaceLock } from "./store/workspace-lock.ts";
+import { SqliteFencedStatusWriter } from "./store/fenced-status.ts";
+import { FeedWatcher } from "./store/feed-watcher.ts";
+import { NoProcessKiller, incarnationId, reapStaleIncarnations } from "./runtime/incarnations.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
 import { BUILTIN_CAPABILITY_DETECTORS } from "./capabilities/detectors.ts";
 import { CompositeStore, ScopeRouter } from "./store/composite-store.ts";
@@ -32,6 +37,7 @@ import { automatedGate } from "./workflow/checks.ts";
 import { SandboxCommandRunner } from "./agents/command-runner.ts";
 import { GitBranchPublisher } from "./adapters/workspaces/git-publish.ts";
 import { GitBaseSync } from "./adapters/workspaces/git-base-sync.ts";
+import { GitBundleIngest, GitCandidateDiffer } from "./adapters/workspaces/git-export.ts";
 import { GithubCodeHost } from "./adapters/codehosts/github.ts";
 import { pullRequestHandler } from "./runtime/publish.ts";
 import { createWorkItemController } from "./runtime/controllers/workitem.ts";
@@ -48,7 +54,7 @@ import { createMcpHttpHandler } from "./adapters/mcp/server.ts";
 import { factoryTools } from "./exposed/factory-tools.ts";
 import { FilesKnowledgeSearch } from "./adapters/knowledge/files.ts";
 import { DefaultKnowledgeSearcher } from "./knowledge/searcher.ts";
-import { knowledgeProvider } from "./knowledge/context.ts";
+import { knowledgeProvider, scopedSearcher } from "./knowledge/context.ts";
 import { mirrorLinkChecker } from "./issues/mirror.ts";
 import { createIssueHandler, createIssueLinkHandler } from "./issues/handler.ts";
 import { createIssueProposalController } from "./issues/controller.ts";
@@ -57,8 +63,14 @@ import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts
 import { ProductOwnerTicketDrafter } from "./issues/ticket-drafter.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
-import { anthropicFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
+import { anthropicFactory, googleFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
 import { DefaultModelResolver } from "./agents/model-resolver.ts";
+import { DefaultModelProxy } from "./agents/model-proxy.ts";
+import { InMemoryModelTokens } from "./adapters/model-proxy/tokens.ts";
+import { createModelProxyHttpHandler } from "./adapters/model-proxy/http.ts";
+import { DefaultRuntimeModelAccess } from "./adapters/model-proxy/runtime-access.ts";
+import { DefaultEgressProxy } from "./adapters/egress/proxy.ts";
+import { fetchUrlTool } from "./agents/egress-tool.ts";
 import { ExplainResponder } from "./agents/explain-responder.ts";
 import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
 import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
@@ -70,16 +82,21 @@ import { JiraConnector } from "./adapters/sources/jira.ts";
 import { DefaultRunReplayer } from "./agents/replayer.ts";
 import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
-import { HostEnvironment } from "./adapters/sandbox/host.ts";
+import { BwrapEnvironment } from "./adapters/sandbox/bwrap.ts";
 import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { ToolLoopExecutor } from "./agents/tool-loop.ts";
+import { AgentRuntimeExecutor } from "./agents/agent-runtime-executor.ts";
+import { DefaultAgentRuntimeSelector } from "./agents/agent-runtime-selector.ts";
+import { BwrapAgentRuntime } from "./adapters/runtime/bwrap.ts";
+import { createRunControlServerFactory } from "./adapters/runtime/control.ts";
+import { bindEgress } from "./agents/run-harness.ts";
 import { OpenCodeHost } from "./adapters/opencode/host.ts";
 import { OpenCodeExecutor } from "./adapters/opencode/executor.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
-import type { CapabilityDetector, ConversationTurnRunner, DefinitionLoader, FinishValidator } from "./ports/index.ts";
+import type { AgentRuntime, CapabilityDetector, ConversationTurnRunner, DefinitionLoader, ExecutionContext, FinishValidator, ToolCapabilities, WorkspaceProbe } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 import { TicketActions } from "./tickets/actions.ts";
@@ -121,7 +138,7 @@ import { recoveryContext } from "./recovery/context.ts";
 import { RecoveryAllowances } from "./recovery/allowances.ts";
 import { DefaultRecoveryCheckAuthorization } from "./recovery/check-authorization.ts";
 import { runtimeRecoveryNeed } from "./recovery/runtime-need.ts";
-import { SerializedWorkspaceJobs } from "./checks/workspace-jobs.ts";
+import { StoreWorkspaceJobs } from "./checks/workspace-jobs.ts";
 import { ActiveCheckFinishValidator } from "./checks/finish-guard.ts";
 import type { RecoveryCheckAuthorization, RecoveryNeedHandler } from "./ports/index.ts";
 import type { NotificationClassifier, NotificationQueries, NotificationRule } from "./ports/index.ts";
@@ -139,6 +156,10 @@ type WorkspaceBackend = WorkspacePreparer & WorkspaceCleaner & WorkspaceSupport 
 
 export interface FactoryOptions {
   retrospectivePolicy?: RetrospectivePolicy;
+  /** ADR-0062 §3: which controllers this process registers. Default "all" (single process). */
+  role?: "all" | "web" | "worker";
+  /** ADR-0062 §2: kills a previous incarnation's agent processes before its workspace locks are released. */
+  processKiller?: AgentProcessKiller;
   /** Repo root containing agents/, skills/, workflows/, … Required for git mode only. */
   definitionsRoot?: string;
   /** Definition source override for git mode, e.g. repository definitions plus test fixtures. */
@@ -151,7 +172,7 @@ export interface FactoryOptions {
   secretReader?: NamespacedSecretReader;
   /** Secret change stream for kubernetes mode (tests); default watches `FACTORY_SECRET_NAMESPACE`. */
   secretWatcher?: SecretWatcher;
-  /** Where the `host` runtime keeps per-item Git worktrees (ADR-0020). Default: next to the database. */
+  /** Where the workspace backend keeps per-item Git worktrees (ADR-0021). Default: next to the database. */
   workspacesDir?: string;
   /** Workspace backend override (ADR-0021), e.g. a fake in tests. Default follows the runtime. */
   workspaceBackend?: WorkspaceBackend;
@@ -163,6 +184,8 @@ export interface FactoryOptions {
   checkPollMs?: number;
   /** Extra sandbox runtimes (ADR-0019), e.g. a fake in tests. `none` is always registered. */
   sandboxes?: ExecutionEnvironment[];
+  /** Test seam (ADR-0080 §2): `AgentRuntime` backends. Empty in production until a real backend exists (S2-b). */
+  agentRuntimes?: AgentRuntime[];
   /** Poll interval for replies on synced issues (W3). */
   commentPollMs?: number;
   /** Test seam (ADR-0034): transport per ToolServer, e.g. an in-memory pair. */
@@ -187,6 +210,8 @@ export async function createFactory(o: FactoryOptions) {
   const kinds = new KindRegistry();
   BUILTIN_KINDS.forEach((k) => kinds.register(k));
   const runtime = new SqliteStore(db, clock, [feedbackDeletionGuard]);
+  const changeFeed = new SqliteChangeFeed(db);
+  const workspaceLock = new SqliteWorkspaceLock(db, clock);
   const definitionSource = definitionsBackend(o.env ?? process.env);
   if (definitionSource === "git" && !o.definitionFeed && !o.definitionLoader && !o.definitionsRoot) throw new Error("definitionsRoot is required in git mode");
   const localRoot = o.localRoot ?? (o.env ?? process.env).FACTORY_LOCAL_ROOT ?? o.definitionsRoot;
@@ -203,6 +228,8 @@ export async function createFactory(o: FactoryOptions) {
     onRejected: (reason) => rejectDefinitions(reason),
     log: o.log,
   }).init();
+  // ADR-0062 §3: when this process loaded its definitions (used to tell "worker is older" from "the check is stale").
+  const definitionsLoadedAt = clock.now().toISOString();
   const composite = new CompositeStore(new ScopeRouter(kinds, definitions, runtime), [definitions, runtime]);
   const admission = new AdmissionChain();
   const scopes = new GitModuleScopePlanner();
@@ -262,10 +289,14 @@ export async function createFactory(o: FactoryOptions) {
   const llmFactories = new Registry<LLMClientFactory>();
   llmFactories.register("openai-compatible", openAICompatibleFactory(o.fetch));
   llmFactories.register("anthropic", anthropicFactory(o.fetch));
+  llmFactories.register("google", googleFactory(o.fetch));
   const models = new DefaultModelResolver(store, secrets, llmFactories);
+  // ADR-0080 §4: the factory's model proxy (X60). A runtime holds a run-scoped token, never a provider key.
+  const modelTokens = new InMemoryModelTokens(() => clock.now());
+  const modelProxy = createModelProxyHttpHandler({ proxy: new DefaultModelProxy({ tokens: modelTokens, models, fetch: o.fetch }) });
 
   const tools = new Registry<AgentTool>();
-  for (const t of [...CONTEXT_TOOLS, ...SANDBOX_TOOLS]) {
+  for (const t of [...CONTEXT_TOOLS, ...SANDBOX_TOOLS, fetchUrlTool]) {
     if (t.name === "finish") throw new Error('tool name "finish" is reserved by the tool loop');
     tools.register(t.name, t);
   }
@@ -274,18 +305,32 @@ export async function createFactory(o: FactoryOptions) {
   skillHandlers.register(classificationHandler.skill, classificationHandler);
   skillHandlers.register(codebaseResearchHandler.skill, codebaseResearchHandler);
 
-  // ── sandbox runtimes (ADR-0019) ──────────────────────────────────────
+  // ── sandbox runtimes (ADR-0019, ADR-0079) ────────────────────────────
+  const env = o.env ?? process.env;
+  // ADR-0080 §10: no execution without a primitive. `host` is removed as a runtime; naming it fails loudly instead
+  // of falling back silently (ADR-0020 is superseded).
+  if ((env.FACTORY_SANDBOX_RUNTIME ?? "").trim().toLowerCase() === "host") {
+    throw new Error('FACTORY_SANDBOX_RUNTIME=host is no longer supported: the unsandboxed `host` runtime was removed (ADR-0080 §10). Use "bwrap" locally, or "kubernetes" in a cluster once available; without either, runs simulate or wait (ADR-0029).');
+  }
+  // ADR-0062 §2/§3: this process's role and incarnation (the identity it holds workspace locks under).
+  const role = o.role ?? env.FACTORY_ROLE ?? "all";
+  if (role !== "all" && role !== "web" && role !== "worker") throw new Error(`FACTORY_ROLE must be "web", "worker" or "all", got "${role}"`);
+  const incarnation = incarnationId(role, env);
+  // ADR-0080 §7 / SEC-5: agent-initiated HTTP goes through the egress proxy (host allowlist + transcript audit).
+  const egress = new DefaultEgressProxy({ policy: { allow: (env.FACTORY_EGRESS_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean) }, fetch: o.fetch });
   const sandboxEnvs = new Registry<ExecutionEnvironment>();
   sandboxEnvs.register("none", new NoSandboxEnvironment());
-  // ADR-0020: registered, but only used when FACTORY_SANDBOX_RUNTIME=host (never part of `auto`).
-  sandboxEnvs.register("host", new HostEnvironment());
+  // ADR-0079: Linux bubblewrap process/filesystem isolation (ADR-0080 §11: the profile, not the env, decides isolation).
+  sandboxEnvs.register("bwrap", new BwrapEnvironment({
+    extraRoBinds: env.FACTORY_BWRAP_RO_BINDS?.split(":").filter(Boolean),
+  }));
   for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
-  const env = o.env ?? process.env;
   const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [
     ...(env.KUBERNETES_SERVICE_HOST ? ["kubernetes"] : []),
     "podman",
     "docker",
     "remote",
+    "bwrap",
     ...(o.sandboxes ?? []).map((e) => e.runtime),
   ]);
 
@@ -298,9 +343,12 @@ export async function createFactory(o: FactoryOptions) {
     },
     remove: async () => {},
   };
+  const usesWorktrees =
+    env.FACTORY_SANDBOX_RUNTIME === "bwrap" ||
+    ((!env.FACTORY_SANDBOX_RUNTIME || env.FACTORY_SANDBOX_RUNTIME === "auto") && (await environments.select()).health.runtime === "bwrap");
   const workspaceBackend =
     o.workspaceBackend ??
-    (env.FACTORY_SANDBOX_RUNTIME === "host"
+    (usesWorktrees
       ? new GitWorktreeWorkspaces({
           definitionsRoot: localRoot,
           // Outside the web app, so Next.js/tsc never pick up workspace copies of the code.
@@ -317,7 +365,7 @@ export async function createFactory(o: FactoryOptions) {
   const workspaces = new LocalWorkspaceProvider(localRoot);
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
-  const jobs = new SerializedWorkspaceJobs(store);
+  const jobs = new StoreWorkspaceJobs({ reader: store, lock: workspaceLock, holder: incarnation });
   const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes, jobs, recoveryChecks: recoveryCheckPort });
   const schemas = new DefinitionArtifactSchemas(store);
   const schemaValidator = new AjvSchemaValidator();
@@ -394,7 +442,53 @@ export async function createFactory(o: FactoryOptions) {
     ? new OpenCodeHost({ dataDir: agentRuntimeDir, fetch: o.fetch, log: (msg) => (o.log ?? console.error)(msg) })
     : undefined;
   const finishValidator: FinishValidator = { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] };
+  // ADR-0080 §2 (S2-a/b): the `AgentRuntime` path. Off unless a backend is selected; when on, the runtime hosts the
+  // loop and the workspace (the tool loop first — S4 moves OpenCode in). `bwrap` is a real backend.
+  const agentRuntimes = new Registry<AgentRuntime>();
+  agentRuntimes.register("bwrap", new BwrapAgentRuntime({
+    root: join(agentRuntimeDir, "runtime"),
+    // Dev/TS layout (cwd is `web/`); a built runtime image replaces this in S3 (recorded in provenance).
+    runnerPath: env.FACTORY_RUNTIME_RUNNER ?? resolve(process.cwd(), "src/agent-runtime/runner.ts"),
+    extraRoBinds: env.FACTORY_BWRAP_RO_BINDS?.split(":").filter(Boolean),
+    log: (msg) => (o.log ?? console.error)(msg),
+  }));
+  for (const r of o.agentRuntimes ?? []) agentRuntimes.register(r.backend, r);
+  const runtimeBackend = env.FACTORY_AGENT_RUNTIME_BACKEND;
+  let runtimeExecutor: AgentRuntimeExecutor | undefined;
+  if (runtimeBackend) {
+    const { runtime, health } = await new DefaultAgentRuntimeSelector(agentRuntimes, runtimeBackend, agentRuntimes.keys()).select();
+    if (!runtime) throw new Error(`FACTORY_AGENT_RUNTIME_BACKEND="${runtimeBackend}" did not resolve to an available AgentRuntime: ${health.message ?? ""}`);
+    // Factory-side tool surface (§5): workspace tools are marked local (they run inside the runtime) and refused here.
+    const refuse = (): never => { throw new Error("workspace tools run inside the runtime (ADR-0080 §5)"); };
+    const runtimeCapabilities = (ctx: ExecutionContext): ToolCapabilities => {
+      const reader = workspaceReaders.forWorkspaces(ctx.workspaces);
+      return {
+        read: reader, search: reader,
+        write: { writeFile: async () => refuse() },
+        exec: { exec: async () => refuse() },
+        artifacts: { diff: async () => refuse() },
+        knowledge: scopedSearcher(knowledge, ctx),
+        egress: bindEgress(ctx, egress),
+        checks: { run: (input) => verification.run(ctx, input) },
+        checkLogs: { read: (input) => verification.read(ctx, input) },
+        baseline: { run: (input) => verification.runBaseline(ctx, input) },
+      };
+    };
+    runtimeExecutor = new AgentRuntimeExecutor({
+      runtime, reader: store, prompts, tools,
+      modelAccess: new DefaultRuntimeModelAccess({ tokens: modelTokens, clock: () => clock.now() }),
+      export: new GitBundleIngest(),
+      diff: new GitCandidateDiffer(),
+      mirrorsDir: join(agentRuntimeDir, "mirrors"),
+      capabilities: runtimeCapabilities,
+      toolProvider,
+      offerings: [verification],
+      controlServer: createRunControlServerFactory({ proxy: modelProxy }),
+      finish: finishValidator,
+    });
+  }
   const realExecutors = [
+    ...(runtimeExecutor ? [runtimeExecutor] : []),
     ...(opencode ? [new OpenCodeExecutor({
       host: opencode,
       reader: store,
@@ -410,6 +504,7 @@ export async function createFactory(o: FactoryOptions) {
       offerings: [verification],
       checkLogs: verification,
       jobs,
+      egress,
       finish: finishValidator,
     })] : []),
     new ToolLoopExecutor({
@@ -426,6 +521,7 @@ export async function createFactory(o: FactoryOptions) {
       offerings: [verification],
       checkLogs: verification,
       jobs,
+      egress,
       finish: finishValidator,
     }),
     new LLMExecutor(prompts, tools),
@@ -482,41 +578,36 @@ export async function createFactory(o: FactoryOptions) {
   gates.register(publicationGate.type, publicationGate);
 
   // ── controllers ──────────────────────────────────────────────────────
+  // ADR-0062 §3: the web and worker composition roots are thin selections over this one builder.
+  // ADR-0062 §1: in a split deployment the web/worker see each other's writes through the change feed, not an in-process emitter.
+  const feedWatcher = role === "all" ? undefined : new FeedWatcher({ feed: changeFeed, reader: store, onError: o.log });
+  const watcher: ResourceWatcher = feedWatcher ?? store;
   const reconcileErrors = new EventingReconcileErrorReporter({ reader: store, events, redactor, clock });
-  const manager = new ControllerManager(store, o.log, reconcileErrors);
-  manager.register(createFeedbackCaptureController({ reader: store, writer: store, redactor }));
-  manager.register(createRetrospectiveController(store, new DefaultRetrospectiveInvestigator({
-    reader: store, writer: store, status: store, aggregation: retrospectiveAggregation, clock,
-  }), events, redactor));
+  const manager = new ControllerManager(watcher, o.log, reconcileErrors);
+  if (role !== "worker") {
+    manager.register(createFeedbackCaptureController({ reader: store, writer: store, redactor }));
+    manager.register(createRetrospectiveController(store, new DefaultRetrospectiveInvestigator({
+      reader: store, writer: store, status: store, aggregation: retrospectiveAggregation, clock,
+    }), events, redactor));
+  }
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
     transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
     runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, clock, events, redactor, classifiers, scopes,
+    claims: workspaceLock, fenced: new SqliteFencedStatusWriter(store, workspaceLock), holder: incarnation,
+    maxPerWorkspace: Number(env.FACTORY_CHECKS_PER_WORKSPACE ?? 1), maxTotal: Number(env.FACTORY_CHECKS_TOTAL ?? 2),
+    definitionsLoadedAt,
     contracts: verification, recoveryChecks: recoveryCheckPort, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
-  manager.register(checkRunController);
-  manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
-    stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification, planReconfirmation: verification, publicationRecovery: verification,
-    questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks,
-    recovery: recoveryRouter, recoveryNeeds, recoveryAllowances }));
-  manager.register(
-    createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor,
-      integrator: baseSync }),
-  );
-  manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor, policies: sourcePolicies }));
-  manager.register(
-    createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
-  );
+  // ADR-0062 §3: the CheckRun execution controller runs in the worker (or in "all"); the web root never runs checks.
+  if (role !== "web") manager.register(checkRunController);
   const agentRunController = createAgentRunController({
     reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
     feedback: feedbackCapture,
     gate: executionGate && { policy: executionGate, previews: contexts },
     onError: (message) => (o.log ?? console.error)(`[agentrun] ${message}`),
   });
-  manager.register(agentRunController);
-  manager.register(createClarificationController({ reader: store, status: store, clock }));
-  manager.register(createApprovalController({ reader: store, status: store }));
   const conversationTurns = new Registry<ConversationTurnRunner>();
   const itemRecords = new DefaultWorkItemRecordReader(store);
   const tickets = new TicketActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, connectors, outbox, clock, redactor, compiler, records: itemRecords, events });
@@ -525,9 +616,27 @@ export async function createFactory(o: FactoryOptions) {
     reader: store, status: store, recorders, transcripts, turns: conversationTurns, clock, redactor, events,
     onError: (message) => (o.log ?? console.error)(`[conversation] ${message}`),
   });
-  manager.register(conversationController);
-  manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
-  manager.register(createIssueProposalController({ reader: store, status: store, events, clock, outbox, connectors, workItems: store }));
+  if (role !== "worker") {
+    manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
+      stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification, planReconfirmation: verification, publicationRecovery: verification,
+      questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks,
+      recovery: recoveryRouter, recoveryNeeds, recoveryAllowances }));
+    manager.register(
+      createWorkspaceController({ reader: store, status: store, events, preparer: workspaceBackend, cleaner: workspaceBackend, sweeper: workspaceBackend, redactor,
+        probe: (workspaceBackend as Partial<WorkspaceProbe>).exists ? (workspaceBackend as unknown as WorkspaceProbe) : undefined,
+        integrator: baseSync }),
+    );
+    manager.register(createOutboxController({ reader: store, status: store, events, clock, handlers: outboxHandlers, redactor, policies: sourcePolicies }));
+    manager.register(
+      createClarificationSyncController({ reader: store, writer: store, events, connectors, pollMs: o.commentPollMs ?? 60_000 }),
+    );
+    manager.register(agentRunController);
+    manager.register(createClarificationController({ reader: store, status: store, clock }));
+    manager.register(createApprovalController({ reader: store, status: store }));
+    manager.register(conversationController);
+    manager.register(createKnowledgeController({ reader: store, status: store, events, clock }));
+    manager.register(createIssueProposalController({ reader: store, status: store, events, clock, outbox, connectors, workItems: store }));
+  }
 
   const syncer = new DefaultSourceSyncer({ reader: store, writer: store, connectors, events, clock, mirrors: mirrorLinkChecker({ reader: store }), origins: followUpOriginResolver({ reader: store, records: itemRecords, redactor, clock }) });
 
@@ -552,6 +661,10 @@ export async function createFactory(o: FactoryOptions) {
     environments,
     models,
     controllerHealth: reconcileErrors,
+    checkWorkers: async () => {
+      const live = await workspaceLock.list("checkrun/");
+      return { workers: new Set(live.map((l) => l.holder)).size, running: live.length };
+    },
     events,
     responders,
     simulation,
@@ -587,20 +700,33 @@ export async function createFactory(o: FactoryOptions) {
     recoveryAllowances,
     /** Streamable HTTP MCP endpoint handler (Request → Response). */
     mcp,
+    /** ADR-0080 §4: OpenAI-shaped model proxy handler (run-scoped tokens). */
+    modelProxy,
+    /** Issues/revokes run-scoped model tokens for the proxy. */
+    modelTokens,
     /** The exposed tool catalog (also used by tests). */
     exposedTools,
     /** Notification center history (ADR-0069). */
     notifications: notifications as NotificationQueries,
     /** Turns a stored Event into a browser notification (SSE `notification` frames). */
     notificationClassifier: notificationClassifier as NotificationClassifier,
-    /** Watch feed for the UI (SSE). */
-    watcher: store as Pick<typeof store, "watch">,
+    /** Watch feed for the UI (SSE); the change feed in a split deployment (ADR-0062 §1). */
+    watcher: watcher as Pick<typeof store, "watch">,
+    /** ADR-0062 §1: the durable change feed (cross-process consumers poll this). */
+    changeFeed,
+    /** ADR-0062 §1/§2: the fenced, store-backed workspace lock. */
+    workspaceLock,
     transcriptTail: transcripts as Pick<typeof transcripts, "tail">,
     manager,
     async start() {
+      // ADR-0062 §2: release a previous incarnation's locks, but only after its agent processes are confirmed gone.
+      const reaped = await reapStaleIncarnations({ lock: workspaceLock, killer: o.processKiller ?? new NoProcessKiller(), current: incarnation });
+      if (reaped.length) (o.log ?? (() => {}))(`released workspace locks held by previous incarnation(s): ${reaped.join(", ")}`);
+      await feedWatcher?.start();
       await manager.start();
     },
     async stop() {
+      feedWatcher?.stop();
       secretRefresh?.stop();
       await manager.stop();
       await Promise.all([agentRunController.stop(), conversationController.stop(), checkRunController.stop()]);

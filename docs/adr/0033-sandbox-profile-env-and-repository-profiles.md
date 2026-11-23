@@ -1,6 +1,7 @@
 # ADR-0033: Sandbox profile environment and repository-first profiles
 
 - **Status:** Accepted
+- **Amended by ADR-0080 §10:** the `host` runtime was removed; the profile's `env` still applies to the selected runtime.
 - **Date:** 2026-11-12
 - **Deciders:** project owner
 - **Extends:** ADR-0019, ADR-0020

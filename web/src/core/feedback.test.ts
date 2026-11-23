@@ -23,7 +23,7 @@ async function setup() {
     const artifacts = [...new Set(types)].map((type) => ({ type, content: `# ${type}\n\nThe API responds within 2 seconds.\n\nUsers log in with a password.` }));
     return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", outcome: "accept", artifacts, questions: [] }) } }] });
   }) as typeof fetch;
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, log: () => {} });
   await f.start();
   const wi = await f.app.createWorkItem(p, { title: "Inline feedback", description: "A long enough description for triage to accept it directly.", workflowRef: "test-loop" });
   const name = wi.metadata.name;

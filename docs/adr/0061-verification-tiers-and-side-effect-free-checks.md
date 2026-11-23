@@ -1,6 +1,7 @@
 # ADR-0061: Verification tiers and side-effect-free checks
 
 - **Status:** Accepted
+- **Amended by ADR-0080 §10:** the `host` runtime was removed; "runtimes without isolation" in this ADR now means `none` (which executes nothing).
 - **Amended by:** ADR-0064
 - **Date:** 2026-11-17
 - **Deciders:** project owner

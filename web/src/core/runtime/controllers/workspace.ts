@@ -11,6 +11,7 @@ import {
   type WorkspaceCleaner,
   type WorkspaceIntegrator,
   type WorkspacePreparer,
+  type WorkspaceProbe,
   type WorkspaceSweeper,
 } from "../../ports/index.ts";
 import { resolveRef } from "../../refs/refs.ts";
@@ -26,6 +27,8 @@ export function createWorkspaceController(d: {
   preparer: WorkspacePreparer;
   cleaner: WorkspaceCleaner;
   sweeper: WorkspaceSweeper;
+  /** ADR-0021: reports a `Ready` workspace whose files vanished, so it is re-prepared instead of looped on `ENOENT`. */
+  probe?: WorkspaceProbe;
   redactor: Redactor;
   /** ADR-0053: merges a requested base commit into a Ready workspace. */
   integrator: WorkspaceIntegrator;
@@ -108,7 +111,10 @@ export function createWorkspaceController(d: {
     // Level-triggered cleanup (sweep) at startup and periodically; the DELETED event is only a fast path.
     initialKeys: async () => [
       SWEEP,
-      ...(await d.reader.list<Workspace>("Workspace")).filter((w) => (w.status?.phase !== "Ready" && w.status?.phase !== "Failed") || integrationPending(w)).map(keyOf),
+      ...(await d.reader.list<Workspace>("Workspace"))
+        .filter((w) => (w.status?.phase !== "Ready" && w.status?.phase !== "Failed") || integrationPending(w)
+          || (w.status?.phase === "Ready" && !!d.probe && !d.probe.exists(w)))
+        .map(keyOf),
     ],
     resyncMs: d.sweepMs ?? 10 * 60_000,
 
@@ -129,6 +135,18 @@ export function createWorkspaceController(d: {
         return;
       }
       if (inFlight.has(key)) return;
+      if (ws.status?.phase === "Ready" && d.probe && !d.probe.exists(ws)) {
+        // ADR-0021: the workspace files vanished (a manual cleanup, a crash, a concurrent sweep). Re-prepare instead of
+        // failing every git call with `ENOENT` forever. Setup re-runs, so the deps come back too; uncommitted changes in
+        // the old worktree are lost, the branch is kept.
+        const lost = await d.status.updateStatus({ ...ws, status: { ...ws.status, phase: "Preparing", setupCompleted: false, setupLog: undefined } as NonNullable<Workspace["status"]> });
+        await d.events.warning(lost, "WorkspaceLost", "the workspace files were missing; re-preparing (setup re-runs). Uncommitted changes in the old worktree are lost; the branch is kept.");
+        inFlight.add(key);
+        void prepare(key, lost).catch((e) => {
+          if (!isStoreError(e)) throw e;
+        });
+        return;
+      }
       if (integrationPending(ws)) {
         inFlight.add(key);
         void integrate(key, ws);

@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Workspace } from "../../model/kinds.ts";
 import type { WorkspaceSnapshotter } from "../../ports/index.ts";
+import { GIT_HARDENING } from "./git-auth.ts";
 
 const exec = promisify(execFile);
 const MAX_BUFFER = 64 * 1024 * 1024;
@@ -19,7 +20,7 @@ export class GitWorkspaceSnapshotter implements WorkspaceSnapshotter {
     const cwd = workspace.status?.path;
     if (!cwd) throw new Error(`workspace ${workspace.metadata.name} has no path`);
     const git = async (args: string[], env?: NodeJS.ProcessEnv) =>
-      (await exec("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, maxBuffer: MAX_BUFFER, ...(env ? { env } : {}) })).stdout;
+      (await exec("git", [...GIT_HARDENING, ...args], { cwd, maxBuffer: MAX_BUFFER, ...(env ? { env } : {}) })).stdout;
     const gitPath = async (name: string) => resolve(cwd, (await git(["rev-parse", "--git-path", name])).trim());
     const scratch = await mkdtemp(join(tmpdir(), "factory-snapshot-"));
     try {
@@ -36,6 +37,7 @@ export class GitWorkspaceSnapshotter implements WorkspaceSnapshotter {
         // No user/system config: clean filters (e.g. LFS) and other drivers must not run or change contents.
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ATTR_NOSYSTEM: "1",
       };
       await git(["add", "-A", "--", "."], env);
       const tree = (await git(["write-tree"], env)).trim();

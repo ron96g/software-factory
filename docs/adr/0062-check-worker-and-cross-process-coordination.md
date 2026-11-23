@@ -1,6 +1,7 @@
 # ADR-0062: Check worker and cross-process coordination
 
 - **Status:** Accepted
+- **Amended by ADR-0080 §10:** the `host` runtime was removed; the worker's `host` case now means "no primitive" (simulation/wait).
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Amended by:** ADR-0064

@@ -1,7 +1,7 @@
 import type { CheckRun, Repository, SandboxProfile, Workspace } from "../../model/kinds.ts";
-import { API_VERSION, SYSTEM_NAMESPACE } from "../../model/resource.ts";
-import { ISOLATION_RANK, SandboxUnavailableError, canPrepareIsolated, type CheckExecutionRunner, type ExecutionEnvironmentSelector, type ResourceReader } from "../../ports/index.ts";
+import { SandboxUnavailableError, canPrepareIsolated, type CheckExecutionRunner, type ExecutionEnvironmentSelector, type ResourceReader } from "../../ports/index.ts";
 import { resolveRef } from "../../refs/refs.ts";
+import { decideIsolation, DEFAULT_SANDBOX_PROFILE } from "../../agents/sandbox-isolation.ts";
 
 /** ADR-0047: checks keep complete redacted logs up to an operator limit; truncation stays visibly incomplete. */
 export const DEFAULT_CHECK_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -25,12 +25,17 @@ export class SandboxCheckRunner implements CheckExecutionRunner {
     }
     const profile = repository.spec.sandboxRef
       ? await resolveRef<SandboxProfile>(this.reader, "SandboxProfile", repository.spec.sandboxRef, run.metadata.namespace!)
-      : { apiVersion: API_VERSION, kind: "SandboxProfile", metadata: { name: "default", namespace: SYSTEM_NAMESPACE }, spec: { image: "", isolation: "container" as const } };
+      : DEFAULT_SANDBOX_PROFILE;
     if (!profile || (profile.metadata.resourceVersion ?? "default") !== run.spec.environment.profileVersion) {
       throw new SandboxUnavailableError(health.runtime, "sandbox profile changed since check submission");
     }
-    if (ISOLATION_RANK[health.isolation] < ISOLATION_RANK[profile.spec.isolation ?? "container"] && !health.waivesIsolation) {
-      throw new SandboxUnavailableError(health.runtime, "runtime does not provide the profile's minimum isolation");
+    try {
+      decideIsolation(health, profile);
+    } catch (e) {
+      throw new SandboxUnavailableError(health.runtime, e instanceof Error ? e.message : String(e));
+    }
+    if (run.spec.environment.isolation && run.spec.environment.isolation !== health.isolation) {
+      throw new SandboxUnavailableError(health.runtime, "effective isolation changed since check submission");
     }
     const spec = { profile, repositories: [repository], workspaces: [workspace] };
     const isolated = run.spec.workflow?.purpose === "diagnostic" || run.spec.workflow?.purpose === "baseline";

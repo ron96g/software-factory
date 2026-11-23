@@ -69,10 +69,13 @@ export interface SandboxHealthInfo {
   runtime: string;
   available: boolean;
   isolation: IsolationLevel;
-  /** Explicitly opted-in runtime that waives profile minimum isolation (ADR-0020 `host`). */
-  waivesIsolation?: boolean;
   version?: string;
   message?: string;
+  /**
+   * True when this runtime can confine an external shell invocation (it implements `ShellConfiner`), so OpenCode's
+   * `shell` tool may run on it (ADR-0060 §4, ADR-0079). False or absent means OpenCode falls back to the tool loop.
+   */
+  confinesShell?: boolean;
 }
 
 export interface SandboxHealth {
@@ -94,6 +97,18 @@ export interface IsolatedSnapshotEnvironment {
 
 export function canPrepareIsolated(environment: ExecutionEnvironment): environment is ExecutionEnvironment & IsolatedSnapshotEnvironment {
   return typeof (environment as Partial<IsolatedSnapshotEnvironment>).prepareIsolated === "function";
+}
+
+/** Confines an external shell invocation (e.g. OpenCode's shell tool) to a workspace (ADR-0079). */
+export interface ShellConfiner {
+  confineShell(input: { workspace: string; cwd: string; command: string; env: Record<string, string | undefined> }): {
+    command: string;
+    env: Record<string, string | undefined>;
+  };
+}
+
+export function canConfineShell(environment: ExecutionEnvironment): environment is ExecutionEnvironment & ShellConfiner {
+  return typeof (environment as Partial<ShellConfiner>).confineShell === "function";
 }
 
 /** Picks the runtime (explicit or auto-detected). Cached after the first call; `refresh` re-probes. */

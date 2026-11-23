@@ -6,6 +6,8 @@ import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
 import { StoreError, type CheckExecutionRunner, type ExecResult, type ExecutionEnvironment, type ExecutionEnvironmentSelector, type RecoveryCheckAuthorization } from "./ports/index.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
+import { SqliteWorkspaceLock } from "./store/workspace-lock.ts";
+import { SqliteFencedStatusWriter } from "./store/fenced-status.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { Registry } from "./registry/registry.ts";
@@ -114,10 +116,12 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
   const errors: string[] = [];
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
+  const lock = new SqliteWorkspaceLock(db, clock);
   const controller = (execution: CheckExecutionRunner = runner, contracts?: VerificationContracts) => createCheckRunController({
     reader: store, status: store, logs, runner: execution, snapshots, clock,
     events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message), classifiers, contracts,
     recoveryChecks: options.recoveryChecks,
+    claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test",
   });
   return {
     db, store, logs, scheduler, submit, item, workspace, repository, caller, origin,

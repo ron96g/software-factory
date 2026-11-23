@@ -114,6 +114,8 @@ export interface FactoryAppDeps {
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
   controllerHealth: ControllerHealth;
+  /** ADR-0062 §3: live check workers (distinct lease holders) and how many checks they run. */
+  checkWorkers?: () => Promise<{ workers: number; running: number }>;
   /** Audit trail for human overrides (ADR-0027) — required, an override must never go unlogged. */
   events: EventRecorder;
   /** ADR-0029 policy, reported in system health. */
@@ -1126,6 +1128,7 @@ export class FactoryApp
       simulation: this.d.simulation,
       failing: this.d.controllerHealth.failing(),
       policyGaps: (await this.d.reader.list<Repository>("Repository")).flatMap(verificationPolicyGaps),
+      checks: this.d.checkWorkers ? await this.d.checkWorkers() : { workers: 0, running: 0 },
     };
   }
 

@@ -9,7 +9,7 @@ import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenCode } from "@opencode/sdk";
 import type { Plugin } from "@opencode/plugin";
-import type { BoundTool, ModelEndpoint, NewTranscriptMessage, ToolSchema, TranscriptRecorder } from "../../ports/index.ts";
+import type { BoundTool, ModelEndpoint, NewTranscriptMessage, ShellConfiner, ToolSchema, TranscriptRecorder } from "../../ports/index.ts";
 import { ModelUnavailableError } from "../../ports/index.ts";
 import { FINISH, WRAP_UP_WARNING, lastStepNotice, wrapUpWarning } from "../../agents/run-harness.ts";
 import { PROVIDER_PACKAGES, SAFE_ENV, UNAVAILABLE_STATUS, type PermissionRule } from "./mapping.ts";
@@ -74,6 +74,8 @@ export interface SessionSpec {
   guard(operation: () => Promise<void>): Promise<void>;
   /** Plain profile environment for commands (ADR-0033), on top of the scrubbed base. */
   env: Readonly<Record<string, string>>;
+  /** Optional shell confiner (e.g. bwrap, ADR-0079) wrapping `shell` tool invocations. */
+  confineShell?: ShellConfiner["confineShell"];
   maxSteps: number;
   continuePrompt: string;
   transcript: TranscriptRecorder;
@@ -296,12 +298,17 @@ export class OpenCodeHost {
           }
         });
         await ctx.tool.transform((editor) => {
+          // ADR-0078 §2: strip OpenCode's built-in session/worktree and browser Code Mode tools.
+          for (const existing of editor.list()) {
+            if (existing.id.startsWith("opencode_") || existing.id.startsWith("browser_")) editor.remove(existing.id);
+          }
           for (const schema of [FINISH, ...host.toolSchemas.values()]) {
             editor.add({
               name: schema.name,
               description: schema.description,
               input: schema.parameters as never,
-              options: { codemode: false },
+              // ADR-0078 §3: factory and MCP tools run in Code Mode; `finish` stays direct for last-step enforcement.
+              options: { codemode: schema.name !== FINISH.name },
               execute: async (input: unknown, tc: { sessionID: string }) => ({ content: await host.invoke(schema.name, (input ?? {}) as Record<string, unknown>, tc.sessionID) }) as never,
             });
           }
@@ -357,7 +364,7 @@ export class OpenCodeHost {
   private async registerTools(tools: ReadonlyMap<string, BoundTool>) {
     let changed = false;
     for (const [name, tool] of tools) {
-      if (name === FINISH.name || RESERVED.has(name) || name.startsWith("opencode_")) throw new Error(`tool name "${name}" is reserved by the OpenCode runtime`);
+      if (name === FINISH.name || RESERVED.has(name) || name.startsWith("opencode_") || name.startsWith("browser_")) throw new Error(`tool name "${name}" is reserved by the OpenCode runtime`);
       if (JSON.stringify(this.toolSchemas.get(name)) === JSON.stringify(tool.schema)) continue;
       this.toolSchemas.set(name, tool.schema);
       changed = true;
@@ -499,9 +506,17 @@ export class OpenCodeHost {
     return tool.invoke(input);
   }
 
-  private onShell(ev: { cwd: string; env: Record<string, string | undefined> }) {
+  private onShell(ev: { command: string; cwd: string; env: Record<string, string | undefined> }) {
+    const st = this.stateForDirectory(ev.cwd);
+    // P0-4 (SEC-10): a shell from a directory that is not a known run's workspace must not run unconfined.
+    if (!st) throw new Error(`refusing to run a shell command outside a factory workspace: ${ev.cwd}`);
     for (const key of Object.keys(ev.env)) if (!SAFE_ENV.includes(key)) ev.env[key] = undefined;
-    Object.assign(ev.env, this.stateForDirectory(ev.cwd)?.spec.env ?? {});
+    Object.assign(ev.env, st.spec.env ?? {});
+    if (st.spec.confineShell) {
+      const confined = st.spec.confineShell({ workspace: st.spec.directory, cwd: ev.cwd, command: ev.command, env: ev.env });
+      ev.command = confined.command;
+      for (const [k, v] of Object.entries(confined.env)) ev.env[k] = v;
+    }
   }
 
   private async interrupt(st: RunState) {

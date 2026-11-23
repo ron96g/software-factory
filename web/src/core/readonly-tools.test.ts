@@ -43,7 +43,7 @@ test("S5b: analysis agents read the workspace with read-only tools (no sandbox);
     remove: async () => {},
     prepare: async (): Promise<PreparedWorkspace> => ({ path: ROOT, baseCommit: "c0ffee", headCommit: "c0ffee", preparedBy: "fake", setupCompleted: true }),
   };
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, workspaceBackend: backend, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "sk-test-123456" }, fetch: fetchImpl, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {
     const wi = await f.app.createWorkItem(p, { title: "Where is setCondition?", description: "Find where conditions are set on resources and describe the impact of changing it.", workflowRef: "test-loop" });

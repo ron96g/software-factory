@@ -237,6 +237,8 @@ export interface ToolCapabilities {
   write?: FileWriter;
   exec?: SandboxExec;
   artifacts?: SandboxArtifacts;
+  /** ADR-0080 §7: agent-initiated HTTP through the factory's allowlisted, audited egress proxy. */
+  egress?: { fetch(req: import("./egress.ts").EgressRequest): Promise<import("./egress.ts").EgressResponse> };
 }
 
 /** Capabilities that require a sandbox runtime (ADR-0019). */
@@ -314,6 +316,14 @@ export interface WorkspaceSupport {
 /** Creates (or re-attaches to) the files of a Workspace, pins its base commit, runs setup. Idempotent. */
 export interface WorkspacePreparer {
   prepare(ws: Workspace, repo: Repository): Promise<PreparedWorkspace>;
+}
+
+/**
+ * Whether a Workspace's files are still present (ADR-0021). A `Ready` workspace whose directory vanished (a manual
+ * cleanup, a crash, a concurrent sweep) is re-prepared instead of failing every git call with `ENOENT`.
+ */
+export interface WorkspaceProbe {
+  exists(ws: Workspace): boolean;
 }
 
 /** Removes the files of a deleted Workspace. Idempotent. */

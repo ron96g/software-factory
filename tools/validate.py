@@ -44,8 +44,8 @@ def load_all():
         if path.parent.name in ("agents", "skills") and path.parent.parent == ROOT:
             docs += [(path, d) for d in load_markdown(path)]
     for path in ROOT.glob("**/*.yaml"):
-        # Standalone components validate their own configuration schemas.
-        if path.relative_to(ROOT).parts[0] == "components":
+        # Standalone components validate their own configuration schemas; deploy/ holds the generated CRDs and samples.
+        if path.relative_to(ROOT).parts[0] in ("components", "deploy"):
             continue
         if {".venv", "node_modules", ".next", ".serena", "data", ".workspaces"} & set(path.relative_to(ROOT).parts):
             continue

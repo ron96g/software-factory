@@ -259,10 +259,13 @@ flowchart LR
 - Only the factory's resolved model is available; OpenCode's bundled providers, the public model catalogue, user and
   repository configuration and plugins are never loaded. The key stays in-process.
 - Sessions start from "deny everything"; the agent's tools grant `read`/`glob`/`grep`, `edit`/`write` (never `.git`)
-  or `shell`. `skill` and `subagent` are always allowed; sub-agents inherit the rules, cannot delegate further and
-  cannot call `finish`. Web access, Code Mode and the interactive `question` tool are hidden.
-- Agents that write or execute use OpenCode only on the `host` sandbox runtime; with an isolated runtime they fall
-  back to the tool loop. Commands get the scrubbed environment plus the sandbox profile's `env`.
+  or `shell`. `skill`, `subagent`, Code Mode (`execute`), `webfetch`, and `websearch` are allowed by default (ADR-0078);
+  sub-agents inherit the rules, cannot delegate further and cannot call `finish`. OpenCode's built-in `opencode_*`
+  (session/worktree), `browser_*`, `external_directory`, and interactive `question` tools are stripped or denied.
+  Factory and `ToolServer` tools run in Code Mode while `finish` stays direct.
+- Agents that write or execute use OpenCode on `bwrap` (filesystem-isolated via `ShellConfiner`, ADR-0079); with
+  container/microvm runtimes they fall back to the tool loop. Commands get the scrubbed environment plus the sandbox
+  profile's `env`. The unsandboxed `host` runtime was removed (ADR-0080 §10).
 - A 429/503/529 is not retried inside OpenCode: the run waits (ADR-0031). `FACTORY_AGENT_RUNTIME=tool-loop` disables
   the runtime.
 
@@ -545,9 +548,9 @@ stateDiagram-v2
 ```mermaid
 flowchart LR
   WI[WorkItem] -- owns --> WS[Workspace<br/>branch factory/&lt;item&gt;<br/>base commit pinned]
-  WS -- prepared by --> P["WorkspacePreparer<br/>(host: git worktree)"]
+  WS -- prepared by --> P["WorkspacePreparer<br/>(git worktree)"]
   WS --> CS[code search · repository docs]
-  WS --> SB["Sandbox runtime<br/>(host / container / k8s)"]
+  WS --> SB["Sandbox runtime<br/>(bwrap / container / k8s)"]
   SB --> DEV[developer · verifier tools]
   CS --> AN[analysis agents]
 ```
@@ -564,6 +567,31 @@ flowchart LR
   shows the publication as "not configured" instead of retrying a delivery that can't succeed. Adding `git:` later
   keeps the item's plan and check evidence (they bind to the check definition version, ADR-0064); a preflight made
   stale by a check-definition change is rerun in place before publication.
+
+## Security model
+
+The factory runs code it did not write, driven by text it did not write, while holding write access to customer
+repositories. `docs/security.md` is the threat model and findings register for that: assets (A1–A8, including the
+factory's own gate authority), adversaries, trust
+boundaries, and an enforcement matrix — **✓** enforced by the OS, kernel or network, **~** enforced only by policy inside
+the factory process, **✗** not enforced — per capability and runtime.
+
+The short version: **`bwrap` confines commands, not the agent.** Only `SandboxExec` and OpenCode's `shell` run inside a
+namespace; the LLM loop, the agent's file tools, the git plumbing, workspace setup and the web tools run in the factory
+process at the operator's privilege. Fourteen open findings follow from that, and `docs/security.md` §7 orders the
+remediation: close the reachable paths (P0), enforce what the profiles declare (P1), then move the execution plane — the
+agent loop, file tools, git and MCP clients — into a sandbox that holds no secrets and no store (P2).
+
+The committed target for P2 is **ADR-0080** (milestones X59/X60): an `AgentRuntime` hosts the agent loop, the workspace
+and the toolchain, while the factory keeps the authority and the secrets and executes no workload code.
+
+```mermaid
+flowchart LR
+  U[Untrusted text and code] --> A[Agent loop + host-side helpers]
+  U --> S[Command sandbox]
+  A -.->|"secrets, store, git, webfetch — not confined"| X[Factory trust domain]
+  S -->|"confined: namespaces, scrubbed env"| Y[Workspace]
+```
 
 ## Kubernetes definitions backend (ADR-0077)
 With `FACTORY_DEFINITIONS_BACKEND=kubernetes`, definitions are read and watched cluster-wide from CRs (managed by GitOps),

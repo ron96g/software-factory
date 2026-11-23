@@ -65,7 +65,7 @@ tools/        validate.py: checks schemas + resolves every reference
 cd web
 npm install
 cp .env.example .env.local   # optional: OPENAI_API_KEY / ANTHROPIC_API_KEY / GITHUB_TOKEN
-npm run dev                  # http://localhost:3000
+npm run dev                  # http://127.0.0.1:3000 (loopback; set FACTORY_HOST to expose, behind auth)
 npm test                     # node:test, store + control plane + agent pipeline
 npm run typecheck
 ```
@@ -82,6 +82,14 @@ Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless `NODE_USE_ENV_
 `npm run dev` and `npm start` set it for you (it has no effect without proxy variables). Putting it in `.env.local` doesn't
 work: Next.js loads that file after Node has started. Otherwise source sync and LLM calls fail with
 `fetch failed: Connect Timeout Error`.
+
+The UI/API binds to loopback (`FACTORY_HOST`, default `127.0.0.1`), rejects cross-origin state-changing API requests,
+and sets a CSP plus standard hardening headers (S0, `docs/security.md` §7). Authentication is still not implemented
+(ADR-0009), so exposing the app is a deliberate step behind a reverse proxy that authenticates.
+
+By default one process runs everything (`FACTORY_ROLE=all`). To keep checks running across a web restart, run the check
+worker alongside the app over the same database: the app at `FACTORY_ROLE=web` and `npm run worker` (ADR-0062). Without a
+worker, checks stay Pending with a visible reason.
 
 ## Plan-first work items (ADR-0045, ADR-0046, ADR-0050, ADR-0051)
 
@@ -142,7 +150,7 @@ This mode is read-only: no shell, repository workspace, publication or gate acti
 finish the investigation, click **Create work item**, review the findings and choose the workflow/repositories.
 The item links back to the conversation and keeps normal human approvals. No item is created automatically.
 Live cluster tools still require the [Kubernetes MCP setup](components/kubernetes-cr-mcp/README.md), including the
-host stdio opt-in. Other agents must explicitly opt in with `spec.chat.allowedTools`.
+`spec.hostExecution` stdio opt-in (ADR-0080 §12). Other agents must explicitly opt in with `spec.chat.allowedTools`.
 
 ## Follow-up work items (ADR-0039)
 
@@ -222,8 +230,8 @@ The factory is an MCP server for your local agent harness, and its agents can us
     }
   }
   ```
-- **Agents as clients:** define a `ToolServer` in `tool-servers/` (`http` url, or `stdio` command with the `host`
-  runtime only), list the `allowedTools`, and add it to an agent's `toolServerRefs`. Tools appear as `<server>__<tool>`.
+- **Agents as clients:** define a `ToolServer` in `tool-servers/` (`http` url, or `stdio` with
+  `spec.hostExecution: true` — ADR-0080 §12), list the `allowedTools`, and add it to an agent's `toolServerRefs`. Tools appear as `<server>__<tool>`.
 - **Kubernetes CR investigation:** [standalone Kubernetes CR MCP server](components/kubernetes-cr-mcp/README.md)
   (ADR-0035). Runs without the app; the support engineer uses it over stdio to discover configured CR types,
   list by namespace/labels, read spec/status and follow configured reference hierarchies. Requires separate component

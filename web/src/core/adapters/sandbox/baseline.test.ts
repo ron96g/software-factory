@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { SandboxSpec } from "../../ports/index.ts";
 import { InMemorySandboxEnvironment } from "./basic.ts";
-import { HostEnvironment } from "./host.ts";
+import { HostEnvironment } from "../../testing/host-environment.ts";
 import { SandboxCheckRunner } from "./check-runner.ts";
 import type { CheckRun, Repository, Workspace } from "../../model/kinds.ts";
 

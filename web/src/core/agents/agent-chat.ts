@@ -88,7 +88,6 @@ export class AgentChatRunner implements ConversationTurnRunner {
       servers.push(server);
     }
     const session = await this.d.tools.open(servers, {
-      allowStdio: (await this.d.environments.select()).health.runtime === "host",
       runName: conversation.metadata.name,
     });
     try {

@@ -4,18 +4,19 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
-import type { PreparedWorkspace, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper } from "../../ports/index.ts";
+import type { PreparedWorkspace, WorkspaceCleaner, WorkspaceProbe, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper } from "../../ports/index.ts";
 import { runScrubbed } from "../sandbox/process.ts";
 import { resolveLocalPath } from "../fs/paths.ts";
+import { GIT_HARDENING, gitLocalEnv } from "./git-auth.ts";
 
 const execFileP = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) => (await execFileP("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
+const git = async (cwd: string, ...args: string[]) => (await execFileP("git", [...GIT_HARDENING, ...args], { cwd, env: gitLocalEnv(), maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
 
 /**
  * ADR-0021 host backend: one Git worktree per (work item, repository) under `<workspacesDir>/<item>/<repo>`,
  * on branch `spec.branch`, forked from `spec.baseRef` (default: the checkout's HEAD). Setup runs once.
  */
-export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleaner, WorkspaceSupport, WorkspaceSweeper {
+export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleaner, WorkspaceSupport, WorkspaceSweeper, WorkspaceProbe {
   private readonly root: string;
   private readonly dir: string;
   constructor(o: { definitionsRoot: string; workspacesDir: string }) {
@@ -25,6 +26,11 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
 
   supports(repo: Repository): boolean {
     return !!repo.spec.local?.path;
+  }
+
+  /** ADR-0021: a `Ready` workspace whose files are gone (a prune, a manual cleanup) is reported missing. */
+  exists(ws: Workspace): boolean {
+    return !!ws.status?.path && existsSync(join(ws.status.path, ".git"));
   }
 
   private source(repo: Repository): string {

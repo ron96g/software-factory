@@ -1,20 +1,25 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { ExecOptions, ExecResult, ExecutionEnvironment, IsolatedSnapshotEnvironment, Sandbox, SandboxHealthInfo, SandboxSpec } from "../../ports/index.ts";
-import { SandboxUnavailableError } from "../../ports/index.ts";
-import { runScrubbed, scrubbedEnv } from "./process.ts";
+import type { ExecOptions, ExecResult, ExecutionEnvironment, IsolatedSnapshotEnvironment, Sandbox, SandboxHealthInfo, SandboxSpec, ShellConfiner } from "../ports/index.ts";
+import { SandboxUnavailableError } from "../ports/index.ts";
+import { runScrubbed, scrubbedEnv } from "../adapters/sandbox/process.ts";
+import { resolveReadInWorkspace, resolveWriteInWorkspace, writeInsideWorkspace } from "../adapters/sandbox/workspace-paths.ts";
 
 const execFileP = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await execFileP("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
 
 /**
- * ADR-0020: unsandboxed local runtime, explicit opt-in only. Operates in the work item's prepared Workspace
- * (ADR-0021); it never creates or touches checkouts itself.
+ * ADR-0080 §10: the unsandboxed `host` runtime, retired as a runtime. It survives **only** as a test helper under
+ * `core/testing/`: several suites need a real filesystem for OpenCode's editor tools and for baseline/escape checks.
+ * It is never registered in the composition root and `FACTORY_SANDBOX_RUNTIME=host` fails loudly (ADR-0020 is
+ * superseded). Do not use it to execute untrusted workload code.
+ *
+ * It operates in the work item's prepared Workspace (ADR-0021); it never creates or touches checkouts itself.
  */
-export class HostEnvironment implements ExecutionEnvironment, IsolatedSnapshotEnvironment {
+export class HostEnvironment implements ExecutionEnvironment, IsolatedSnapshotEnvironment, ShellConfiner {
   readonly runtime = "host";
   readonly isolatesCandidate = false;
 
@@ -25,13 +30,23 @@ export class HostEnvironment implements ExecutionEnvironment, IsolatedSnapshotEn
         runtime: this.runtime,
         available: true,
         isolation: "none",
-        waivesIsolation: true,
+        // Test-only: this helper confines nothing, but reports the capability so OpenCode's `shell` path can be
+        // exercised without a real runtime (ADR-0080 §10).
+        confinesShell: true,
         version: stdout.trim().replace("git version ", "git "),
-        message: "UNSANDBOXED: commands run as your OS user inside the work item's workspace (ADR-0020)",
+        message: "UNSANDBOXED (test helper only, ADR-0080 §10): commands run as your OS user inside the work item's workspace",
       };
     } catch {
-      return { runtime: this.runtime, available: false, isolation: "none", message: "git is required for the host runtime" };
+      return { runtime: this.runtime, available: false, isolation: "none", message: "git is required for the host environment test helper" };
     }
+  }
+
+  /** Test-only pass-through: the helper does not isolate, so a "confined" shell is the plain command (ADR-0080 §10). */
+  confineShell(input: { workspace: string; cwd: string; command: string; env: Record<string, string | undefined> }): {
+    command: string;
+    env: Record<string, string | undefined>;
+  } {
+    return { command: input.command, env: input.env };
   }
 
   async prepare(spec: SandboxSpec): Promise<Sandbox> {
@@ -79,29 +94,22 @@ class HostSandbox implements Sandbox {
     this.env = env;
   }
 
-  private path(p: string): string {
-    const full = resolve(this.dir, p);
-    const rel = relative(this.dir, full);
-    if (rel.startsWith("..") || isAbsolute(rel) || rel.split(/[\\/]/)[0] === ".git") throw new Error(`path escapes the workspace: ${p}`);
-    return full;
-  }
   private alive() {
     if (this.disposed) throw new Error(`sandbox ${this.id} is disposed`);
   }
 
-  exec(command: string, o: ExecOptions = {}): Promise<ExecResult> {
+  async exec(command: string, o: ExecOptions = {}): Promise<ExecResult> {
     this.alive();
-    return runScrubbed(command, o.cwd ? this.path(o.cwd) : this.dir, o.timeoutMs, this.env, o.maxOutputBytes);
+    const cwd = o.cwd ? await resolveReadInWorkspace(this.dir, o.cwd) : this.dir;
+    return runScrubbed(command, cwd, o.timeoutMs, this.env, o.maxOutputBytes);
   }
   async readFile(p: string): Promise<string> {
     this.alive();
-    return readFile(this.path(p), "utf8");
+    return readFile(await resolveReadInWorkspace(this.dir, p), "utf8");
   }
   async writeFile(p: string, content: string): Promise<void> {
     this.alive();
-    const full = this.path(p);
-    await mkdir(dirname(full), { recursive: true });
-    await writeFile(full, content);
+    await writeInsideWorkspace(await resolveWriteInWorkspace(this.dir, p), content);
   }
   async listFiles(glob?: string): Promise<string[]> {
     this.alive();

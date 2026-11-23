@@ -4,7 +4,7 @@ import type { Agent, AgentRun, CheckRun, CheckWorkflowOrigin, Repository, WorkIt
 import type { ResourceReader, VerificationContracts, WorkflowCompiler } from "../ports/index.ts";
 import { DefaultRecoveryCheckAuthorization } from "../recovery/check-authorization.ts";
 import { InMemorySandboxEnvironment } from "../adapters/sandbox/basic.ts";
-import { HostEnvironment } from "../adapters/sandbox/host.ts";
+import { HostEnvironment } from "../testing/host-environment.ts";
 
 test("recovery check authorization binds caller and does not replenish a Unit budget across snapshots or callers", async () => {
   const owner = [{ kind: "WorkItem", name: "item", uid: "item-uid" }];

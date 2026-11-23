@@ -33,11 +33,13 @@ export interface ToolSession {
   readonly tools: BoundTool[];
   /** Servers that could not be opened, with the reason (recorded, the run continues without them). */
   readonly unavailable: { server: string; reason: string }[];
+  /** Servers that ran a local process as the factory user (`spec.hostExecution`, ADR-0080 §12); recorded in provenance. */
+  readonly hostExecution: string[];
   close(): Promise<void>;
 }
 
 /** Opens an agent's ToolServers (ADR-0011/0034). Tool names are `<server>__<tool>`, filtered by `allowedTools`. */
 export interface ToolProvider {
   /** `runName` identifies the agent run to servers that care (the factory's own server hides human-only tools). */
-  open(servers: ToolServer[], o: { allowStdio: boolean; runName?: string }): Promise<ToolSession>;
+  open(servers: ToolServer[], o: { runName?: string }): Promise<ToolSession>;
 }

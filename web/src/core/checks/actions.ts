@@ -4,6 +4,7 @@ import { API_VERSION } from "../model/resource.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
 import { StoreError, isStoreError, type CheckRunCommands, type CheckRunQueries, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type Principal, type Redactor, type ResourceReader, type ResourceWriter, type TranscriptReader, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { decideIsolation, DEFAULT_SANDBOX_PROFILE } from "../agents/sandbox-isolation.ts";
 import { checkConfig, resolveCheckConfig } from "./config.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 
@@ -102,6 +103,12 @@ export class CheckActions implements CheckRunCommands, CheckRunQueries {
       const profile = repo.spec.sandboxRef && await resolveRef<SandboxProfile>(this.d.reader, "SandboxProfile", repo.spec.sandboxRef, this.d.namespace);
       if (repo.spec.sandboxRef && !profile) throw new StoreError("sandbox profile not found", "NotFound");
       const { health } = await this.d.environments.select();
+      const effectiveProfile = profile ?? DEFAULT_SANDBOX_PROFILE;
+      try {
+        decideIsolation(health, effectiveProfile);
+      } catch (e) {
+        throw new StoreError(e instanceof Error ? e.message : String(e), "Invalid");
+      }
       const snapshot = await this.d.snapshots.fingerprint(workspace);
       const current = await this.item(name);
       if (current.metadata.resourceVersion !== item.metadata.resourceVersion) throw new StoreError("work item changed during check submission", "Conflict");
@@ -113,7 +120,7 @@ export class CheckActions implements CheckRunCommands, CheckRunQueries {
           workspaceRef: { name: workspace.metadata.name }, workspaceUid: workspace.metadata.uid!,
           repositoryRef: { name: repo.metadata.name, namespace: nsOf(repo) === nsOf(item) ? undefined : nsOf(repo) }, repositoryVersion: checkDefinitionVersion(repo),
           check: input.check, ...config, snapshot,
-          environment: { runtime: health.runtime, version: health.version, profileVersion: profile?.metadata.resourceVersion ?? "default" },
+          environment: { runtime: health.runtime, version: health.version, profileVersion: profile?.metadata.resourceVersion ?? "default", isolation: health.isolation, declaredIsolation: effectiveProfile.spec.isolation ?? "container" },
           requestedBy: p.id, requestFingerprint: fingerprint,
         },
       };

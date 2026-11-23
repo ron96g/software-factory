@@ -47,6 +47,27 @@ export interface ResourceWatcher {
   watch(listener: (event: WatchEvent) => void, kinds?: string[]): Unsubscribe;
 }
 
+export interface ChangeEntry {
+  /** Global, monotonic sequence; changes are delivered in this order. */
+  seq: number;
+  type: WatchEventType;
+  kind: string;
+  namespace: string;
+  name: string;
+  resourceVersion: string;
+}
+
+/**
+ * ADR-0062 §1: the durable, ordered record of changes to store-backed resources. Each entry is written in the same
+ * transaction as the resource write. A consumer polls from its cursor; a cursor older than the retained range gets
+ * `resync: true` (re-list rather than guess). Git-loaded definitions are read-only and not covered.
+ */
+export interface ChangeFeed {
+  since(cursor: number, kinds?: string[], limit?: number): Promise<{ entries: ChangeEntry[]; cursor: number; resync: boolean }>;
+  /** The current head sequence; a new consumer starts here to see only later changes. */
+  head(): Promise<number>;
+}
+
 /** Full store, the composition of all capabilities. Only the composition root sees this. */
 export interface ResourceStore extends ResourceReader, ResourceWriter, StatusWriter, ResourceWatcher {}
 

@@ -1,6 +1,7 @@
 # ADR-0034: MCP: the factory as an MCP server, and ToolServers for agents
 
 - **Status:** Accepted
+- **Amended by ADR-0080 §12/§10:** `stdio` servers are gated by `ToolServer.spec.hostExecution` (never by the runtime); the `host` runtime was removed.
 - **Date:** 2026-11-12
 - **Deciders:** project owner
 - **Implements:** the ToolServer part of ADR-0011 (v0.5). **Extends:** ADR-0007 (tech stack), ADR-0019, ADR-0030

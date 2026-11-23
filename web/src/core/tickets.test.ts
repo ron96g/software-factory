@@ -70,7 +70,7 @@ async function publicationReview(f: Factory) {
 }
 
 test("reviewed Jira publication: no implicit writes, live Pending → In Progress → Waiting for Customer, one public reply", async () => {
-  const jira = fakeJira(), f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, fetch: jira.fetch });
+  const jira = fakeJira(), f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, fetch: jira.fetch });
   await f.start();
   try {
     const detail = await publicationReview(f);
@@ -104,7 +104,7 @@ test("reviewed Jira publication: no implicit writes, live Pending → In Progres
 
 test("internal Jira reply with a failed follow-on transition retains the reply receipt and never blindly retries", async () => {
   const jira = fakeJira(); jira.setState("progress"); jira.rejectTransition();
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: {}, fetch: jira.fetch });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, fetch: jira.fetch });
   await f.start();
   try {
     await publicationReview(f);
@@ -130,7 +130,7 @@ test("legacy completed service-desk items require a fresh publication review and
   await store.create<Approval>({ apiVersion: API_VERSION, kind: "Approval", metadata: { name: `${key}-response-review-r8`, namespace: "default", ownerReferences: [ownerRef(item)] },
     spec: { workItemRef: { name: key }, stage: "response-review", approvers: [], decision: "approve", decidedBy: p.id }, status: { phase: "Approved" } });
   db.close();
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: path, env: {}, fetch: jira.fetch });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: path, env: { FACTORY_SANDBOX_RUNTIME: "none" }, fetch: jira.fetch });
   await f.start();
   try {
     assert.equal((await f.tickets.review(p, key)).canStartPublication, true);

@@ -31,14 +31,14 @@ export interface McpToolProviderDeps {
   transportFor?: (server: ToolServer) => Transport | undefined;
 }
 
-/** ADR-0034: opens an agent's MCP servers for one run (http always, stdio only with the host opt-in). */
+/** ADR-0034: opens an agent's MCP servers for one run (http always, stdio only with `spec.hostExecution: true`, §12). */
 export class McpToolProvider implements ToolProvider {
   private readonly d: McpToolProviderDeps;
   constructor(d: McpToolProviderDeps) {
     this.d = d;
   }
 
-  private transport(server: ToolServer, allowStdio: boolean, runName?: string): Transport {
+  private transport(server: ToolServer, runName?: string): Transport {
     const injected = this.d.transportFor?.(server);
     if (injected) return injected;
     const secret = this.d.secrets.resolve(server.spec.secretRef);
@@ -51,8 +51,8 @@ export class McpToolProvider implements ToolProvider {
       });
     }
     if (server.spec.transport === "stdio") {
-      // A local process: only where the human explicitly allowed host execution (ADR-0020, rule 18).
-      if (!allowStdio) throw new Error("stdio servers run only with FACTORY_SANDBOX_RUNTIME=host (ADR-0034)");
+      // A local process: the permission is reviewed next to the command it protects (ADR-0080 §12), never implied by the runtime.
+      if (!server.spec.hostExecution) throw new Error("stdio servers require spec.hostExecution: true (ADR-0080 §12)");
       if (!server.spec.command) throw new Error("spec.command is required for transport stdio");
       const env = { ...(scrubbedEnv() as Record<string, string>), ...(secret ? { MCP_TOKEN: secret } : {}) };
       return new StdioClientTransport({ command: server.spec.command, args: server.spec.args ?? [], env, stderr: "ignore" });
@@ -60,10 +60,11 @@ export class McpToolProvider implements ToolProvider {
     throw new Error(`unknown transport "${String(server.spec.transport)}"`);
   }
 
-  async open(servers: ToolServer[], o: { allowStdio: boolean; runName?: string }): Promise<ToolSession> {
+  async open(servers: ToolServer[], o: { runName?: string }): Promise<ToolSession> {
     const clients: Client[] = [];
     const tools: BoundTool[] = [];
     const unavailable: { server: string; reason: string }[] = [];
+    const hostExecution: string[] = [];
     for (const server of servers) {
       const name = server.metadata.name;
       const allowed = new Set(server.spec.allowedTools ?? []);
@@ -73,8 +74,9 @@ export class McpToolProvider implements ToolProvider {
       }
       const client = new Client({ name: "software-factory-agent", version: "0.1.0" });
       try {
-        await withTimeout(client.connect(this.transport(server, o.allowStdio, o.runName)), CONNECT_TIMEOUT_MS, `connecting to ${name}`);
+        await withTimeout(client.connect(this.transport(server, o.runName)), CONNECT_TIMEOUT_MS, `connecting to ${name}`);
         clients.push(client);
+        if (server.spec.transport === "stdio") hostExecution.push(name);
         const listed = (await withTimeout(client.listTools(), CONNECT_TIMEOUT_MS, `listing tools of ${name}`)).tools;
         for (const t of listed.filter((x) => allowed.has(x.name))) {
           const exposed = toolName(name, t.name);
@@ -104,6 +106,7 @@ export class McpToolProvider implements ToolProvider {
     return {
       tools,
       unavailable,
+      hostExecution,
       close: async () => {
         await Promise.all(clients.map((c) => c.close().catch(() => {})));
       },

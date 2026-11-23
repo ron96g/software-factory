@@ -23,6 +23,11 @@ async function sandboxContract(env: ExecutionEnvironment) {
   assert.equal(await sb.readFile("src/a.txt"), "hello");
   assert.ok((await sb.listFiles("src/*")).includes("src/a.txt"));
   await assert.rejects(sb.writeFile("../escape", "x"), /escapes/);
+  // SEC-1/P0-1: the file tools reject `..`, absolute paths and `.git` on both reads and writes.
+  await assert.rejects(sb.writeFile(".git/config", "x"), /escapes/);
+  await assert.rejects(sb.readFile("../escape"), /escapes/);
+  await assert.rejects(sb.readFile(".git/config"), /escapes/);
+  await assert.rejects(sb.readFile("/etc/hostname"), /escapes/);
   const r = await sb.exec("definitely-not-a-command");
   assert.notEqual(r.exitCode, 0);
   assert.match(await sb.diff(), /\+hello/);
@@ -46,8 +51,16 @@ test("selector: auto picks the first available runtime; explicit unavailable fal
   assert.match(explicit.health.message!, /configured runtime "podman" is unavailable/);
 });
 
+test("ADR-0080 §10: FACTORY_SANDBOX_RUNTIME=host fails loudly (no execution without a primitive)", async () => {
+  await assert.rejects(
+    createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "host" }, log: () => {} }),
+    /no longer supported[\s\S]*bwrap/,
+  );
+});
+
 test("S2: without a runtime, construction agents are simulated with a visible reason; health is reported", async () => {
-  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
+  // Pin the runtime: `auto` would otherwise select bwrap on a host that has it, and this test is about the no-runtime path.
+  const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
   await f.start();
   try {
     const h = await f.app.systemHealth(ANONYMOUS);
@@ -66,7 +79,7 @@ test("S2: without a runtime, construction agents are simulated with a visible re
       if (dev) {
         assert.equal(dev.status?.provenance?.executionEnvironment, "none");
         const t = await f.app.runTranscript(ANONYMOUS, dev.metadata.name);
-        assert.ok(t.some((m) => /needs a sandbox, but no sandbox runtime available/.test(m.content)), "reason recorded");
+        assert.ok(t.some((m) => /needs a sandbox, but/.test(m.content)), "reason recorded");
         return;
       }
       await new Promise((r) => setTimeout(r, 20));
@@ -77,12 +90,12 @@ test("S2: without a runtime, construction agents are simulated with a visible re
   }
 });
 
-test("ADR-0020/0021: git worktree workspace + host sandbox; changes persist per item; checkout untouched; env scrubbed", async () => {
+test("ADR-0021: git worktree workspace + unsandboxed test helper; changes persist per item; checkout untouched; env scrubbed", async () => {
   const { mkdtempSync, writeFileSync, existsSync } = await import("node:fs");
   const { execFileSync } = await import("node:child_process");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { HostEnvironment } = await import("./adapters/sandbox/host.ts");
+  const { HostEnvironment } = await import("./testing/host-environment.ts");
   const { GitWorktreeWorkspaces } = await import("./adapters/workspaces/git-worktree.ts");
   const repoDir = mkdtempSync(join(tmpdir(), "sf-repo-"));
   const g = (...a: string[]) => execFileSync("git", a, { cwd: repoDir });
@@ -103,7 +116,7 @@ test("ADR-0020/0021: git worktree workspace + host sandbox; changes persist per 
   const ready = { ...ws, status: { phase: "Ready" as const, ...prepared } };
 
   const env = new HostEnvironment();
-  assert.equal((await env.health()).waivesIsolation, true);
+  assert.equal((await env.health()).isolation, "none");
   const spec = { run: { metadata: { name: "r1" } }, profile: {}, repositories: [repo], workspaces: [ready] } as unknown as SandboxSpec;
   const sb = await env.prepare(spec);
   await sb.writeFile("src/new.txt", "hello");
@@ -133,4 +146,59 @@ test("ADR-0020/0021: git worktree workspace + host sandbox; changes persist per 
   assert.equal(existsSync(live.path), true);
   await assert.rejects(backend.remove({ ...ready, status: { ...ready.status, path: "/etc" } } as never, repo), /outside the workspaces dir/);
   assert.match(execFileSync("git", ["branch", "--list", "factory/item-1"], { cwd: repoDir }).toString(), /factory\/item-1/, "branch kept");
+});
+
+test("P0-1/SEC-1: host and bwrap file tools refuse symlink escapes outside the workspace", async (t) => {
+  const { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { HostEnvironment } = await import("./testing/host-environment.ts");
+  const { BwrapEnvironment } = await import("./adapters/sandbox/bwrap.ts");
+
+  const dir = mkdtempSync(join(tmpdir(), "sf-escape-"));
+  try {
+    const repo = join(dir, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "a.txt"), "one\n");
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: repo });
+    g("init", "-q");
+    g("add", ".");
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
+    const baseCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo }).toString().trim();
+
+    // A directory and a file outside the workspace, reachable through committed symlinks.
+    const outside = join(dir, "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "secret.txt"), "secret\n");
+    symlinkSync(outside, join(repo, "evil-dir"));
+    symlinkSync(join(outside, "secret.txt"), join(repo, "evil-file"));
+
+    const repository = { metadata: { name: "repo" }, spec: { local: { path: repo } } } as never;
+    const workspace = { metadata: { name: "item-repo" }, spec: { workItemRef: { name: "item" }, repositoryRef: { name: "repo" }, branch: "factory/item" }, status: { phase: "Ready", path: repo, baseCommit } } as never;
+
+    for (const env of [new HostEnvironment(), new BwrapEnvironment()]) {
+      const health = await env.health();
+      if (!health.available) {
+        t.diagnostic(`skipping ${env.runtime}: ${health.message}`);
+        continue;
+      }
+      const spec = { run: { metadata: { name: "r1" } }, profile: {}, repositories: [repository], workspaces: [workspace] } as unknown as SandboxSpec;
+      const sb = await env.prepare(spec);
+      try {
+        await assert.rejects(sb.readFile("evil-dir/secret.txt"), /escapes/);
+        await assert.rejects(sb.readFile("evil-file"), /escapes/);
+        await assert.rejects(sb.writeFile("evil-dir/planted.txt", "x"), /escapes/);
+        await assert.rejects(sb.readFile(".git/config"), /escapes/);
+        await assert.rejects(sb.readFile("/etc/hostname"), /escapes/);
+        // A normal in-workspace write still works.
+        await sb.writeFile("src/new.txt", "hello");
+        assert.equal(await sb.readFile("src/new.txt"), "hello");
+      } finally {
+        await sb.dispose();
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -20,7 +20,7 @@ test("factory shutdown waits for a newly started background agent before closing
   const hold = new Promise<void>((r) => { release = r; });
   let requested!: () => void;
   const request = new Promise<void>((r) => { requested = r; });
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-shutdown-fixture" },
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "sk-shutdown-fixture" },
     fetch: async () => { requested(); await hold; return Response.json({ choices: [{ message: { content: '{"summary":"done","artifacts":[],"questions":[]}' } }] }); } });
   let stopping: Promise<void> | undefined;
   try {
@@ -48,7 +48,7 @@ async function awaiting(f: Factory, name: string) {
 }
 
 test("follow-up: synced origin stays unchanged; selected workflow gets separate instructions and historical evidence", async () => {
-  const env: Record<string, string | undefined> = { FACTORY_AGENT_RUNTIME: "tool-loop" };
+  const env: Record<string, string | undefined> = { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none" };
   const prompts: string[] = [];
   const writes: string[] = [];
   const mock: typeof fetch = async (url, init) => {
@@ -104,7 +104,7 @@ test("follow-up: synced origin stays unchanged; selected workflow gets separate 
 });
 
 test("follow-up: stale previews conflict; retries survive origin deletion and do not overwrite edits or attach to a recreated origin", async () => {
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" } });
   try {
     const source = await f.app.createWorkItem(p, { title: "Original", description: "An original request" });
     const name = source.metadata.name;

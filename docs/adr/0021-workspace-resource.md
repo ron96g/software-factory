@@ -1,6 +1,7 @@
 # ADR-0021: Workspace resource: one code state per work item and repository
 
 - **Status:** Accepted
+- **Addendum (2026-11-23, self-heal):** a `Ready` workspace whose files have vanished (a manual cleanup, a crash, a concurrent sweep) is re-prepared rather than failing every `git` call with `spawn git ENOENT`: the `Workspace` controller asks a `WorkspaceProbe` (`GitWorktreeWorkspaces.exists`), sets the workspace back to `Preparing`, clears `setupCompleted` so setup re-runs, emits a `WorkspaceLost` warning, and re-prepares. Uncommitted changes in the removed worktree are **lost**; the branch is kept (it may back a pull request), so the next attempt rebuilds on it.
 - **Date:** 2026-11-11
 
 ## Context

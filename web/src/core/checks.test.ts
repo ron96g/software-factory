@@ -10,6 +10,8 @@ import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
 import { ANONYMOUS, type CheckExecutionRunner, type ExecResult, type ExecutionEnvironment } from "./ports/index.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
+import { SqliteWorkspaceLock } from "./store/workspace-lock.ts";
+import { SqliteFencedStatusWriter } from "./store/fenced-status.ts";
 import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { StoreEventRecorder } from "./runtime/event-recorder.ts";
 import { SecretRedactor } from "./transcripts/recorder.ts";
@@ -20,7 +22,7 @@ import { CheckActions } from "./checks/actions.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { checkRunValidator } from "./checks/admission.ts";
 import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
-import { HostEnvironment } from "./adapters/sandbox/host.ts";
+import { HostEnvironment } from "./testing/host-environment.ts";
 import { SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { createFactory } from "./factory.ts";
 
@@ -57,10 +59,15 @@ async function fixture(database = ":memory:") {
   let result: ExecResult = { exitCode: 0, stdout: "SECRET_VALUE", stderr: "", truncated: false, durationMs: 5, termination: { kind: "exit" } };
   const runner: CheckExecutionRunner = { execute: async () => { calls++; return result; } };
   const errors: string[] = [];
+  const lock = new SqliteWorkspaceLock(db, clock);
   const controller = (execution = runner) => createCheckRunController({ reader: store, status: store, logs, runner: execution,
-    snapshots, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message) });
+    snapshots, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message),
+    claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test" });
+  const controllerFor = (holder: string, options: { definitionsLoadedAt?: string; maxPerWorkspace?: number; maxTotal?: number } = {}) =>
+    createCheckRunController({ reader: store, status: store, logs, runner, snapshots, clock, events: new StoreEventRecorder(store), redactor,
+      onError: (message) => errors.push(message), claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder, ...options });
   const submit = (requestId = "request") => actions.submit(ANONYMOUS, "item", { workspace: "workspace", check: "test", requestId });
-  return { db, store, logs, actions, controller, submit, item, workspace, repository, errors,
+  return { db, store, logs, actions, controller, controllerFor, lock, submit, item, workspace, repository, errors,
     calls: () => calls, snapshot: (value: string) => { fingerprint = value; }, result: (value: ExecResult) => { result = value; } };
 }
 
@@ -261,4 +268,68 @@ test("real sandbox preserves failed pipelines and timeout metadata; snapshot inc
     assert.equal(Buffer.byteLength(oversized.stdout), 65536);
     assert.equal(Buffer.byteLength(oversized.stderr), 65536);
   } finally { f.db.close(); await rm(directory, { recursive: true }); }
+});
+
+test("X42c (ADR-0062 §2): two workers cannot claim the same CheckRun — only one executes it", async () => {
+  const f = await fixture();
+  const a = f.controllerFor("worker:a");
+  const b = f.controllerFor("worker:b");
+  try {
+    const run = await f.submit("req-1");
+    await a.reconcile(keyOf(run)); // claims the lease and starts the run
+    await b.reconcile(keyOf(run)); // the lease is held (or the run already completed): no second execution
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(f.calls(), 1, "the CheckRun ran exactly once");
+  } finally {
+    await a.stop();
+    await b.stop();
+  }
+});
+
+test("X42c (ADR-0062 §2): the reaper leaves a run with a live lease alone and interrupts a stale one", async () => {
+  const f = await fixture();
+  const controller = f.controllerFor("worker:reaper");
+  try {
+    const run = await f.submit("req-1");
+    const current = (await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!;
+    await f.store.updateStatus<CheckRun>({ ...current, status: { ...current.status, phase: "Running" } });
+    const leaseKey = `checkrun/default/${f.item.metadata.uid}/${run.metadata.name}`;
+    const lease = (await f.lock.acquire(leaseKey, "worker:a", 60_000))!;
+
+    await controller.reconcile(keyOf(run));
+    assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.phase, "Running", "a live lease is not reaped");
+
+    await f.lock.release(leaseKey, lease.holder, lease.generation);
+    await controller.reconcile(keyOf(run));
+    assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.phase, "Interrupted", "a stale run is interrupted");
+  } finally {
+    await controller.stop();
+  }
+});
+
+test("X42c (ADR-0062 §3): a worker with older definitions leaves the check Pending; a stale definition ends it", async () => {
+  const f = await fixture();
+  const older = f.controllerFor("worker:old", { definitionsLoadedAt: "2020-01-01T00:00:00Z" });
+  const newer = f.controllerFor("worker:new", { definitionsLoadedAt: "2999-01-01T00:00:00Z" });
+  try {
+    const run = await f.submit("req-1");
+    // The repository's check definition changed after the run was pinned.
+    await f.store.update<Repository>({ ...f.repository, spec: { ...f.repository.spec, checks: { ...f.repository.spec.checks, test: { command: "changed-command", timeoutMs: 42 } } } });
+
+    // Worker older than the run's pinned definition: it waits for a restart and neither runs nor ends the run.
+    const res = await older.reconcile(keyOf(run));
+    assert.ok(res && typeof res.requeueAfterMs === "number", "the older worker requeues");
+    assert.equal((await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!.status?.phase, undefined, "left Pending");
+    assert.equal(f.calls(), 0, "the check did not run");
+
+    // Worker newer: the pinned definition is stale, so the run ends as not executed (the existing path).
+    await newer.reconcile(keyOf(run));
+    const done = (await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!;
+    assert.equal(done.status?.phase, "Completed");
+    assert.equal(done.status?.outcome, "NotVerified");
+  } finally {
+    await older.stop();
+    await newer.stop();
+    f.db.close();
+  }
 });

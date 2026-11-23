@@ -38,13 +38,18 @@ export interface ToolServerSpec {
   transport: "http" | "stdio";
   /** `http`: Streamable HTTP endpoint. */
   url?: string;
-  /** `stdio`: local process (host runtime opt-in only, ADR-0020). */
+  /** `stdio`: a local process — requires `hostExecution: true` (ADR-0080 §12). */
   command?: string;
   args?: string[];
   /** Sent as `Authorization: Bearer <secret>` (http) or as env `MCP_TOKEN` (stdio). Never stored (ADR-0015). */
   secretRef?: Ref;
   /** Only these tools are offered to agents. Empty or missing = none (explicit opt-in per tool). */
   allowedTools?: string[];
+  /**
+   * ADR-0080 §12: this definition starts a local process as the factory user (transport `stdio`). Default false.
+   * Replaces "stdio is allowed only when `FACTORY_SANDBOX_RUNTIME=host`", and its use is recorded in the run's provenance.
+   */
+  hostExecution?: boolean;
   description?: string;
 }
 export type ToolServer = Resource<ToolServerSpec>;
@@ -256,6 +261,12 @@ export interface SandboxProfileSpec {
   env?: Record<string, string>;
   /** Minimum isolation; runtimes below it are never used. */
   isolation?: "process" | "container" | "microvm";
+  /**
+   * ADR-0080 §11: if the selected runtime cannot provide `spec.isolation`, it may be used at the strongest level it does
+   * provide (recorded as effective-versus-declared isolation). Default false: a runtime below the minimum is refused.
+   * Replaces the implicit `FACTORY_SANDBOX_RUNTIME=bwrap` waiver.
+   */
+  acceptWeakerIsolation?: boolean;
 }
 export type SandboxProfile = Resource<SandboxProfileSpec>;
 
@@ -555,7 +566,7 @@ export interface CheckRunSpec {
   command: string;
   timeoutMs: number;
   snapshot: string;
-  environment: { runtime: string; version?: string; profileVersion: string };
+  environment: { runtime: string; version?: string; profileVersion: string; isolation?: "none" | "process" | "container" | "microvm"; declaredIsolation?: "process" | "container" | "microvm" };
   requestedBy: string;
   requestFingerprint: string;
   resultFormat?: string;
@@ -601,6 +612,15 @@ export interface RunProvenance {
   replayOf?: Ref;
   /** Sandbox runtime used or attempted, e.g. "none", "podman@5.5" (ADR-0019). */
   executionEnvironment?: string;
+  /**
+   * ADR-0080 §11 / P0-7: the isolation the run actually got, next to the profile's declared minimum, so a reviewer can
+   * see a weaker-than-declared runtime in gate evidence.
+   */
+  isolation?: { effective: "none" | "process" | "container" | "microvm"; declared: "process" | "container" | "microvm"; acceptedWeaker: boolean };
+  /** ADR-0080 §12: ToolServers that ran a local process as the factory user (`spec.hostExecution`) in this run. */
+  hostExecution?: string[];
+  /** ADR-0080 §2/§3/§13: the `AgentRuntime` backend that ran this run, its pinned image and the ingested export. */
+  runtime?: { backend: string; image?: string; exportedCommit?: string; protocol?: number };
   /** Code state the agent saw: repository → commit (ADR-0021). */
   workspaces?: Record<string, string>;
   /** ADR-0057: how the agent used its tools. Observability only, never gate criteria. */

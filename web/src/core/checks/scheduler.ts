@@ -5,6 +5,7 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
 import { SandboxUnavailableError, StoreError, isStoreError, canPrepareIsolated, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceJobCoordinator, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { decideIsolation, DEFAULT_SANDBOX_PROFILE } from "../agents/sandbox-isolation.ts";
 import { resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
@@ -173,6 +174,12 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       if (!selected.health.available) {
         throw new SandboxUnavailableError(selected.health.runtime, selected.health.message ?? "execution runtime unavailable");
       }
+      const effectiveProfile = profile ?? DEFAULT_SANDBOX_PROFILE;
+      try {
+        decideIsolation(selected.health, effectiveProfile);
+      } catch (e) {
+        throw new StoreError(e instanceof Error ? e.message : String(e), "Invalid");
+      }
       if ((origin.purpose === "diagnostic" || origin.purpose === "baseline") &&
           (!canPrepareIsolated(selected.environment) || origin.purpose === "diagnostic" && !selected.environment.isolatesCandidate)) {
         throw new StoreError("diagnostic checks require an isolated snapshot-capable execution environment", "Invalid");
@@ -211,6 +218,8 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
             runtime: selected.health.runtime,
             version: selected.health.version,
             profileVersion: profile?.metadata.resourceVersion ?? "default",
+            isolation: selected.health.isolation,
+            declaredIsolation: effectiveProfile.spec.isolation ?? "container",
           },
           requestedBy: request.requestedBy,
           requestFingerprint,

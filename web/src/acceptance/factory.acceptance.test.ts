@@ -13,7 +13,7 @@ import type { Workflow } from "../core/model/kinds.ts";
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 async function withFactory(fn: (f: Factory) => Promise<void>) {
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
   await f.start();
   try { await fn(f); } finally { await f.stop(); }
 }

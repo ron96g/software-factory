@@ -19,7 +19,7 @@ async function build(env: Record<string, string>, api = new FakeClusterApi()) {
     localRoot: mkdtempSync(join(tmpdir(), "sf-k8s-")),
     definitionFeed: feed,
     secretReader: { readSecrets: async (ns) => { reads.push(ns); return {}; } },
-    env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env },
+    env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", ...env },
     log: () => {},
   });
   return { f, api, reads };

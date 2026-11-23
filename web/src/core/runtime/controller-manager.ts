@@ -111,6 +111,11 @@ export class ControllerManager implements ControllerRegistrar, ControllerTrigger
     this.controllers.find((x) => x.c.name === controllerName)?.q.add(key);
   }
 
+  /** Registered controller names (diagnostics and tests; ADR-0062 §3 role selection). */
+  names(): string[] {
+    return this.controllers.map((c) => c.c.name);
+  }
+
   async start(): Promise<void> {
     this.unsubscribe = this.watcher.watch((event) => {
       for (const { c, q } of this.controllers) {

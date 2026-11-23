@@ -95,6 +95,8 @@ export function RunDrawer({
           <Badge variant="light">executor: {p?.executor ?? run.status?.executor ?? "–"}</Badge>
           {p?.model && <Badge variant="light" color="blue">{p.model.provider}/{p.model.name} ({p.model.tier})</Badge>}
           {p?.promptHash && <Tooltip label="prompt hash"><Badge variant="outline">#{p.promptHash}</Badge></Tooltip>}
+          {p?.isolation && <Badge variant="light" color={p.isolation.acceptedWeaker ? "yellow" : "teal"}>isolation {p.isolation.effective}{p.isolation.acceptedWeaker ? ` (profile asks ${p.isolation.declared})` : ""}</Badge>}
+          {p?.hostExecution?.length ? <Badge variant="light" color="orange">host process: {p.hostExecution.join(", ")}</Badge> : null}
         </Group>
         {run.status?.result?.summary && <Text size="sm">{run.status.result.summary}</Text>}
         {run.status?.message && <Text size="sm" c="red">{run.status.message}</Text>}

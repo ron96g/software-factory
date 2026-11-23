@@ -26,8 +26,26 @@ function HealthBadges() {
           </Stack>
         }
       >
-        <Badge variant={sb.waivesIsolation ? "filled" : "light"} color={sb.waivesIsolation ? "red" : sb.available ? "teal" : "gray"} leftSection={<IconBox size={12} />}>
-          {sb.waivesIsolation ? `${sb.runtime} · unsandboxed` : sb.available ? sb.runtime : "no sandbox"}
+        <Badge variant="light" color={sb.available ? "teal" : "gray"} leftSection={<IconBox size={12} />}>
+          {sb.available ? sb.runtime : "no sandbox"}
+        </Badge>
+      </Tooltip>
+      <Tooltip
+        multiline
+        w={420}
+        label={
+          <Stack gap={4}>
+            <Text fw={600}>Check worker (ADR-0062)</Text>
+            <Text size="xs">
+              {data.checks.workers === 0
+                ? "No check worker is running: checks stay Pending until one starts (npm run worker)."
+                : `${data.checks.workers} worker(s), ${data.checks.running} check(s) running.`}
+            </Text>
+          </Stack>
+        }
+      >
+        <Badge variant="light" color={data.checks.workers === 0 ? "gray" : "teal"} leftSection={<IconBox size={12} />}>
+          {data.checks.workers === 0 ? "no check worker" : `${data.checks.workers} worker${data.checks.workers === 1 ? "" : "s"}`}
         </Badge>
       </Tooltip>
       {data.failing.length > 0 && (

@@ -3,7 +3,7 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type InitialKeys, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
@@ -19,6 +19,16 @@ export interface CheckControllerDeps {
   events: EventRecorder;
   redactor: Redactor;
   onError: (message: string) => void;
+  /** ADR-0062: the CheckRun execution lease (claim/renew/release) and its fenced status writer. */
+  claims: WorkspaceLock;
+  fenced: FencedStatusWriter;
+  /** This process's identity for the lease (diagnostics, not a credential). */
+  holder: string;
+  /** ADR-0062 §3: when this process loaded its definitions, so it can tell "worker is older" from "the check is stale". */
+  definitionsLoadedAt?: string;
+  /** ADR-0062 §3: live-lease concurrency limits across workers (defaults: 1 per workspace, 2 total). */
+  maxPerWorkspace?: number;
+  maxTotal?: number;
   classifiers?: Lookup<CheckResultClassifier>;
   contracts?: VerificationContracts;
   scopes?: ModuleScopePlanner;
@@ -37,6 +47,12 @@ function isOwnedBy(item: WorkItem, candidate: { metadata: { namespace?: string; 
   return (candidate.metadata.namespace ?? DEFAULT_NAMESPACE) === nsOf(item) && owners.length === 1 &&
     owners[0].kind === "WorkItem" && owners[0].name === item.metadata.name && owners[0].uid === item.metadata.uid;
 }
+
+/** ADR-0062 §2: the CheckRun execution lease key (per WorkItem, so per-workspace concurrency can be counted). */
+const claimKey = (namespace: string, workItemUid: string, name: string): string => `checkrun/${namespace}/${workItemUid}/${name}`;
+
+/** The lease TTL covers the check's own budget plus a margin. */
+const claimTtlMs = (run: CheckRun): number => (run.spec.timeoutMs ?? 15 * 60_000) + 60_000;
 
 function validWorkflowOrigin(origin: CheckWorkflowOrigin | undefined): origin is CheckWorkflowOrigin {
   if (!origin || typeof origin !== "object" || Array.isArray(origin)) return false;
@@ -74,7 +90,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     return d.classifiers?.get(format) ?? (format === exitCodeClassifier.format ? exitCodeClassifier : undefined);
   }
 
-  async function loadContext(run: CheckRun): Promise<{ context?: CheckContext; reason?: string }> {
+  async function loadContext(run: CheckRun): Promise<{ context?: CheckContext; reason?: string; workerOlder?: boolean }> {
     const namespace = nsOf(run);
     if (!run.spec?.workItemRef?.name || !run.spec.workItemUid ||
         !run.spec.workspaceRef?.name || !run.spec.workspaceUid ||
@@ -116,9 +132,16 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       return { reason: "workspace identity, ownership or readiness changed" };
     }
     const repository = await resolveRef<Repository>(d.reader, "Repository", run.spec.repositoryRef, namespace);
-    if (!repository || repository.metadata.name !== workspace.spec.repositoryRef.name ||
-        checkDefinitionVersion(repository) !== run.spec.repositoryVersion) {
-      return { reason: "repository identity or definition changed" };
+    if (!repository || repository.metadata.name !== workspace.spec.repositoryRef.name) {
+      return { reason: "repository identity changed" };
+    }
+    if (checkDefinitionVersion(repository) !== run.spec.repositoryVersion) {
+      // ADR-0062 §3: a worker whose loaded definitions predate the run's pinned version leaves it Pending for a restart;
+      // a run whose pinned definition is stale (the worker is newer) ends as not executed, as before.
+      const workerOlder = !!d.definitionsLoadedAt && !!run.metadata.creationTimestamp && d.definitionsLoadedAt < run.metadata.creationTimestamp;
+      return workerOlder
+        ? { reason: "worker definitions are older than the check's pinned definition; restart the worker", workerOlder: true }
+        : { reason: "repository definition changed since check submission" };
     }
     let config: Awaited<ReturnType<typeof resolveCheckConfig>>;
     try {
@@ -246,7 +269,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     await d.events.warning(interrupted, "CheckInterrupted", interrupted.status!.message!);
   }
 
-  async function execute(run: CheckRun): Promise<void> {
+  async function execute(run: CheckRun, lease: LeaseRef): Promise<void> {
     const namespace = nsOf(run);
     const eligibility = await loadContext(run);
     if (!eligibility.context) {
@@ -276,6 +299,13 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     let finalSnapshot: string | undefined;
     let failureEvidence: { tests: string[] } | undefined;
     let findings: CheckFinding[] | undefined;
+    // ADR-0062 §2: keep the execution lease alive while a long check runs; a lost lease stops the result from being written.
+    const ttlMs = claimTtlMs(run);
+    const renew = setInterval(() => {
+      void d.claims.renew(lease.key, lease.holder, lease.generation, ttlMs).then((ok) => {
+        if (!ok) d.onError(`check ${namespace}/${run.metadata.name}: execution lease lost; the result will not be written`);
+      });
+    }, Math.max(1000, Math.floor(ttlMs / 4)));
     try {
       result = await d.runner.execute(run, workspace, repository);
       await d.logs.append(run.status!.logRef!, {
@@ -338,12 +368,14 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         author: { type: "system", id: "check-runner" },
         content: message,
       });
+    } finally {
+      clearInterval(renew);
     }
 
     const current = await d.reader.get<CheckRun>("CheckRun", namespace, run.metadata.name);
     if (!current) return;
     const now = d.clock.now();
-    const done = await d.status.updateStatus<CheckRun>({
+    const done = await d.fenced.updateStatusIf<CheckRun>({
       ...current,
       status: {
         ...current.status!,
@@ -363,7 +395,9 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         finalSnapshot,
         conditions: setCondition(current.status?.conditions, "Verified", outcome === "Passed" ? "True" : "False", outcome, d.redactor.redact(message), now),
       },
-    });
+    }, lease);
+    // A lost lease (expired or taken over) means another holder owns the result now (ADR-0062 §2): never write over it.
+    if (!done) return;
     if (outcome === "Passed") await d.events.normal(done, "CheckCompleted", done.status!.message!);
     else await d.events.warning(done, "CheckCompleted", `${outcome}: ${done.status!.message}`);
   }
@@ -384,6 +418,8 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       if (!run || run.status && run.status.phase !== "Running") return;
       try {
         if (run.status?.phase === "Running") {
+          // ADR-0062 §2: a live lease means another holder is executing it; only an expired/absent lease is stale.
+          if (await d.claims.get(claimKey(namespace, run.spec.workItemUid, name))) return { requeueAfterMs: 1000 };
           const item = await d.reader.get<WorkItem>("WorkItem", namespace, run.spec.workItemRef.name);
           if (!item || !isOwnedBy(item, run) || item.metadata.uid !== run.spec.workItemUid) {
             await finishWithoutRun(run, "check ownership or work item identity is invalid");
@@ -395,6 +431,8 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
 
         const eligibility = await loadContext(run);
         if (!eligibility.context) {
+          // ADR-0062 §3: a worker whose definitions are older waits for a restart instead of ending the run.
+          if (eligibility.workerOlder) return { requeueAfterMs: 5000 };
           await finishWithoutRun(run, eligibility.reason ?? "check is no longer eligible");
           return;
         }
@@ -408,6 +446,15 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
 
         const itemKey = `${namespace}/${item.metadata.uid}`;
         if (activeItems.has(itemKey)) return { requeueAfterMs: 1000 };
+        // ADR-0062 §3: bounded concurrency, counted from live leases so the limits hold across workers.
+        const live = await d.claims.list("checkrun/");
+        const perWorkspace = live.filter((l) => l.key.startsWith(`checkrun/${namespace}/${item.metadata.uid}/`)).length;
+        if (live.length >= (d.maxTotal ?? 2) || perWorkspace >= (d.maxPerWorkspace ?? 1)) return { requeueAfterMs: 1000 };
+        // ADR-0062 §2: claim the execution lease before running; another holder (another process) means we skip it.
+        const leaseKey = claimKey(namespace, item.metadata.uid!, name);
+        const lease = await d.claims.acquire(leaseKey, d.holder, claimTtlMs(run));
+        if (!lease) return { requeueAfterMs: 1000 };
+        const leaseRef: LeaseRef = { key: leaseKey, holder: lease.holder, generation: lease.generation };
         activeItems.add(itemKey);
         try {
           const logRef = await d.logs.open(namespace, { kind: "CheckRun", name });
@@ -423,18 +470,22 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
               conditions: setCondition(undefined, "Verified", "Unknown", "Running", undefined, now),
             },
           });
-          const job = execute(started)
+          const job = execute(started, leaseRef)
             .catch((error: unknown) => d.onError(d.redactor.redact(error instanceof Error ? error.message : String(error))))
             .finally(() => {
               jobs.delete(key);
               activeItems.delete(itemKey);
+              void d.claims.release(leaseRef.key, leaseRef.holder, leaseRef.generation);
             });
           jobs.set(key, job);
           void d.events.normal(started, "CheckStarted", `${started.spec.check} execution started`)
             .catch((error: unknown) => d.onError(d.redactor.redact(error instanceof Error ? error.message : String(error))));
           return { requeueAfterMs: 1000 };
         } finally {
-          if (!jobs.has(key)) activeItems.delete(itemKey);
+          if (!jobs.has(key)) {
+            activeItems.delete(itemKey);
+            await d.claims.release(leaseRef.key, leaseRef.holder, leaseRef.generation);
+          }
         }
       } catch (error) {
         if (isStoreError(error, "Conflict")) return { requeueAfterMs: 0 };

@@ -2,9 +2,10 @@
   "name": "software-factory-web",
   "version": "1.0.0",
   "scripts": {
-    "dev": "NODE_USE_ENV_PROXY=1 next dev",
+    "dev": "NODE_USE_ENV_PROXY=1 next dev -H ${FACTORY_HOST:-127.0.0.1}",
     "build": "next build",
-    "start": "NODE_USE_ENV_PROXY=1 next start",
+    "start": "NODE_USE_ENV_PROXY=1 next start -H ${FACTORY_HOST:-127.0.0.1}",
+    "worker": "NODE_USE_ENV_PROXY=1 node scripts/worker.ts",
     "crds:generate": "node scripts/gen-crds.ts",
     "gen:crds": "npm run crds:generate",
     "typecheck": "tsc --noEmit -p .",

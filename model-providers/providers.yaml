@@ -36,7 +36,6 @@ spec:
   type: openai-compatible
   baseUrl: https://api.githubcopilot.com
   secretRef: { name: copilot-token }
-  default: true
   models:
     reasoning: claude-sonnet-5.5
     coding: claude-sonnet-5.5
@@ -45,3 +44,17 @@ spec:
   # agentModels:
   #   developer: gpt-5.1
   #   reviewer: gemini-3.8-pro
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: google
+spec:
+  type: google
+  baseUrl: https://generativelanguage.googleapis.com/v1beta
+  secretRef: { name: google-api-key }
+  default: true
+  models:
+    reasoning: gemini-4-neon
+    coding: gemini-4-neon
+    fast: gemini-3.8-flash

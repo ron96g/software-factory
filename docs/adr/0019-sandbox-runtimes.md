@@ -1,6 +1,7 @@
 # ADR-0019: Sandbox runtimes behind one port (no host execution)
 
 - **Status:** Accepted. Supersedes the v0.3 sandbox section of ADR-0016 and moves the tool-call loop of ADR-0017 into v0.3.
+- **Amended by ADR-0080 §10:** the `host` runtime was removed; nothing executes without a primitive (`none` simulates, `bwrap`/`kubernetes` execute).
 - **Date:** 2026-11-11
 
 ## Context

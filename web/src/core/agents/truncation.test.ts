@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SANDBOX_TOOLS, readRange } from "./sandbox-tools.ts";
 import { MAX_RESULT, parseMarker } from "./truncation.ts";
-import { HostEnvironment } from "../adapters/sandbox/host.ts";
+import { HostEnvironment } from "../testing/host-environment.ts";
 import type { SandboxSpec } from "../ports/sandbox.ts";
 
 const big = Array.from({ length: 2000 }, (_, i) => `line ${i + 1} ${"x".repeat(20)}`).join("\n");

@@ -12,6 +12,8 @@ spec:
   filesystem: { workspace: /workspace, rootReadOnly: true, tmpfs: [/tmp] }
   user: "1000:1000"
   isolation: container
+  # ADR-0080 §11: local `bwrap` provides `process`; the reviewed profile accepts it (a cluster satisfies `container`).
+  acceptWeakerIsolation: true
 ---
 apiVersion: factory.ai-dlc.io/v1alpha1
 kind: SandboxProfile
@@ -28,3 +30,5 @@ spec:
   filesystem: { workspace: /workspace, rootReadOnly: true, tmpfs: [/tmp] }
   user: "1000:1000"
   isolation: container
+  # ADR-0080 §11: local `bwrap` provides `process`; the reviewed profile accepts it (a cluster satisfies `container`).
+  acceptWeakerIsolation: true

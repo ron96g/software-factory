@@ -10,7 +10,7 @@ const ROOT = resolve(import.meta.dirname, "../../..");
 const p = ANONYMOUS;
 
 async function blockedItem(env: Record<string, string>, fetchImpl?: typeof fetch) {
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", ...env }, fetch: fetchImpl, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", ...env }, fetch: fetchImpl, log: () => {} });
   await f.start();
   const wi = await f.app.createWorkItem(p, { title: "Ask the item", description: "x", workflowRef: "test-loop" });
   for (let i = 0; i < 400; i++) {

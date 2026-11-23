@@ -74,14 +74,22 @@ export class InMemorySandbox implements Sandbox {
   }
   async readFile(path: string): Promise<string> {
     this.alive();
+    this.guard(path);
     const v = this.files.get(path);
     if (v === undefined) throw new Error(`no such file: ${path}`);
     return v;
   }
   async writeFile(path: string, content: string): Promise<void> {
     this.alive();
-    if (path.startsWith("/") || path.split("/").includes("..")) throw new Error(`path escapes the workspace: ${path}`);
+    this.guard(path);
     this.files.set(path, content);
+  }
+  /** The same lexical containment the real adapters enforce before touching the filesystem (SEC-1). */
+  private guard(path: string): void {
+    const rel = path.replace(/^\.?\//, "");
+    if (path.startsWith("/") || rel.split("/").includes("..") || rel.split("/")[0] === ".git") {
+      throw new Error(`path escapes the workspace: ${path}`);
+    }
   }
   async listFiles(glob?: string): Promise<string[]> {
     this.alive();

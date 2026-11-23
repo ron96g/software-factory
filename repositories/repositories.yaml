@@ -76,6 +76,7 @@ spec:
       - { check: security-scan, when: pre-existing, followUp: finding }
     readinessChecks: [build, unit-tests]   # ADR-0047: per-Unit construction readiness, never final verification
   workspace:                 # ADR-0021: runs once in a fresh workspace (host: git worktree)
+    baseRef: origin/main      # base each item on the current upstream main (the publish target), not the checkout's HEAD
     setup:
       - cd web && npm ci --no-audit --no-fund --loglevel=error
 ---

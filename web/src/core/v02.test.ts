@@ -15,7 +15,7 @@ const p = ANONYMOUS;
 const SOURCES_ON_TEST_LOOP = { "github-issues": "test-loop", "jira-main": "test-loop" };
 
 async function withFactory(fetchImpl: typeof fetch, fn: (f: Factory) => Promise<void>) {
-  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions({ sourceWorkflows: SOURCES_ON_TEST_LOOP }), databasePath: ":memory:", env: {}, fetch: fetchImpl, commentPollMs: 30, log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions({ sourceWorkflows: SOURCES_ON_TEST_LOOP }), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, fetch: fetchImpl, commentPollMs: 30, log: () => {} });
   await f.start();
   try {
     await fn(f);

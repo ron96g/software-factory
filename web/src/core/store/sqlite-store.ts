@@ -10,7 +10,9 @@ import {
   type ResourceDeletionGuard,
   type Unsubscribe,
   type WatchEvent,
+  type WatchEventType,
 } from "../ports/index.ts";
+import { DEFAULT_CHANGE_RETENTION } from "./change-feed.ts";
 
 /**
  * Runtime store on node:sqlite (ADR-0004). One table, key (namespace, kind, name).
@@ -21,11 +23,13 @@ export class SqliteStore implements ResourceStore {
   private readonly db: DatabaseSync;
   private readonly clock: Clock;
   private readonly deletionGuards: ResourceDeletionGuard[];
+  private readonly changeRetention: number;
 
-  constructor(db: DatabaseSync, clock: Clock, deletionGuards: ResourceDeletionGuard[] = []) {
+  constructor(db: DatabaseSync, clock: Clock, deletionGuards: ResourceDeletionGuard[] = [], changeRetention = DEFAULT_CHANGE_RETENTION) {
     this.db = db;
     this.clock = clock;
     this.deletionGuards = deletionGuards;
+    this.changeRetention = changeRetention;
     db.exec(`
       CREATE TABLE IF NOT EXISTS resources (
         namespace TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
@@ -35,6 +39,10 @@ export class SqliteStore implements ResourceStore {
       CREATE INDEX IF NOT EXISTS owners_by_owner ON owners(owner_uid);
       CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
       INSERT OR IGNORE INTO counters VALUES ('rv', 0);
+      CREATE TABLE IF NOT EXISTS changes (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, kind TEXT NOT NULL,
+        namespace TEXT NOT NULL, name TEXT NOT NULL, rv INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS changes_by_kind ON changes(kind, seq);
     `);
   }
 
@@ -90,6 +98,7 @@ export class SqliteStore implements ResourceStore {
       for (const o of obj.metadata.ownerReferences ?? []) {
         this.db.prepare("INSERT INTO owners (uid, owner_uid) VALUES (?, ?)").run(obj.metadata.uid!, o.uid);
       }
+      this.recordChange("ADDED", obj);
     });
     this.emit({ type: "ADDED", object: obj });
     return clone(obj);
@@ -152,6 +161,7 @@ export class SqliteStore implements ResourceStore {
       this.db
         .prepare("UPDATE resources SET rv = ?, doc = ? WHERE namespace = ? AND kind = ? AND name = ?")
         .run(Number(next.metadata.resourceVersion), JSON.stringify(next), ns, input.kind, input.metadata.name);
+      this.recordChange("MODIFIED", next);
       result = next as R;
     });
     this.emit({ type: "MODIFIED", object: result });
@@ -171,6 +181,15 @@ export class SqliteStore implements ResourceStore {
     this.db.prepare("DELETE FROM resources WHERE uid = ?").run(uid);
     this.db.prepare("DELETE FROM owners WHERE uid = ? OR owner_uid = ?").run(uid, uid);
     deleted.push(obj);
+    this.recordChange("DELETED", obj);
+  }
+
+  /** ADR-0062 §1: a change entry in the same transaction as the write, pruned to the retention window. */
+  private recordChange(type: WatchEventType, obj: Resource): void {
+    this.db
+      .prepare("INSERT INTO changes (type, kind, namespace, name, rv) VALUES (?, ?, ?, ?, ?)")
+      .run(type, obj.kind, obj.metadata.namespace!, obj.metadata.name, Number(obj.metadata.resourceVersion));
+    this.db.prepare("DELETE FROM changes WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM changes) - ?").run(this.changeRetention);
   }
 
   private exists(kind: string, namespace: string, name: string): boolean {

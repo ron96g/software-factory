@@ -10,7 +10,8 @@ import type {
   AgentTool,
   AgentToolOffering,
   ExecutionContext,
-  ExecutionEnvironmentSelector,
+  EgressActor,
+  EgressProxy,
   FinishValidator,
   Lookup,
   ResourceReader,
@@ -157,8 +158,7 @@ export async function resolveSandboxProfile(ctx: ExecutionContext, reader: Resou
   return { profile, fromRepository: !!repoRef };
 }
 
-/** ADR-0034: opens the agent's ToolServers for one run; the caller closes the session. */
-export async function openToolServers(ctx: ExecutionContext, d: { reader: ResourceReader; toolProvider?: ToolProvider; environments: ExecutionEnvironmentSelector }): Promise<ToolSession | undefined> {
+/** ADR-0034: opens the agent's ToolServers for one run; the caller closes the session. */export async function openToolServers(ctx: ExecutionContext, d: { reader: ResourceReader; toolProvider?: ToolProvider }): Promise<ToolSession | undefined> {
   const refs = ctx.agent.spec.toolServerRefs ?? [];
   if (!refs.length || !d.toolProvider) return undefined;
   const sys = { type: "system" as const, id: "tool-servers" };
@@ -168,21 +168,41 @@ export async function openToolServers(ctx: ExecutionContext, d: { reader: Resour
     if (s) servers.push(s);
     else await ctx.transcript.record({ role: "note", author: sys, content: `tool server "${ref.name}" not found` });
   }
-  const allowStdio = (await d.environments.select()).health.runtime === "host";
-  const session = await d.toolProvider.open(servers, { allowStdio, runName: ctx.run.metadata.name });
+  const session = await d.toolProvider.open(servers, { runName: ctx.run.metadata.name });
   try {
     await ctx.transcript.record({
       role: "note",
       author: sys,
       content:
         `MCP tools: ${session.tools.map((t) => t.schema.name).join(", ") || "none"}` +
-        (session.unavailable.length ? `; unavailable: ${session.unavailable.map((u) => `${u.server} (${u.reason})`).join("; ")}` : ""),
+        (session.unavailable.length ? `; unavailable: ${session.unavailable.map((u) => `${u.server} (${u.reason})`).join("; ")}` : "") +
+        (session.hostExecution.length ? `; host processes: ${session.hostExecution.join(", ")} (spec.hostExecution, ADR-0080 §12)` : ""),
     });
   } catch (e) {
     await session.close(); // never leak connections (or stdio processes) when recording fails
     throw e;
   }
   return session;
+}
+
+/** ADR-0080 §7: bind the run's egress proxy, recording every request and refusal in the transcript (the audit record). */
+export function bindEgress(ctx: ExecutionContext, proxy: EgressProxy | undefined): ToolCapabilities["egress"] {
+  if (!proxy) return undefined;
+  const actor: EgressActor = { run: ctx.run.metadata, agent: ctx.agent.metadata.name, namespace: ctx.run.metadata.namespace };
+  const sys = { type: "system" as const, id: "egress" };
+  return {
+    fetch: async (req) => {
+      const method = req.method ?? "GET";
+      try {
+        const r = await proxy.fetch(req, actor);
+        await ctx.transcript.record({ role: "note", author: sys, content: `egress ${method} ${req.url} → ${r.status} (${r.bytes} bytes)`, meta: { egress: true } });
+        return r;
+      } catch (e) {
+        await ctx.transcript.record({ role: "note", author: sys, content: `egress ${method} ${req.url} refused: ${e instanceof Error ? e.message : String(e)}`, meta: { egress: true } });
+        throw e;
+      }
+    },
+  };
 }
 
 /** Groups external tool names by server for the tool guide (only names: their descriptions are untrusted). */

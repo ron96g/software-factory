@@ -55,7 +55,7 @@ async function exercise(reviewer: Review, run: (f: Factory, name: string, detail
     supports: () => true, sweep: async () => [], remove: async () => {},
     prepare: async (): Promise<PreparedWorkspace> => ({ path: ROOT, baseCommit: "c0ffee", headCommit: "c0ffee", preparedBy: "fake", setupCompleted: true }),
   };
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "test-grounded-key", FACTORY_SIMULATION: "wait" },
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none", OPENAI_API_KEY: "test-grounded-key", FACTORY_SIMULATION: "wait" },
     fetch: fetchImpl, workspaceBackend: backend, log: () => {} });
   await f.start();
   try {

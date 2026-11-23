@@ -1,0 +1,215 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BwrapEnvironment, buildBwrapArgs, shellQuote } from "./bwrap.ts";
+import { canConfineShell, canPrepareIsolated, type SandboxSpec } from "../../ports/index.ts";
+
+test("ADR-0079: buildBwrapArgs confines filesystem to workspace, uses ephemeral HOME, and keeps network", () => {
+  const workspace = "/tmp/fake-workspaces/item-1/repo";
+  const cwd = "/tmp/fake-workspaces/item-1/repo/subdir";
+  const args = buildBwrapArgs({
+    workspace,
+    cwd,
+    command: "npm test",
+    extraRoBinds: ["/custom/toolchain"],
+    exists: (p) => ["/usr", "/lib", "/bin", "/etc", "/custom/toolchain"].includes(p),
+  });
+
+  // Read-only OS & toolchain binds only
+  assert.ok(args.includes("--ro-bind"));
+  const roBinds: string[] = [];
+  for (let i = 0; i < args.length; i++) if (args[i] === "--ro-bind") roBinds.push(args[i + 1]);
+  assert.deepEqual(roBinds, ["/usr", "/lib", "/bin", "/etc", "/custom/toolchain"]);
+  assert.ok(!roBinds.includes(process.env.HOME ?? ""), "host HOME is never bound");
+
+  // Ephemeral /tmp and HOME, rw workspace only, PID isolation + network kept
+  const joined = args.join(" ");
+  assert.match(joined, /--tmpfs \/tmp --tmpfs \/tmp\/home/);
+  assert.match(joined, new RegExp(`--bind ${workspace} ${workspace}`));
+  assert.match(joined, new RegExp(`--chdir ${cwd}`));
+  assert.ok(args.includes("--unshare-pid"));
+  // ADR-0081 §3: the completed hardening flag set.
+  assert.ok(args.includes("--unshare-ipc"));
+  assert.ok(args.includes("--unshare-uts"));
+  assert.ok(args.includes("--unshare-cgroup"));
+  assert.ok(args.includes("--new-session"));
+  assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
+  assert.ok(args.includes("--die-with-parent"));
+  assert.ok(args.includes("--share-net"));
+  assert.deepEqual(args.slice(-4), ["--", "bash", "-lc", "npm test"]);
+});
+
+test("ADR-0079: buildBwrapArgs rejects cwd escaping the workspace", () => {
+  assert.throws(
+    () => buildBwrapArgs({ workspace: "/tmp/ws/a", cwd: "/tmp/ws/b", command: "ls", exists: () => false }),
+    /escapes workspace/,
+  );
+});
+
+test("ADR-0081: binds only the worktree gitdir, the object store and the worktree's own branch ref", () => {
+  const dir = mkdtempSync(join(tmpdir(), "factory-bwrap-wt-"));
+  try {
+    const gitdir = join(dir, "main-git", "worktrees", "item-1");
+    const common = join(dir, "main-git");
+    const ws = join(dir, "ws");
+    mkdirSync(join(common, "objects"), { recursive: true });
+    mkdirSync(join(common, "refs", "heads", "factory"), { recursive: true });
+    mkdirSync(gitdir, { recursive: true });
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(join(gitdir, "commondir"), "../..\n");
+    writeFileSync(join(gitdir, "HEAD"), "ref: refs/heads/factory/item-1\n");
+    writeFileSync(join(common, "refs", "heads", "factory", "item-1"), `${"0".repeat(40)}\n`);
+    writeFileSync(join(common, "refs", "heads", "master"), `${"1".repeat(40)}\n`);
+    writeFileSync(join(common, "config"), "[core]\n");
+    writeFileSync(join(ws, ".git"), `gitdir: ${gitdir}\n`);
+
+    const args = buildBwrapArgs({ workspace: ws, cwd: ws, command: "git status", exists: () => true });
+    const roBinds: string[] = [];
+    for (let i = 0; i < args.length; i++) if (args[i] === "--ro-bind") roBinds.push(args[i + 1]);
+    assert.ok(roBinds.includes(gitdir), "worktree gitdir is bound");
+    assert.ok(roBinds.includes(join(common, "objects")), "object store is bound");
+    assert.ok(roBinds.includes(join(common, "refs", "heads", "factory", "item-1")), "own branch ref is bound");
+    assert.ok(!roBinds.includes(common), "the common dir is not bound wholesale");
+    assert.ok(!roBinds.includes(join(common, "refs")), "refs are not exposed as a directory");
+    assert.ok(!roBinds.includes(join(common, "refs", "heads", "master")), "another branch is not bound");
+    assert.ok(!roBinds.includes(join(common, "config")), "the checkout config is not bound");
+    assert.ok(roBinds.includes(join(ws, ".git")), ".git pointer file is overlaid read-only");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ADR-0079: buildBwrapArgs overlays a real .git directory read-only after the workspace bind", () => {
+  const ws = "/tmp/fake-baseline/repo";
+  const dotGit = join(ws, ".git");
+  const args = buildBwrapArgs({ workspace: ws, cwd: ws, command: "true", exists: (p) => p === dotGit });
+  const rwIdx = args.indexOf("--bind");
+  const roIdx = args.lastIndexOf("--ro-bind");
+  assert.ok(roIdx > rwIdx);
+  assert.equal(args[roIdx + 1], dotGit);
+  assert.equal(args[roIdx + 2], dotGit);
+});
+
+test("ADR-0079: BwrapEnvironment implements ShellConfiner & IsolatedSnapshotEnvironment and safely quotes shell commands", () => {
+  const env = new BwrapEnvironment();
+  assert.equal(canConfineShell(env), true);
+  assert.equal(canPrepareIsolated(env), true);
+  assert.equal(env.isolatesCandidate, true);
+
+  const confined = env.confineShell({
+    workspace: "/tmp/ws",
+    cwd: "/tmp/ws",
+    command: "echo 'hello world' && pwd",
+    env: { PATH: "/usr/bin", HOME: "/home/secret-user" },
+  });
+  assert.equal(confined.env.HOME, "/tmp/home");
+  assert.match(confined.command, /^exec bwrap /);
+  assert.ok(confined.command.includes(shellQuote("echo 'hello world' && pwd")));
+});
+
+test("ADR-0079: BwrapEnvironment.health reports process isolation and executes isolated commands when bwrap is installed", async (t) => {
+  const env = new BwrapEnvironment();
+  const health = await env.health();
+  assert.equal(health.runtime, "bwrap");
+  assert.equal(health.isolation, "process");
+  if (!health.available) {
+    t.skip(`bwrap unavailable on this host: ${health.message}`);
+    return;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "factory-bwrap-live-"));
+  try {
+    const ws = join(dir, "repo");
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(join(ws, "README.md"), "hello\n");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: ws, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } }).toString().trim();
+    git("init", "-q");
+    git("add", ".");
+    git("-c", "user.email=f@f", "-c", "user.name=f", "commit", "-qm", "init");
+    const baseCommit = git("rev-parse", "HEAD");
+
+    const spec: SandboxSpec = {
+      profile: { apiVersion: "factory.ai-dlc.io/v1alpha1", kind: "SandboxProfile", metadata: { name: "node-build" }, spec: { image: "", isolation: "process" } },
+      repositories: [],
+      workspaces: [{
+        apiVersion: "factory.ai-dlc.io/v1alpha1",
+        kind: "Workspace",
+        metadata: { name: "item-repo" },
+        spec: { repositoryRef: { name: "repo" }, workItemRef: { name: "item" }, branch: "factory/item" },
+        status: { phase: "Ready", path: ws, baseCommit },
+      }],
+    };
+    const sb = await env.prepare(spec);
+    const res = await sb.exec("echo home=$HOME && cat README.md && ls -la /home 2>&1 || true");
+    assert.equal(res.exitCode, 0);
+    assert.match(res.stdout, /home=\/tmp\/home/);
+    assert.match(res.stdout, /hello/);
+    assert.doesNotMatch(res.stdout, /\.ssh/);
+    await sb.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ADR-0081 §4: a confined command keeps its own branch but cannot read another branch, the checkout config, $HOME or a symlink escape", async (t) => {
+  const env = new BwrapEnvironment();
+  const health = await env.health();
+  if (!health.available) {
+    t.skip(`bwrap unavailable on this host: ${health.message}`);
+    return;
+  }
+  assert.match(health.message ?? "", /command execution/, "the health claim names the confined scope (ADR-0081 §1)");
+
+  const dir = mkdtempSync(join(tmpdir(), "factory-bwrap-escape-"));
+  try {
+    const src = join(dir, "src");
+    mkdirSync(src, { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: src, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } }).toString().trim();
+    git("init", "-q");
+    writeFileSync(join(src, "a.txt"), "one\n");
+    git("add", ".");
+    git("-c", "user.email=f@f", "-c", "user.name=f", "commit", "-qm", "init");
+    git("branch", "other");
+    const baseCommit = git("rev-parse", "HEAD");
+    const ws = join(dir, "ws");
+    git("worktree", "add", "-q", "-b", "factory/item-1", ws, "HEAD");
+
+    // A file outside the workspace and a symlink inside it pointing at that file.
+    const outside = join(dir, "outside-secret.txt");
+    writeFileSync(outside, "top secret\n");
+    symlinkSync(outside, join(ws, "evil"));
+
+    const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: ws }).toString().trim();
+    const spec: SandboxSpec = {
+      profile: { apiVersion: "factory.ai-dlc.io/v1alpha1", kind: "SandboxProfile", metadata: { name: "node-build" }, spec: { image: "", isolation: "process" } },
+      repositories: [],
+      workspaces: [{
+        apiVersion: "factory.ai-dlc.io/v1alpha1",
+        kind: "Workspace",
+        metadata: { name: "item-repo" },
+        spec: { repositoryRef: { name: "repo" }, workItemRef: { name: "item" }, branch: "factory/item-1" },
+        status: { phase: "Ready", path: ws, baseCommit },
+      }],
+    };
+    const sb = await env.prepare(spec);
+    try {
+      // Own branch: ordinary git keeps working (bare `git log`/`git status` resolve the bound own ref).
+      const ok = await sb.exec("git status --porcelain && git log --oneline -1");
+      assert.equal(ok.exitCode, 0, ok.stderr);
+      assert.match(ok.stdout, /init/);
+
+      const hostHome = process.env.HOME ?? "/root";
+      for (const path of [join(common, "refs", "heads", "other"), join(common, "config"), join(ws, "evil"), join(hostHome, ".bashrc")]) {
+        const r = await sb.exec(`cat ${JSON.stringify(path)}`);
+        assert.notEqual(r.exitCode, 0, `expected ${path} to be unreadable inside the sandbox`);
+      }
+    } finally {
+      await sb.dispose();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

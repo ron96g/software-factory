@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
 import type { BaseConflictDetector, BaseConflictReport, SecretResolver, WorkspaceIntegrator } from "../../ports/index.ts";
-import { FACTORY_GIT_IDENTITY, gitRemote } from "./git-auth.ts";
+import { FACTORY_GIT_IDENTITY, GIT_HARDENING, gitLocalEnv, gitRemote } from "./git-auth.ts";
 
 const execFileP = promisify(execFile);
 const MARKER = "^(<<<<<<<|>>>>>>>)( |$)";
@@ -27,11 +27,13 @@ export class GitBaseSync implements BaseConflictDetector, WorkspaceIntegrator {
 
   async detect(ws: Workspace, repo: Repository, baseBranch: string): Promise<BaseConflictReport> {
     const dir = pathOf(ws);
-    const { url, env } = gitRemote(repo, this.secrets);
+    const { url, env, authEnv } = gitRemote(repo, this.secrets);
     const git = runner(env);
+    // The token reaches only the fetch (SEC-3); the candidate/merge work runs token-free.
+    const auth = runner(authEnv);
     // A named ref keeps the fetched base alive until the integrator merges it.
     const ref = `refs/factory/bases/${ws.metadata.name}`;
-    await git(dir, "fetch", "--quiet", "--no-tags", url, `+refs/heads/${baseBranch}:${ref}`);
+    await auth(dir, "fetch", "--quiet", "--no-tags", url, `+refs/heads/${baseBranch}:${ref}`);
     const baseCommit = await git(dir, "rev-parse", ref);
     const candidate = await this.candidate(git, dir);
     const markers = ws.status?.baseCommit ? await markersIn(git, dir, ws.status.baseCommit, candidate) : [];
@@ -42,7 +44,7 @@ export class GitBaseSync implements BaseConflictDetector, WorkspaceIntegrator {
 
   async integrate(ws: Workspace, _repo: Repository, baseCommit: string) {
     const dir = pathOf(ws);
-    const git = runner({ PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: "0" } as unknown as NodeJS.ProcessEnv);
+    const git = runner(gitLocalEnv());
     await git(dir, "cat-file", "-e", `${baseCommit}^{commit}`);
     const done = async (conflicts: string[]) => ({ baseCommit, headCommit: await git(dir, "rev-parse", "HEAD"), conflicts });
     if (await isAncestor(git, dir, baseCommit, "HEAD")) return done(await markersIn(git, dir, baseCommit));
@@ -93,7 +95,7 @@ type Git = GitFn & { with(extra: Record<string, string>): GitFn };
 
 function runner(env: NodeJS.ProcessEnv): Git {
   const make = (e: NodeJS.ProcessEnv): GitFn => async (cwd, ...args) =>
-    (await execFileP("git", args, { cwd, env: e, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
+    (await execFileP("git", [...GIT_HARDENING, ...args], { cwd, env: e, maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
   return Object.assign(make(env), { with: (extra: Record<string, string>) => make({ ...env, ...extra }) });
 }
 
