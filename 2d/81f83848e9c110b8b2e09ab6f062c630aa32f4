@@ -1,0 +1,206 @@
+docs/architecture.md
+  s_e66436374034b0::t_76ca69387ec99d 55
+  s_1cbdfb0255f61a::t_d4f0796e599f77 57
+web/src/core/issues/story-publisher.ts
+  s_1cbdfb0255f61a::t_a30579b78c2033 5,32,44-48,86
+  s_1cbdfb0255f61a::t_6eaa68eb212fd6 1-4,6-31,33-43,49-85,87-102
+web/src/core/issues/flaky-tests.ts
+  s_e66436374034b0::t_36475a968197d1 1-76
+web/src/ui/evidence-artifacts.tsx
+  s_1cbdfb0255f61a::t_82ed4af9c20b4d 5,15
+web/src/core/feedback.test.ts
+  s_1cbdfb0255f61a::t_12947edb1979f8 169-193
+web/src/app/api/workitems/route.ts
+  s_1cbdfb0255f61a::t_4b94ff87b1535a 8,15,20-21
+web/src/core/issues/flaky-tests.test.ts
+  s_e66436374034b0::t_bb772cc9f22a8a 1-39
+web/src/app/page.tsx
+  s_1cbdfb0255f61a::t_7edbac4db3c098 23,31,44-50,103-106,200,205,211,216-217,220-222,224-225,269-280,296,301-302,313
+  s_1cbdfb0255f61a::t_174a00eb330d4e 26
+web/src/core/runtime/controllers/workitem.ts
+  s_1cbdfb0255f61a::t_380fc027323db1 34,77-78,603,810-816,820-822,827
+  s_1cbdfb0255f61a::t_a30579b78c2033 86-87,817-819,823-826
+docs/adr/0077-story-refinement-workflow.md
+  s_1cbdfb0255f61a::t_688f2946562fb4 59-63
+  s_1cbdfb0255f61a::t_a6a99d31d5a4f8 1-58,64-110
+model-providers/providers.yaml
+  s_1cbdfb0255f61a::t_8bb097da63659a 41-42
+docs/ai-dlc-glossary.md
+  s_e66436374034b0::t_0e97d8ef87a926 197-198
+  s_1cbdfb0255f61a::t_4d7700b5f8af76 194
+  s_1cbdfb0255f61a::t_f5f55f98862ce8 95
+  s_1cbdfb0255f61a::t_d4f0796e599f77 195-196
+workflows/story-refinement.yaml
+  s_1cbdfb0255f61a::t_040092e8f3334b 1-47
+web/src/ui/artifact-content.ts
+  s_1cbdfb0255f61a::t_25cc6c41a8ce00 1-13
+web/src/core/followup-ticket.test.ts
+  s_1cbdfb0255f61a::t_f9b6eb9cdaa21b 56,64
+  s_1cbdfb0255f61a::t_73c9447ad45f76 57-63,65-67,78,86-87,89-90,95
+web/src/core/model/tests.ts
+  s_e66436374034b0::t_94951f3c7f48e0 1-5
+web/src/core/verification/evidence.ts
+  s_e66436374034b0::t_5e46ef959287f3 9-10
+web/src/ui/check-runs.tsx
+  s_e66436374034b0::t_3f4169503c0fb0 150-154
+web/src/core/issues/origin.ts
+  s_1cbdfb0255f61a::t_3be03dba826e0a 15,26
+web/src/core/issues/controller.ts
+  s_1cbdfb0255f61a::t_3be03dba826e0a 21-23,129
+web/src/core/adapters/workspaces/module-scope.ts
+  s_e66436374034b0::t_ad274ff922441a 7,40-60,82
+web/src/core/model/auto-waive.ts
+  s_e66436374034b0::t_5ffdb0e416f30e 12
+web/src/core/checks/rerun.test.ts
+  s_e66436374034b0::t_456c28c8d2dc92 1,3-57
+  s_e66436374034b0::t_e14bd70c3a9a2b 2
+web/src/core/workflow-check-runtime.test.ts
+  s_e66436374034b0::t_d14767a5cbd8c1 4-5,119,122,532-553
+  s_e66436374034b0::t_4e6ebb0d96080f 554
+web/src/ui/new-item.ts
+  s_1cbdfb0255f61a::t_aee24e1efba15c 1-2
+tools/validate.py
+  s_1cbdfb0255f61a::t_fcaa7975f342f7 119-139
+  s_e66436374034b0::t_f0d3b57dffb2b7 170-171,178-180
+web/src/core/units/service.ts
+  s_e66436374034b0::t_6bb9fc7db512e6 373-383,386,388,401,419-420
+  s_e66436374034b0::t_1fd5bdc53e84dc 453
+  s_e66436374034b0::t_60d5f0354405a0 12,14,41-42,81-95,140,149-154,185-201,237-249,251,261,267,463
+  s_e66436374034b0::t_7fadd11a3f5950 15
+  s_e66436374034b0::t_3330bcaa1968d9 270-271,464-472
+  s_e66436374034b0::t_383d86567b277a 473
+web/src/core/ports/app.ts
+  s_1cbdfb0255f61a::t_aff82e533b93b8 48-53,120
+  s_1cbdfb0255f61a::t_4b94ff87b1535a 44-45,59-60
+  s_1cbdfb0255f61a::t_4c4f4d638efcdd 46-47
+web/src/core/issues/admission.test.ts
+  s_1cbdfb0255f61a::t_bef4321c3e74be 74-76,78,80-81,83-88,93-98
+  s_1cbdfb0255f61a::t_688f2946562fb4 77,79,82,89-92
+web/src/core/verification.test.ts
+  s_e66436374034b0::t_81ae630ae3651d 20,37-39,727-773
+web/src/core/checks/origin.ts
+  s_e66436374034b0::t_5ffdb0e416f30e 81
+  s_e66436374034b0::t_4566c0bf291263 4-5,24-27,66-68,85-86
+skills/ticket-writing.md
+  s_1cbdfb0255f61a::t_281597904d826d 7,46-50
+web/src/ui/issue-proposals.tsx
+  s_1cbdfb0255f61a::t_74990f8fbf1ca6 80
+  s_1cbdfb0255f61a::t_174a00eb330d4e 73,85
+web/src/ui/run-inspector.tsx
+  s_1cbdfb0255f61a::t_82ed4af9c20b4d 2,293
+web/src/core/issues/admission.ts
+  s_1cbdfb0255f61a::t_3e6439b3b0d47e 2,54-66,72-77
+  s_1cbdfb0255f61a::t_a30579b78c2033 4,67-71
+  s_1cbdfb0255f61a::t_41f49b617d1546 78-79
+web/src/core/checks-pr.test.ts
+  s_e66436374034b0::t_8fd7f7e9a5092e 26-28
+docs/adr/0079-flaky-tests.md
+  s_e66436374034b0::t_6fd9feabc8df30 64-66,88-89,92-93,101
+  s_e66436374034b0::t_e77d5a2f1e84d6 3,40-63,67-75,80-81,83-87,90-91,94-99,102-111,114-119,125,127-130,132-139
+  s_1cbdfb0255f61a::t_6faaf05dd20cc8 1-2,4-39,76-79,82,100,112-113,120-124,126,131,140-152
+web/src/acceptance/story-refinement.acceptance.test.ts
+  s_1cbdfb0255f61a::t_e82115493a0839 54-57,63-72,76-87,92-96,101-104,106
+  s_1cbdfb0255f61a::t_a30579b78c2033 105
+  s_1cbdfb0255f61a::t_77c1e32e4306b0 1-53,58-62,73-75,88-91,97-100,107-109
+web/src/core/ports/verification.ts
+  s_e66436374034b0::t_99843fb87620de 18,27-33
+  s_e66436374034b0::t_3a701722c84249 19-26
+web/src/core/checks/controller.ts
+  s_e66436374034b0::t_ee8ba6f96eae25 8,132-136
+  s_e66436374034b0::t_1fd5bdc53e84dc 403-405,408-409
+  s_e66436374034b0::t_ccfefb3e6c4440 1,6,11-12,28-29,32-34,260-280,311,348-350,366,392-393
+web/src/core/ports/workflow.ts
+  s_1cbdfb0255f61a::t_ac0d95675b017a 35-42
+web/src/core/verification/service.ts
+  s_e66436374034b0::t_7fadd11a3f5950 16
+  s_e66436374034b0::t_705d50e857445c 597,607
+  s_e66436374034b0::t_5ffdb0e416f30e 599,605-606,608-613,647,654-655,661
+  s_e66436374034b0::t_1fd5bdc53e84dc 728
+  s_e66436374034b0::t_be1fc14c93b88e 14-15,938
+  s_e66436374034b0::t_bcf2d3e7ea911a 111-112,551-552,559-566,718-720,722-727,729-738
+web/src/core/model/kinds.ts
+  s_e66436374034b0::t_17b14e6f35a563 178,180,485-486,500-501
+  s_e66436374034b0::t_5ffdb0e416f30e 478-479
+  s_e66436374034b0::t_94951f3c7f48e0 517-527,558-561
+  s_1cbdfb0255f61a::t_ac0d95675b017a 98-104,294-295,826-827,846-848
+web/src/core/app/factory-app.ts
+  s_1cbdfb0255f61a::t_3be03dba826e0a 562
+  s_1cbdfb0255f61a::t_aff82e533b93b8 86-87,130-131,674-675,677-707,709-712
+  s_1cbdfb0255f61a::t_4b94ff87b1535a 254,256-259,284-290,302
+repositories/repositories.yaml
+  s_e66436374034b0::t_5ddb774525b153 66-78
+AGENTS.md
+  s_1cbdfb0255f61a::t_f5f55f98862ce8 224
+  s_1cbdfb0255f61a::t_d4f0796e599f77 223
+  s_e66436374034b0::t_0e97d8ef87a926 225
+web/src/core/factory.ts
+  s_1cbdfb0255f61a::t_a30579b78c2033 445
+  s_e66436374034b0::t_e7af8d606c96cc 55,289-290,292,303
+  s_1cbdfb0255f61a::t_1cddf837c04780 80
+  s_1cbdfb0255f61a::t_598bc10e16004d 285,287,509
+  s_e66436374034b0::t_9ac23a06159ea2 89,441
+  s_1cbdfb0255f61a::t_7ae284a29a0f36 54,443-444,446
+web/src/core/checks/scheduler.ts
+  s_e66436374034b0::t_a4310a51136683 8,165-167,194
+web/src/app/items/[name]/page.tsx
+  s_1cbdfb0255f61a::t_82ed4af9c20b4d 47,990
+  s_1cbdfb0255f61a::t_dc17d2f00b952a 460-492,494-499,501-503,505,508-541
+web/src/core/base-sync.test.ts
+  s_1cbdfb0255f61a::t_f9b6eb9cdaa21b 55-56
+docs/adr/0078-restart-with-context-and-notes.md
+  s_1cbdfb0255f61a::t_f5f55f98862ce8 1-47
+artifacts/ticket-draft.yaml
+  s_1cbdfb0255f61a::t_040092e8f3334b 1-16
+web/src/core/checks/admission.ts
+  s_e66436374034b0::t_a4310a51136683 7,140-144
+web/src/core/units.test.ts
+  s_e66436374034b0::t_1d25cbe9652640 454-495
+  s_e66436374034b0::t_0077779d4c9a17 496-525
+web/src/app/api/workitems/[name]/restart/route.ts
+  s_1cbdfb0255f61a::t_b4e7b7d1841f91 4,6-8
+web/src/core/model/flaky.ts
+  s_e66436374034b0::t_ac86515a439a45 1-49
+web/src/core/checks/config.ts
+  s_e66436374034b0::t_5f3fba6f9fc23e 30-32
+  s_e66436374034b0::t_4566c0bf291263 3,25-26,53-73,75-87
+  s_e66436374034b0::t_a4310a51136683 1-2,6,88-98
+  s_e66436374034b0::t_1fd5bdc53e84dc 74
+  s_e66436374034b0::t_7fadd11a3f5950 99-104
+web/src/core/model/flaky.test.ts
+  s_e66436374034b0::t_33ccbce8a641c4 1-46
+web/src/app/resources/[plural]/page.tsx
+  s_1cbdfb0255f61a::t_aee24e1efba15c 11,61-62
+  s_1cbdfb0255f61a::t_c3865b0a36107d 2-3
+  s_1cbdfb0255f61a::t_597eac2cb2d130 37-38
+web/src/core/ports/checks.ts
+  s_e66436374034b0::t_ad274ff922441a 11-15
+web/src/core/checks/node-test-tap.test.ts
+  s_e66436374034b0::t_abe19f5c134a0c 15,22-27,42-57
+  s_e66436374034b0::t_fae5bf43608d97 58
+web/src/core/checks/classifiers.ts
+  s_e66436374034b0::t_aaf9a585996ed6 3-4,90-134,148-152,157-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2d81f83848e9c110b8b2e09ab6f062c630aa32f4",
+  "prompts": {},
+  "sessions": {
+    "s_1cbdfb0255f61a": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9ca580c2-0035-4236-94b1-2bd6e51d87d8",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_e66436374034b0": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "e03035ba-2ffb-4dca-8997-943cd05c43e8",
+        "model": "unknown"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
