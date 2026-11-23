@@ -63,9 +63,19 @@ spec:
   sandboxRef: { name: node-build }
   checks:                    # ADR-0023: commands for the automated gate, run in the workspace
     build: cd web && npx tsc --noEmit -p .
-    unit-tests: cd web && npm test --silent
-    integration-tests: cd web && npm run test:integration --silent      # composition-root suites (real store, controllers, definitions)
-    acceptance-criteria: cd web && npm run test:acceptance --silent    # web/src/acceptance/*.acceptance.test.ts; fails when empty
+    # ADR-0079: TAP names every failed test; `rerunFailed` runs only those again (from the workspace root, names via env only).
+    unit-tests:
+      command: cd web && node --test --test-reporter=tap "src/**/*.test.ts"
+      resultFormat: node-test-tap
+      rerunFailed: node --test --test-reporter=tap --test-name-pattern="$FACTORY_RERUN_PATTERN" $FACTORY_RERUN_FILES
+    integration-tests:                                                   # composition-root suites (real store, controllers, definitions)
+      command: cd web && node --test --test-reporter=tap src/core/factory.test.ts src/core/planning-factory.test.ts src/core/checks-pr.test.ts src/core/v02.test.ts
+      resultFormat: node-test-tap
+      rerunFailed: node --test --test-reporter=tap --test-name-pattern="$FACTORY_RERUN_PATTERN" $FACTORY_RERUN_FILES
+    acceptance-criteria:                                                 # web/src/acceptance/*.acceptance.test.ts; fails when empty
+      command: cd web && ls src/acceptance/*.acceptance.test.ts >/dev/null && node --test --test-reporter=tap "src/acceptance/*.acceptance.test.ts"
+      resultFormat: node-test-tap
+      rerunFailed: node --test --test-reporter=tap --test-name-pattern="$FACTORY_RERUN_PATTERN" $FACTORY_RERUN_FILES
     security-scan: { command: "cd web && npm audit --omit=dev --audit-level=high --json", resultFormat: npm-audit-json }
     preflight: node --version && npm --version && test -d web/node_modules
   verification:

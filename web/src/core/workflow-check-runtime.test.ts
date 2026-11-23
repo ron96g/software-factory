@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import type { CandidateChanges } from "./ports/index.ts";
+import { testId } from "./model/tests.ts";
 import type { AgentRun, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
@@ -114,10 +116,10 @@ async function fixture(options: { stage?: string; purpose?: CheckWorkflowOrigin[
   const errors: string[] = [];
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
-  const controller = (execution: CheckExecutionRunner = runner, contracts?: VerificationContracts) => createCheckRunController({
+  const controller = (execution: CheckExecutionRunner = runner, contracts?: VerificationContracts, changes?: CandidateChanges) => createCheckRunController({
     reader: store, status: store, logs, runner: execution, snapshots, clock,
     events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message), classifiers, contracts,
-    recoveryChecks: options.recoveryChecks,
+    recoveryChecks: options.recoveryChecks, changes,
   });
   return {
     db, store, logs, scheduler, submit, item, workspace, repository, caller, origin,
@@ -526,4 +528,27 @@ test("agent request ID is optional but is preserved and bound to idempotent call
     assert.equal((await f.submit("test", "optional-request-id", withoutRequestId)).metadata.uid, run.metadata.uid);
     await assert.rejects(f.submit("test", "optional-request-id", { ...withoutRequestId, agentRequestId: "different" }), /different input or origin/);
   } finally { f.db.close(); }
+});
+
+test("ADR-0079: per-test results are recorded with workspace-relative files, marked touched when the candidate changed them", async () => {
+  const tap = ["TAP version 13",
+    "# Subtest: stable", "ok 1 - stable", "  ---", "  duration_ms: 1", "  type: 'test'", "  ...",
+    "# Subtest: cleanup", "not ok 2 - cleanup", "  ---", "  duration_ms: 1", "  type: 'test'", "  location: '/fake-workspace/src/a.test.ts:3:1'",
+    "  failureType: 'testCodeFailure'", "  error: 'ENOTEMPTY'", "  code: 'ERR_TEST_FAILURE'", "  ...",
+    "# Subtest: new feature", "not ok 3 - new feature", "  ---", "  duration_ms: 1", "  type: 'test'", "  location: '/fake-workspace/src/b.test.ts:9:1'",
+    "  failureType: 'testCodeFailure'", "  error: 'nope'", "  code: 'ERR_ASSERTION'", "  name: 'AssertionError'", "  ...",
+    "1..3", "# tests 3", "# suites 0", "# pass 1", "# fail 2", "# cancelled 0", "# skipped 0", "# todo 0"].join("\n");
+  const f = await fixture({ format: "node-test-tap" });
+  const controller = f.controller(undefined, undefined, { changedFiles: async () => ["src/b.test.ts"] });
+  try {
+    f.result({ exitCode: 1, stdout: tap, stderr: "", truncated: false, durationMs: 2, termination: { kind: "exit" } });
+    const run = await f.submit();
+    await controller.reconcile(keyOf(run));
+    await controller.stop();
+    const status = (await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))?.status;
+    assert.equal(status?.outcome, "AssertionFailed");
+    assert.deepEqual(status?.tests?.failed, [{ name: "cleanup", file: "src/a.test.ts", touched: false }, { name: "new feature", file: "src/b.test.ts", touched: true }]);
+    assert.deepEqual(status?.tests?.passed, [testId("stable")]);
+    assert.match(status?.outputTail ?? "", /# fail 2/);
+  } finally { await controller.stop(); f.db.close(); }
 });

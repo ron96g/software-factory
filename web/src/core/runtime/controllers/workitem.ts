@@ -31,6 +31,7 @@ import {
   type RunFailurePolicy,
   type ArtifactCheck,
   type Lookup,
+  type StagePublisher,
   type RecoveryNeedHandler,
   OUTPUT_REJECTED,
 } from "../../ports/index.ts";
@@ -73,6 +74,8 @@ export interface WorkItemControllerDeps {
   recovery?: RecoveryRouter;
   recoveryNeeds?: Lookup<RecoveryNeedHandler>;
   recoveryAllowances?: RecoveryAllowanceReader;
+  /** ADR-0077: stage `publish` blocks other than the built-in pull request, by key (e.g. `issue`). */
+  publishers?: Lookup<StagePublisher>;
 }
 
 /** Bounded same-step retries for malformed output before the existing gate handling takes over. */
@@ -80,6 +83,8 @@ const MAX_OUTPUT_RETRIES = 2;
 /** ADR-0053: default automatic resolution attempts for conflicts with the base branch. */
 const DEFAULT_CONFLICT_ATTEMPTS = 2;
 const BASE_CONFLICT = "base-conflict";
+/** ADR-0077: marks a Waiting phase caused by a stage publication block. */
+const PUBLICATION_WAIT = "Publication: ";
 
 interface BaseConflict { ws: Workspace; base: string; baseCommit: string; files: string[] }
 
@@ -595,7 +600,7 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
   return {
     name: "workitem",
     primaryKind: "WorkItem",
-    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun", "OutboxMessage"],
+    watches: ["WorkItem", "AgentRun", "Clarification", "Approval", "Workspace", "CheckRun", "OutboxMessage", "IssueProposal"],
     keysFor: (e) => (e.object.kind === "WorkItem" ? (e.type === "DELETED" ? [] : [keyOf(e.object)]) : ownerKey(e.object)),
     initialKeys: async () =>
       (await d.reader.list<WorkItem>("WorkItem")).filter((w) => !TERMINAL.has(w.status?.phase ?? "") || restartPending(w) ||
@@ -802,6 +807,24 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           }
         }
         else if (stepIdx === 0) await publishPullRequests(wi, stage);
+        // ADR-0077: registered publication blocks; the stage waits until each one has published.
+        for (const kind of Object.keys(stage.publish ?? {}).filter((k) => k !== "pullRequest")) {
+          const publisher = d.publishers?.get(kind);
+          if (!publisher) return apply(wi, wf, stage, { action: "fail", reason: `no publisher for publish.${kind}` });
+          const progress = await publisher.publish(wi, stage);
+          if (progress.state === "pending") return; // re-triggered by the owned IssueProposal/OutboxMessage watch
+          if (progress.state === "blocked") {
+            const message = `${PUBLICATION_WAIT}${progress.reason}`;
+            if (st.phase === "Waiting" && st.message === message) return;
+            await write(wi, { phase: "Waiting", message });
+            await d.events.warning(wi, "PublicationBlocked", `${stage.name}: ${progress.reason}`);
+            return;
+          }
+          // Only a wait this block caused ends here; other waits (e.g. model quota) belong to their own handling.
+          if (st.phase === "Waiting" && st.message?.startsWith(PUBLICATION_WAIT)) {
+            return write(wi, { phase: "Running", message: undefined }, "Published", `${stage.name}: ${progress.message ?? kind}`);
+          }
+        }
         if (stepIdx < stage.steps.length) {
           const step = stage.steps[stepIdx];
           const rn = runName(wi, stage.name, stepIdx, st.round!);

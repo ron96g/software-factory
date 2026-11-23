@@ -38,8 +38,8 @@ spec:
   secretRef: { name: copilot-token }
   default: true
   models:
-    reasoning: claude-sonnet-5.5
-    coding: claude-sonnet-5.5
+    reasoning: claude-opus-5.5
+    coding: claude-opus-5.5
     fast: claude-haiku-5.5
   # ADR-0028: optional per-agent models (override the tier for that agent only), e.g.
   # agentModels:

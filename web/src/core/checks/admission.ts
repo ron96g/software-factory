@@ -4,7 +4,7 @@ import { nsOf } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import type { ModuleScopePlanner, RecoveryCheckAuthorization, ResourceReader, Validator } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { resolveCheckConfig } from "./config.ts";
+import { rerunCheckConfig, rerunOriginal, resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 
@@ -137,8 +137,11 @@ export function checkRunValidator(scopes?: ModuleScopePlanner, recoveryChecks?: 
         errors.push("CheckRun repository reference/version is not current");
       } else {
         try {
-          const config = workspace && await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes, spec.workflow?.purpose);
-          if (!config) throw new Error("check workspace is unavailable");
+          if (!workspace) throw new Error("check workspace is unavailable");
+          const original = spec.workflow?.purpose === "rerun-failed" ? await rerunOriginal(ctx.reader, item, workspace, spec.check ?? "", spec.workflow) : undefined;
+          if (original && original.spec.snapshot !== spec.snapshot) errors.push("a targeted re-run needs the original attempt's snapshot");
+          const config = original ? rerunCheckConfig(repository, spec.check ?? "", original)
+            : await resolveCheckConfig(repository, spec.check ?? "", workspace, scopes, spec.workflow?.purpose);
           if (config.command !== spec.command || config.timeoutMs !== spec.timeoutMs ||
               config.resultFormat !== spec.resultFormat || JSON.stringify(config.scope) !== JSON.stringify(spec.scope)) {
             errors.push("CheckRun command, budget, scope or result format differs from repository policy");

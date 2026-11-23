@@ -1,6 +1,7 @@
 import type { CheckOutcome } from "../model/kinds.ts";
 import type { CheckFinding } from "../model/kinds.ts";
-import type { CheckResultClassifier, FindingExtractor } from "../ports/verification.ts";
+import type { CheckResultClassifier, FindingExtractor, TestResultExtractor } from "../ports/verification.ts";
+import { TEST_PATH_SEPARATOR } from "../model/tests.ts";
 import type { ExecResult } from "../ports/sandbox.ts";
 import type { Registrar } from "../ports/integration.ts";
 
@@ -86,8 +87,51 @@ export const goTestJsonClassifier: CheckResultClassifier = {
   },
 };
 
-/** Node's TAP diagnostics distinguish assertion errors from module loading and infrastructure failures. */
-export const nodeTestTapClassifier: CheckResultClassifier = {
+interface TapTest { name: string; ok: boolean; skipped: boolean; leaf: boolean; diagnostics: Record<string, string> }
+
+/**
+ * Node's TAP reporter: tests nest by 4-space indentation, a `# Subtest:` line opens each one and its `ok`/`not ok` line
+ * closes it, followed by a YAML-ish diagnostics block. Returns every test with its full name path.
+ */
+function parseTap(stdout: string): TapTest[] {
+  const lines = stdout.split(/\r?\n/);
+  const path: string[] = [];
+  const children: boolean[] = [];
+  const tests: TapTest[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const subtest = /^( *)# Subtest: (.*)$/.exec(line);
+    if (subtest) {
+      const level = subtest[1].length / 4;
+      path.length = level;
+      path[level] = subtest[2];
+      children[level] = false;
+      continue;
+    }
+    const result = /^( *)(ok|not ok) \d+ - (.*?)(?: # (SKIP|TODO)\b.*)?$/.exec(line);
+    if (!result) continue;
+    const indent = result[1].length;
+    const level = indent / 4;
+    if (level > 0) children[level - 1] = true;
+    const diagnostics: Record<string, string> = {};
+    if (lines[i + 1] === `${result[1]}  ---`) {
+      for (i += 2; i < lines.length && lines[i] !== `${result[1]}  ...`; i++) {
+        const field = new RegExp(`^ {${indent + 2}}([A-Za-z]+): (.*)$`).exec(lines[i]);
+        if (field) diagnostics[field[1]] = field[2].replace(/^'(.*)'$/, "$1");
+      }
+    }
+    const names = [...path.slice(0, level), result[3]];
+    tests.push({ name: names.join(TEST_PATH_SEPARATOR), ok: result[2] === "ok", skipped: result[4] === "SKIP", leaf: !children[level], diagnostics });
+    children[level] = false;
+  }
+  return tests;
+}
+
+/** A named failure raised by test code: not a hook, a cancellation, a crashed file (it carries `exitCode`) or a parent. */
+const namedFailure = (t: TapTest) => !t.ok && t.leaf && t.diagnostics.failureType === "testCodeFailure" && t.diagnostics.exitCode === undefined;
+
+/** ADR-0079: Node's TAP output, classified by test: any failure raised by test code is a named test failure. */
+export const nodeTestTapClassifier: CheckResultClassifier & TestResultExtractor = {
   format: "node-test-tap",
   classify(result) {
     const terminated = terminationOutcome(result);
@@ -101,17 +145,26 @@ export const nodeTestTapClassifier: CheckResultClassifier = {
     if (tests === undefined || passed === undefined || failed === undefined || cancelled === undefined ||
         !/^1\.\.\d+\r?$/m.test(result.stdout) || tests < 1 || passed + failed > tests) return "NotVerified";
     if (result.exitCode === 0) return failed === 0 && cancelled === 0 && passed > 0 ? "Passed" : "NotVerified";
-    if (!failed || cancelled || result.stderr.trim()) return "UnknownFailure";
-    const failures = [...result.stdout.matchAll(/^not ok \d+ - .*?\r?\n([\s\S]*?^  \.\.\.\r?$)/gm)];
-    if (!failures.length || failures.some((match) =>
-      !/^  failureType: 'testCodeFailure'\r?$/m.test(match[1]) ||
-      !/^  code: 'ERR_ASSERTION'\r?$/m.test(match[1]) ||
-      !/^  name: 'AssertionError'\r?$/m.test(match[1]))) return "UnknownFailure";
+    if (!failed || cancelled) return "UnknownFailure";
+    const reported = parseTap(result.stdout);
+    // A parent fails because a subtest failed; every other failure must be a named one.
+    const failures = reported.filter((t) => !t.ok && !(!t.leaf && t.diagnostics.failureType === "subtestsFailed"));
+    if (!failures.length || !failures.every(namedFailure)) return "UnknownFailure";
     return "AssertionFailed";
   },
   failureEvidence(result) {
     if (this.classify(result) !== "AssertionFailed") return undefined;
-    return exactTests([...result.stdout.matchAll(/^not ok \d+ - (.*?)\r?\n([\s\S]*?^  \.\.\.\r?$)/gm)].map((match) => match[1]));
+    return exactTests(parseTap(result.stdout).filter(namedFailure).map((t) => t.name));
+  },
+  testResults(result) {
+    const outcome = this.classify(result);
+    if (outcome !== "Passed" && outcome !== "AssertionFailed") return undefined;
+    const leaves = parseTap(result.stdout).filter((t) => t.leaf);
+    return {
+      failed: leaves.filter(namedFailure).map((t) => ({ name: t.name, file: t.diagnostics.location?.replace(/:\d+:\d+$/, "") })),
+      passed: leaves.filter((t) => t.ok && !t.skipped).map((t) => t.name),
+      skipped: leaves.filter((t) => t.skipped).length,
+    };
   },
 };
 

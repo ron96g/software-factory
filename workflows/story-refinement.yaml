@@ -1,0 +1,47 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: story-refinement
+  annotations:
+    description: >
+      Turns an idea into a researched, plannable tracker story without implementing it: research the code → the
+      product owner writes the story (SMART goal, Given/When/Then criteria) → story-review [human] → publish the
+      ticket. Start implementation later from the ticket (ADR-0077).
+spec:
+  phases:
+    - name: inception
+      stages:
+        - name: research
+          steps:
+            - name: research-idea
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: codebase-research }, { name: knowledge-base }]
+              inputs: [{ artifactRef: { name: signal } }]
+              outputs: [{ artifactRef: { name: research-notes } }]
+
+        - name: refine
+          steps:
+            - name: write-story
+              agentRef: { name: product-owner }
+              skillRefs: [{ name: ticket-writing }, { name: human-clarification }]
+              inputs: [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
+              outputs: [{ artifactRef: { name: ticket-draft } }]
+
+        - name: story-review
+          steps: []
+          gate:
+            type: human-approval
+            approvers: [{ role: product-owner }]
+            criteria:
+              - Problem, goal and acceptance criteria are right and testable
+              - Grounded in the research; no invented facts or deadlines
+              - Ready to publish as written (the exact title and body are created)
+            onReject: { next: refine }   # the reason and inline notes reach the product owner
+
+        - name: publish-ticket
+          steps: []
+          publish:
+            issue:
+              artifactRef: { name: ticket-draft }
+              reviewStage: story-review
+              targetRef: { name: jira-main }

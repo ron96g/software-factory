@@ -1,8 +1,8 @@
 import { BARRIER_UNIT, type AgentRun, type CheckWorkflowOrigin, type Repository, type WorkItem, type Workflow } from "../model/kinds.ts";
 
 /** Shared by the scheduler, admission and controller so every path authorizes workflow checks identically. */
-export const ORIGIN_KEYS = new Set(["agentRequestId", "agentRunRef", "agentRunUid", "attempt", "planFingerprint", "purpose", "round", "stage", "unit", "unitRun", "recoveryEpisode", "baselineCommit"]);
-export const ORIGIN_PURPOSES: CheckWorkflowOrigin["purpose"][] = ["preflight", "preparation", "verification", "unit-readiness", "diagnostic", "baseline"];
+export const ORIGIN_KEYS = new Set(["agentRequestId", "agentRunRef", "agentRunUid", "attempt", "planFingerprint", "purpose", "round", "stage", "unit", "unitRun", "recoveryEpisode", "baselineCommit", "rerunOf"]);
+export const ORIGIN_PURPOSES: CheckWorkflowOrigin["purpose"][] = ["preflight", "preparation", "verification", "unit-readiness", "diagnostic", "baseline", "rerun-failed"];
 
 const bounded = (value: unknown, max: number) => typeof value === "string" && !!value.trim() && value.length <= max;
 
@@ -21,6 +21,10 @@ export function validCallerName(item: WorkItem, origin: CheckWorkflowOrigin, cal
 
 /** ADR-0047: Unit identity is required exactly for readiness jobs; a Unit job names its implementation attempt. */
 export function validUnitFields(origin: CheckWorkflowOrigin): boolean {
+  // ADR-0079: a targeted re-run is linked to its attempt only; it carries no Unit, caller or baseline.
+  if (origin.purpose === "rerun-failed") return bounded(origin.rerunOf, 253) && origin.unit === undefined && origin.unitRun === undefined &&
+    origin.recoveryEpisode === undefined && origin.baselineCommit === undefined && !origin.agentRunRef;
+  if (origin.rerunOf !== undefined) return false;
   if (gateBaseline(origin)) return origin.unit === undefined && origin.unitRun === undefined && origin.recoveryEpisode === undefined &&
     origin.agentRequestId === undefined && typeof origin.baselineCommit === "string" && /^[a-f0-9]{40,64}$/.test(origin.baselineCommit);
   if (origin.purpose === "diagnostic" || origin.purpose === "baseline") return bounded(origin.unit, 100) && origin.unit !== BARRIER_UNIT &&
@@ -59,6 +63,9 @@ export function originAuthorized(workflow: Workflow | null | undefined, origin: 
     case "baseline": if (gateBaseline(origin)) return policy.verifyStage === origin.stage;
       return !!workflow?.spec.recovery && !!workflow.spec.unitExecution &&
       policy.implementationStage === origin.stage;
+    // ADR-0079: wherever readiness, preparation or verification checks run.
+    case "rerun-failed": return origin.stage === policy.verifyStage || origin.stage === policy.preparationStage ||
+      origin.stage === policy.implementationStage || origin.stage === workflow?.spec.unitExecution?.barrierStage;
     default: return false;
   }
 }
@@ -71,10 +78,12 @@ export function originChecks(repository: Repository, origin: CheckWorkflowOrigin
     case "diagnostic": return workflow?.spec.recovery?.diagnosticChecks
       .filter((name) => name.startsWith(`${repository.metadata.name}/`))
       .map((name) => name.slice(repository.metadata.name.length + 1));
-    case "baseline": if (gateBaseline(origin)) return (repository.spec.verification?.autoWaive ?? []).map((entry) => entry.check);
+    case "baseline": if (gateBaseline(origin)) return (repository.spec.verification?.autoWaive ?? []).filter((entry) => entry.when === "pre-existing").map((entry) => entry.check);
       return workflow?.spec.recovery?.diagnosticChecks
       .filter((name) => name.startsWith(`${repository.metadata.name}/`))
       .map((name) => name.slice(repository.metadata.name.length + 1));
+    case "rerun-failed": return Object.entries(repository.spec.checks ?? {})
+      .filter(([, value]) => typeof value === "object" && typeof value.rerunFailed === "string").map(([name]) => name);
     default: return Object.keys(repository.spec.checks ?? {});
   }
 }
