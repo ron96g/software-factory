@@ -8,6 +8,11 @@ export interface WorkspaceSnapshotter {
   fingerprint(workspace: Workspace): Promise<string>;
 }
 
+/** ADR-0079: workspace-relative files the candidate changed or added since the workspace's pinned base commit. */
+export interface CandidateChanges {
+  changedFiles(workspace: Workspace): Promise<string[]>;
+}
+
 export interface ModuleScopePlanner {
   /**
    * `selection` is the scope requested by the verification tier (ADR-0061, default `affected`). Shared, unknown or

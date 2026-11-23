@@ -83,6 +83,8 @@ import type {
   FollowUpTicketDrafter,
   FollowUpTicketDraft,
   DraftFollowUpTicketInput,
+  DraftFeedbackBatch,
+  RestartOptions,
   VerificationApprovalGuard,
   ApprovalDecisionGuard,
   BaseConflictDetector,
@@ -125,6 +127,8 @@ export interface FactoryAppDeps {
   baseConflicts?: BaseConflictDetector;
   /** ADR-0075: item capability detectors by name. Without them an item reports no capabilities. */
   capabilities?: Lookup<CapabilityDetector>;
+  /** ADR-0073/0078: submits draft inline notes together with a restart. */
+  notes?: DraftFeedbackBatch;
   /** ADR-0076: drafts follow-up tickets; without it, drafting is unavailable and Create uses the template. */
   ticketDrafter?: FollowUpTicketDrafter;
 }
@@ -247,8 +251,12 @@ export class FactoryApp
       workflows.flatMap((w) => w.spec.phases.flatMap((ph) => ph.stages.map((st) => st.workflowRef?.name).filter((n): n is string => !!n))),
     );
     const describe = (r: Resource) => ({ name: r.metadata.name, description: r.metadata.annotations?.description?.trim() });
+    const ticketBlock = (w: Workflow) => w.spec.phases.flatMap((ph) => ph.stages).find((st) => st.publish?.issue)?.publish?.issue;
     return {
-      workflows: workflows.filter((w) => !subWorkflows.has(w.metadata.name) && w.metadata.labels?.["factory.ai-dlc.io/internal"] !== "true").map(describe),
+      workflows: workflows.filter((w) => !subWorkflows.has(w.metadata.name) && w.metadata.labels?.["factory.ai-dlc.io/internal"] !== "true").map((w) => {
+        const block = ticketBlock(w);
+        return { ...describe(w), ...(block ? { publishesTicket: { target: block.targetRef?.name } } : {}) };
+      }),
       repositories: repositories.filter((r) => !!r.spec.local?.path).map(describe),
       defaults: {
         workflow: manual?.spec.defaults?.workflowRef?.name,
@@ -273,6 +281,13 @@ export class FactoryApp
       const unusable = (input.repositoryRefs ?? []).filter((r) => !options.repositories.some((o) => o.name === r));
       if (unusable.length) throw new Error(`repositories without a local checkout can't be used yet: ${unusable.join(", ")}`);
     }
+    // ADR-0077: a workflow that publishes a ticket gets its target here; a mirror would file a second, raw ticket.
+    const publishes = input.workflowRef ? (await this.newItemOptions(p)).workflows.find((w) => w.name === input.workflowRef)?.publishesTicket : undefined;
+    if (input.ticketTarget !== undefined) {
+      if (!publishes) throw new Error("a ticket target needs a workflow that publishes a ticket");
+      if (!(await this.listIssueTargets(p)).some((t) => t.source === input.ticketTarget)) throw new Error(`source "${input.ticketTarget}" does not permit creating issues`);
+    }
+    if (publishes && input.mirrorTo) throw new Error("this workflow publishes the ticket itself; choose its tracker instead of \"Also create in\"");
     return {
       apiVersion: API_VERSION,
       kind: "WorkItem",
@@ -284,6 +299,7 @@ export class FactoryApp
         sourceRef: { name: "manual" },
         workflowRef: input.workflowRef ? { name: input.workflowRef } : undefined,
         repositoryRefs: input.repositoryRefs?.length ? input.repositoryRefs.map((name) => ({ name })) : undefined,
+        ...(input.ticketTarget ? { ticketTarget: { name: input.ticketTarget } } : {}),
       },
     };
   }
@@ -543,7 +559,7 @@ export class FactoryApp
 
   async startImplementation(_p: Principal, proposalName: string, input: StartImplementationInput = {}): Promise<WorkItem> {
     const prop = await this.d.reader.get<IssueProposal>("IssueProposal", this.ns, proposalName);
-    if (!prop || prop.spec.purpose !== "follow-up") throw new StoreError(`follow-up ${proposalName} not found`, "NotFound");
+    if (!prop || (prop.spec.purpose !== "follow-up" && prop.spec.purpose !== "story")) throw new StoreError(`ticket ${proposalName} not found`, "NotFound");
     const ext = prop.status?.externalRef;
     if (prop.status?.phase !== "Created" || !ext || !prop.spec.targetRef) throw new StoreError("the ticket is not created yet", "Conflict");
     const sourceName = prop.spec.targetRef.name;
@@ -655,22 +671,45 @@ export class FactoryApp
     }, detail.conversation);
   }
 
-  async restartWorkItem(p: Principal, name: string, stage?: string): Promise<WorkItem> {
+  async restartWorkItem(p: Principal, name: string, stage?: string, options: RestartOptions = {}): Promise<WorkItem> {
+    if (options.context !== undefined && typeof options.context !== "string") throw new Error("context must be text");
     await this.assertNoActiveChecks(name);
-    for (let attempt = 0; ; attempt++) {
-      const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
-      if (!wi) throw new Error(`work item ${name} not found`);
-      if (stage) {
-        if (!wi.spec.workflowRef) throw new Error(`work item ${name} has no workflow`);
-        const wf = await this.d.compiler.compile(wi.spec.workflowRef, this.ns);
-        if (!wf.stage(stage)) throw new Error(`stage "${stage}" not found in workflow ${wi.spec.workflowRef.name}`);
+    const id = randomUUID();
+    let notes: string[] = [];
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const wi = await this.d.reader.get<WorkItem>("WorkItem", this.ns, name);
+        if (!wi) throw new Error(`work item ${name} not found`);
+        const wf = wi.spec.workflowRef ? await this.d.compiler.compile(wi.spec.workflowRef, this.ns) : undefined;
+        if (stage) {
+          if (!wf) throw new Error(`work item ${name} has no workflow`);
+          if (!wf.stage(stage)) throw new Error(`stage "${stage}" not found in workflow ${wi.spec.workflowRef!.name}`);
+        }
+        let context = wi.spec.context;
+        if (options.context !== undefined) {
+          const available = MAX_CONTEXT - (wi.spec.originSnapshot?.content.length ?? 0);
+          if (options.context.length > available) throw new Error(`context is too long (max ${available} characters alongside inherited evidence)`);
+          context = this.d.redactor.redact(options.context.trim()) || undefined;
+        }
+        // ADR-0078: mark first, so the re-run already sees the notes as submitted (same batch as the restart, ADR-0073).
+        if (options.includeDraftNotes && this.d.notes && wf && attempt === 0) {
+          const stages = wf.stages.map((s) => s.name);
+          notes = await this.d.notes.include(p, name, stages.slice(Math.max(0, stage ? stages.indexOf(stage) : 0)), id);
+        }
+        try {
+          const updated = await this.d.writer.update<WorkItem>({ ...wi, spec: { ...wi.spec, context, restart: { id, stage, requestedBy: p.id } } });
+          if (context !== wi.spec.context) await this.d.events.normal(updated, "ContextUpdated", `additional context ${context ? "updated" : "removed"} by ${p.id} with the restart`);
+          if (notes.length) await this.d.events.normal(updated, "FeedbackSubmitted", `${notes.length} note(s) by ${p.id} with the restart from ${stage ?? "the beginning"}`);
+          return updated;
+        } catch (e) {
+          // The controller may write status at the same time; re-read and try again.
+          if (!isStoreError(e, "Conflict") || attempt >= 3) throw e;
+        }
       }
-      try {
-        return await this.d.writer.update<WorkItem>({ ...wi, spec: { ...wi.spec, restart: { id: randomUUID(), stage, requestedBy: p.id } } });
-      } catch (e) {
-        // The controller may write status at the same time; re-read and try again.
-        if (!isStoreError(e, "Conflict") || attempt >= 3) throw e;
-      }
+    } catch (e) {
+      // Nothing re-runs, so the notes stay editable drafts.
+      if (notes.length) await this.d.notes?.release(notes, id).catch(() => undefined);
+      throw e;
     }
   }
 

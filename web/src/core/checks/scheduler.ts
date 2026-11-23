@@ -5,7 +5,7 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { nsOf, ownerRef } from "../model/meta.ts";
 import { SandboxUnavailableError, StoreError, isStoreError, canPrepareIsolated, type CheckRunScheduler, type ExecutionEnvironmentSelector, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type ResourceWriter, type WorkspaceJobCoordinator, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { resolveCheckConfig } from "./config.ts";
+import { rerunCheckConfig, rerunOriginal, resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 
@@ -162,7 +162,9 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
         await this.d.recoveryChecks.authorize({ item, origin, repository, workspace, check: request.check, caller, existing: existing ?? undefined });
       }
       if (existing) return existing;
-      const config = await resolveCheckConfig(repository, request.check, workspace, this.d.scopes, origin.purpose);
+      const original = origin.purpose === "rerun-failed" ? await rerunOriginal(this.d.reader, item, workspace, request.check, origin) : undefined;
+      const config = original ? rerunCheckConfig(repository, request.check, original)
+        : await resolveCheckConfig(repository, request.check, workspace, this.d.scopes, origin.purpose);
       if (this.d.redactor.redact(config.command) !== config.command) throw new StoreError("check command contains a factory secret", "Invalid");
 
       const profile = repository.spec.sandboxRef
@@ -189,6 +191,7 @@ export class WorkflowCheckScheduler implements CheckRunScheduler {
       }
 
       const snapshot = await this.d.snapshots.fingerprint(workspace);
+      if (original && original.spec.snapshot !== snapshot) throw new StoreError("a targeted re-run needs the original attempt's snapshot", "Conflict");
       const currentItem = await this.d.reader.get<WorkItem>("WorkItem", namespace, item.metadata.name);
       if (!currentItem || currentItem.metadata.uid !== item.metadata.uid || !itemMatchesOrigin(currentItem, origin)) {
         throw new StoreError("work item stage changed during check submission", "Conflict");
