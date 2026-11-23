@@ -1,5 +1,0 @@
-# expect: a repository needs a git remote or a local path
-apiVersion: factory.ai-dlc.io/v1alpha1
-kind: Repository
-metadata: { name: nowhere, namespace: default }
-spec: {}

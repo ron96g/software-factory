@@ -12,7 +12,7 @@ export interface OriginDeps { reader: ResourceReader; records: WorkItemRecordRea
 export async function originOf(d: OriginDeps, p: IssueProposal): Promise<FollowUpOrigin | null> {
   const name = p.spec.provenance?.workItem;
   const ns = p.metadata.namespace ?? DEFAULT_NAMESPACE;
-  if (p.spec.purpose !== "follow-up" || !name) return null;
+  if ((p.spec.purpose !== "follow-up" && p.spec.purpose !== "story") || !name) return null;
   if (!(await d.reader.get("WorkItem", ns, name))) return null;
   const preview = followUpPreview(await d.records.read(ns, name), "", d.redactor, d.clock.now().toISOString(), MAX_CONTEXT);
   return { originWorkItemRef: { name }, originSnapshot: preview.snapshot };
@@ -23,7 +23,7 @@ export function followUpOriginResolver(d: OriginDeps): FollowUpOriginResolver {
     async resolve(description) {
       const uid = description?.match(MARKER)?.[1];
       if (!uid) return null;
-      const p = (await d.reader.list<IssueProposal>("IssueProposal")).find((x) => x.metadata.uid === uid && x.spec.purpose === "follow-up");
+      const p = (await d.reader.list<IssueProposal>("IssueProposal")).find((x) => x.metadata.uid === uid && (x.spec.purpose === "follow-up" || x.spec.purpose === "story"));
       return p ? originOf(d, p) : null;
     },
   };

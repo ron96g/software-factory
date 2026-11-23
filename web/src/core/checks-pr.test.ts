@@ -23,6 +23,9 @@ function setup(buildResults: number[], baseSync: BaseConflictDetector & Workspac
         if (cmd.includes("npm test")) return { exitCode: 0, stdout: "29 passing" };
         if (cmd.includes("npm audit")) return { exitCode: 0, stdout: "found 0 vulnerabilities" };
         if (cmd.includes("npm run test:")) return { exitCode: 0, stdout: "2 passing" };
+        // ADR-0079: the repository's test checks report TAP.
+        if (cmd.includes("node --test")) return { exitCode: 0, stdout: ["TAP version 13", "# Subtest: works", "ok 1 - works", "  ---", "  duration_ms: 1", "  type: 'test'", "  ...",
+          "1..1", "# tests 1", "# suites 0", "# pass 1", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"].join("\n") };
         return undefined;
       },
     ],

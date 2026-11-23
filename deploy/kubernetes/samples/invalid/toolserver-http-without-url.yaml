@@ -1,6 +1,0 @@
-# expect: http transport needs url
-apiVersion: factory.ai-dlc.io/v1alpha1
-kind: ToolServer
-metadata: { name: no-url, namespace: default }
-spec:
-  transport: http

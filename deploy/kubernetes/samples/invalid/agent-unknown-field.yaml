@@ -1,8 +1,0 @@
-# expect: unknown field "spec.vendorModel"
-apiVersion: factory.ai-dlc.io/v1alpha1
-kind: Agent
-metadata: { name: unknown-field, namespace: default }
-spec:
-  role: tester
-  body: "x"
-  vendorModel: gpt

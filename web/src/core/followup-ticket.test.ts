@@ -53,17 +53,18 @@ test("ADR-0076: without an LLM, drafting returns the template in one recorded dr
     const item = await f.app.createWorkItem(p, { title: "Spec key order", description: "Keys are reordered on the Playground." });
     const name = item.metadata.name;
     const instructions = "We MUST keep the author's key order";
-    // Wait until the controllers have settled the item, so the reviewed revision stays current.
-    let preview = await f.app.previewWorkItemFollowUp(p, name, instructions);
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      const next = await f.app.previewWorkItemFollowUp(p, name, instructions);
-      if (next.revision === preview.revision) break;
-      preview = next;
-    }
-    const base = { expectedRevision: preview.revision, instructions, targetSource: "jira-main", title: "Keep key order" };
-
-    const first = await f.app.draftFollowUpTicket(p, name, base);
+    // The controllers keep working on the item, so a reviewed revision can go stale; like the dialog, refresh and retry.
+    const fresh = async <T>(call: (expectedRevision: string) => Promise<T>): Promise<T> => {
+      for (let i = 0; ; i++) {
+        const { revision } = await f.app.previewWorkItemFollowUp(p, name, instructions);
+        try { return await call(revision); } catch (e) {
+          if (i >= 20 || !/Refresh/.test(String(e))) throw e;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+    };
+    const base = { instructions, targetSource: "jira-main", title: "Keep key order" };
+    const first = await fresh((expectedRevision) => f.app.draftFollowUpTicket(p, name, { ...base, expectedRevision }));
     assert.equal(first.draftedBy, "template");
     assert.match(first.reason ?? "", /No LLM/);
     assert.match(first.body, /## Requirements[\s\S]*MUST keep[\s\S]*## Background[\s\S]*Keys are reordered/);
@@ -74,7 +75,7 @@ test("ADR-0076: without an LLM, drafting returns the template in one recorded dr
     assert.equal(conv?.metadata.ownerReferences?.[0].name, name);
 
     const edited = `${first.body}\n\n## Acceptance criteria\n1. **Given** a spec, **when** it is downloaded, **then** the key order is unchanged.`;
-    const again = await f.app.draftFollowUpTicket(p, name, { ...base, conversation: first.conversation, previous: { title: "Keep spec key order", body: edited }, feedback: "shorter" });
+    const again = await fresh((expectedRevision) => f.app.draftFollowUpTicket(p, name, { ...base, expectedRevision, conversation: first.conversation, previous: { title: "Keep spec key order", body: edited }, feedback: "shorter" }));
     assert.equal(again.conversation, first.conversation);
     assert.equal(again.body, edited, "without an LLM a redraft keeps the human's edits");
     const transcript = await f.app.conversationMessages(p, first.conversation);
@@ -82,16 +83,16 @@ test("ADR-0076: without an LLM, drafting returns the template in one recorded dr
     assert.match(transcript[0].content, /Evidence from the investigation[\s\S]*Keys are reordered/);
 
     await assert.rejects(f.app.draftFollowUpTicket(p, name, { ...base, expectedRevision: "stale" }), /Refresh/);
-    await assert.rejects(f.app.draftFollowUpTicket(p, name, { ...base, conversation: "nope" }), /does not belong/);
-    await assert.rejects(f.app.draftFollowUpTicket(p, name, { ...base, targetSource: "jira-servicedesk" }), /does not permit creating issues/);
+    await assert.rejects(fresh((expectedRevision) => f.app.draftFollowUpTicket(p, name, { ...base, expectedRevision, conversation: "nope" })), /does not belong/);
+    await assert.rejects(f.app.draftFollowUpTicket(p, name, { ...base, expectedRevision: "any", targetSource: "jira-servicedesk" }), /does not permit creating issues/);
 
-    const create = { requestId: "d1", expectedRevision: preview.revision, title: again.title, instructions, body: edited, draftConversation: first.conversation, targetSource: "jira-main" };
-    const proposal = await f.app.createFollowUpTicket(p, name, create);
+    const create = { requestId: "d1", title: again.title, instructions, body: edited, draftConversation: first.conversation, targetSource: "jira-main" };
+    const proposal = await fresh((expectedRevision) => f.app.createFollowUpTicket(p, name, { ...create, expectedRevision }));
     assert.ok(proposal.spec.body.startsWith(edited));
     assert.match(proposal.spec.body, new RegExp(`## Origin[\\s\\S]*Factory work item: ${name}`));
     assert.equal(proposal.spec.provenance?.draftedBy, undefined, "a template-only conversation is not agent provenance");
     assert.equal(proposal.spec.review?.contentHash, issueContentHash(proposal.spec));
-    await assert.rejects(f.app.createFollowUpTicket(p, name, { ...create, body: "other" }), /different follow-up input/);
+    await assert.rejects(f.app.createFollowUpTicket(p, name, { ...create, expectedRevision: proposal.spec.revision!, body: "other" }), /different follow-up input/);
   } finally { await f.stop(); }
 });
 

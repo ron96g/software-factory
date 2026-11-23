@@ -71,3 +71,28 @@ test("ADR-0068: click-created follow-ups need item, name, owner, revision and a 
   assert.match((await run(agent, [src(true), w])).join(), /agents cannot create approved/);
   assert.notEqual(issueContentHash(ok.spec), issueContentHash({ ...ok.spec, revision: "rev2" }));
 });
+
+test("ADR-0077: a story ticket is bound to an approved gate decision and the exact draft that existed then", async () => {
+  const owner = [{ apiVersion: "factory.ai-dlc.io/v1", kind: "WorkItem", name: "w", uid: "u" }];
+  const approval = (decision?: "approve" | "reject", at = "2026-11-20T10:00:00Z") => ({ kind: "Approval", metadata: { name: "w-story-review-r3", namespace: "default", creationTimestamp: at }, spec: { workItemRef: { name: "w" }, stage: "story-review", decision, decidedBy: "alice" } });
+  const draft = (at = "2026-11-20T09:00:00Z") => ({ kind: "Artifact", metadata: { name: "d1", namespace: "default", uid: "a1", resourceVersion: "7", creationTimestamp: at }, spec: { workItemRef: { name: "w" } } });
+  const story = (name = "w-ticket", by = "alice", provenance: IssueProposal["spec"]["provenance"] = { human: true, proposedBy: by, workItem: "w", approval: "w-story-review-r3", artifact: { name: "d1", uid: "a1", resourceVersion: "7" } }) => {
+    const p = prop({ purpose: "story", targetRef: { name: "jira" }, provenance }, name);
+    p.metadata.ownerReferences = owner as never;
+    p.spec.review = { decision: "approve", by, contentHash: issueContentHash(p.spec) };
+    return p;
+  };
+  const w = { ...item(), metadata: { name: "w", namespace: "default" } };
+  assert.deepEqual(await run(story(), [src(true), w, approval("approve"), draft()]), []);
+  assert.match((await run(story("other"), [src(true), w, approval("approve"), draft()])).join(), /w-ticket/);
+  assert.match((await run(story(), [src(true), w, approval("reject"), draft()])).join(), /approved gate decision/);
+  assert.match((await run(story("w-ticket", "mallory"), [src(true), w, approval("approve"), draft()])).join(), /on behalf of the human who decided the gate/);
+  const superseded = approval("approve");
+  (superseded.metadata as Record<string, unknown>).labels = { "factory.ai-dlc.io/superseded": "true" };
+  assert.match((await run(story(), [src(true), w, superseded, draft()])).join(), /current approved gate decision/);
+  assert.match((await run(story(), [src(true), w, approval("approve"), { ...draft(), metadata: { ...draft().metadata, resourceVersion: "8" } }])).join(), /exact draft version/);
+  assert.match((await run(story(), [src(true), w, approval("approve"), draft("2026-11-20T11:00:00Z")])).join(), /written after the approval/);
+  const tampered = story();
+  tampered.spec.body = "changed after the hash";
+  assert.match((await run(tampered, [src(true), w, approval("approve"), draft()])).join(), /does not match the story ticket content/);
+});

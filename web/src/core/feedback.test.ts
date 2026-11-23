@@ -166,3 +166,28 @@ test("drafts on a replaced artifact are flagged, with whether the passage is sti
   const views = feedbackViews([note("kept", "v1", "Old plan text"), note("gone", "v1", "Removed passage"), note("fresh", "v2", "stays")], [], artifacts);
   assert.deepEqual(views.map((v) => v.outdated), [{ current: "v2", quoteFound: true }, { current: "v2", quoteFound: false }, undefined]);
 });
+
+test("ADR-0078: a restart carries new additional context and the draft notes on re-run stages, in the restart's batch", async () => {
+  const { f, name, prompts, until, detail, atGate } = await setup();
+  try {
+    await until(atGate, "spec-review gate");
+    const d = await detail();
+    const spec = d.artifacts.find((a) => a.spec.artifactTypeRef.name === "spec")!;
+    const triage = d.artifacts.find((a) => a.spec.artifactTypeRef.name === "triage-decision")!;
+    const specStage = d.runs.find((r) => r.metadata.name === spec.spec.producedBy!.agentRunRef.name)!.spec.stage;
+    const onSpec = await f.app.addFeedback(p, name, { artifact: spec.metadata.name, quote: "Users log in with a password.", comment: "Use SSO." });
+    const onTriage = await f.app.addFeedback(p, name, { artifact: triage.metadata.name, quote: "Users log in with a password.", comment: "Earlier stage." });
+    const before = prompts.length;
+
+    const restarted = await f.app.restartWorkItem(p, name, specStage, { context: "Secrets only in one configured namespace.", includeDraftNotes: true });
+    assert.equal(restarted.spec.context, "Secrets only in one configured namespace.");
+    const notes = (await detail()).feedback.map((v) => v.feedback);
+    assert.equal(notes.find((n) => n.metadata.name === onSpec.metadata.name)?.spec.submitted?.id, restarted.spec.restart!.id);
+    assert.equal(notes.find((n) => n.metadata.name === onTriage.metadata.name)?.spec.submitted, undefined, "notes on stages that don't re-run stay drafts");
+    await until(async () => prompts.slice(before).some((x) => x.includes("Secrets only in one configured namespace.") && x.includes("Use SSO.")), "re-run sees context and note");
+    await assert.rejects(f.app.restartWorkItem(p, name, "no-such-stage", { includeDraftNotes: true }), /not found/);
+    assert.equal((await detail()).feedback.find((v) => v.feedback.metadata.name === onTriage.metadata.name)?.feedback.spec.submitted, undefined);
+  } finally {
+    await f.stop();
+  }
+});

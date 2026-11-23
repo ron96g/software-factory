@@ -5,16 +5,18 @@ export const dynamic = "force-dynamic";
 export const GET = handler(({ p, f }) => f.app.listWorkItems(p));
 
 export const POST = handler(async ({ req, p, f }) => {
-  const { title, description, context, workflowRef, repositoryRefs, mirrorTo } = (await req.json()) as {
+  const { title, description, context, workflowRef, repositoryRefs, mirrorTo, ticketTarget } = (await req.json()) as {
     title: string;
     description?: string;
     context?: string;
     workflowRef?: string;
     repositoryRefs?: string[];
     mirrorTo?: string;
+    ticketTarget?: string;
   };
   if (repositoryRefs !== undefined && (!Array.isArray(repositoryRefs) || repositoryRefs.some((r) => typeof r !== "string"))) {
     throw new Error("repositoryRefs must be a list of names");
   }
-  return f.app.createWorkItem(p, { title, description, context: typeof context === "string" ? context : undefined, workflowRef: workflowRef || undefined, repositoryRefs, mirrorTo: mirrorTo || undefined });
+  return f.app.createWorkItem(p, { title, description, context: typeof context === "string" ? context : undefined, workflowRef: workflowRef || undefined, repositoryRefs, mirrorTo: mirrorTo || undefined,
+    ticketTarget: typeof ticketTarget === "string" && ticketTarget ? ticketTarget : undefined });
 });

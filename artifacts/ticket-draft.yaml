@@ -1,0 +1,16 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: ticket-draft }
+spec:
+  format: json
+  description: A tracker ticket ready for human review and publication (ADR-0077). The body follows the ticket-writing skill.
+  schema:
+    version: "1"
+    jsonSchema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      additionalProperties: false
+      required: [title, body]
+      properties:
+        title: { type: string, minLength: 5, maxLength: 120, pattern: '\S' }
+        body: { type: string, minLength: 50, maxLength: 12000, pattern: '\S' }

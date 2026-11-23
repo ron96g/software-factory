@@ -18,7 +18,9 @@ const resolutionKey = (r: NonNullable<IssueProposal["spec"]["resolution"]>) => `
 /** ADR-0066: owns IssueProposal.status. Claim before effect; the outbox performs the single POST. */
 export function createIssueProposalController(d: { reader: ResourceReader; status: StatusWriter; events: EventRecorder; clock: Clock; outbox: Outbox; connectors: Lookup<SourceConnector>; workItems?: ResourceWriter }): Controller & InitialKeys {
   const linkPending = (p: IssueProposal) => p.spec.purpose === "follow-up" && !p.status?.conditions?.some((c) => c.type === "Linked");
-  const trackable = (p: IssueProposal) => p.spec.purpose === "follow-up" && p.status?.tracked?.open !== false && !!p.status?.externalRef?.externalId;
+  /** Tickets created for a work item's later implementation (ADR-0068, ADR-0077). */
+  const tracksTicket = (p: IssueProposal) => p.spec.purpose === "follow-up" || p.spec.purpose === "story";
+  const trackable = (p: IssueProposal) => tracksTicket(p) && p.status?.tracked?.open !== false && !!p.status?.externalRef?.externalId;
   const phaseOk = (p: IssueProposal) => p.status?.phase === "Created" ? (p.spec.purpose === "mirror" && !isLinked(p)) || linkPending(p) || trackable(p) : true;
   /** ADR-0068: read-only refresh of the created ticket, at most once per Source pollInterval; stops when the tracker reports it closed. */
   async function track(p: IssueProposal, st: IssueProposalStatus, write: (n: IssueProposalStatus, r?: string, m?: string, w?: boolean) => Promise<void>) {
@@ -124,7 +126,7 @@ export function createIssueProposalController(d: { reader: ResourceReader; statu
         }
         if (st.phase === "Created" && linkPending(p)) return await linkOrigin(p, st, write);
         if (st.phase === "Created" && p.spec.purpose === "mirror" && d.workItems && !isLinked(p)) return await linkMirror(p, st, write);
-        if (st.phase === "Created" && p.spec.purpose === "follow-up") return await track(p, st, write);
+        if (st.phase === "Created" && tracksTicket(p)) return await track(p, st, write);
         if (st.phase === "Created" || st.phase === "Uncertain" || st.phase === "Failed") return;
         if (st.phase !== "Creating") {
           if (p.spec.review?.decision === "reject") return st.phase === "Rejected" ? undefined : await write({ phase: "Rejected" }, "IssueRejected", "rejected");
