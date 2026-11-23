@@ -5,6 +5,7 @@ import type { WorkItemDetail } from "@/core/ports/app.ts";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import PlanningWorkspace from "./planning-workspace.tsx";
 import { CheckRunsPanel } from "./check-runs.tsx";
+import { ItemMetricsPanel } from "./item-metrics.tsx";
 import { PullRequestPanel } from "./pull-request-panel.tsx";
 import { RetrospectivePanel } from "./retrospectives.tsx";
 import { TicketActionsPanel } from "./ticket-actions.tsx";
@@ -49,6 +50,8 @@ export const ITEM_PANELS: ItemPanel[] = [
     render: (ctx) => <VerificationContractPanel key={key(ctx, "verification")} item={ctx.detail.workItem} /> },
   { id: "checks", region: "operational", order: 20, requires: ["checks"],
     render: (ctx) => <CheckRunsPanel key={key(ctx, "checks")} item={ctx.detail.workItem} /> },
+  { id: "item-metrics", region: "operational", order: 30, requires: [],
+    render: (ctx) => <ItemMetricsPanel key={key(ctx, "metrics")} item={ctx.detail.workItem} /> },
 ];
 
 /** The panels of a region that apply to this item, in order. */

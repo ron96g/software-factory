@@ -1,5 +1,5 @@
 import type { ModelProvider } from "../../model/kinds.ts";
-import { ModelUnavailableError, type CompletionRequest, type LLMClient, type LLMClientFactory, type ToolCall, type ToolCallingLLM, type ToolLoopMessage, type ToolSchema } from "../../ports/index.ts";
+import { ModelUnavailableError, type CompletionRequest, type LLMClient, type LLMClientFactory, type ToolCall, type ToolCallingLLM, type ToolLoopMessage, type ToolSchema, type TokenUsage } from "../../ports/index.ts";
 
 type Fetch = typeof fetch;
 
@@ -70,9 +70,18 @@ export class OpenAICompatibleClient implements LLMClient, ToolCallingLLM {
     const msg = (r.choices as { message: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[])[0]
       .message;
     const toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, arguments: safeJson(c.function.arguments) }));
-    return { text: msg.content ?? undefined, toolCalls };
+    return { text: msg.content ?? undefined, toolCalls, usage: openAIUsage(r.usage) };
   }
 }
+
+/** ADR-0052: the OpenAI-compatible `usage` block (absent on some gateways). */
+const openAIUsage = (u: unknown): TokenUsage | undefined => {
+  const v = u as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+  if (!v || typeof v.prompt_tokens !== "number") return undefined;
+  const prompt = v.prompt_tokens ?? 0;
+  const completion = v.completion_tokens ?? 0;
+  return { prompt, completion, total: v.total_tokens ?? prompt + completion };
+};
 
 const safeJson = (s: string): Record<string, unknown> => {
   try {
@@ -136,9 +145,11 @@ export class AnthropicClient implements LLMClient, ToolCallingLLM {
       tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
     });
     const content = (r.content as { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]) ?? [];
+    const u = r.usage as { input_tokens?: number; output_tokens?: number } | undefined;
     return {
       text: content.filter((c) => c.type === "text").map((c) => c.text).join("") || undefined,
       toolCalls: content.filter((c) => c.type === "tool_use").map((c) => ({ id: c.id!, name: c.name!, arguments: c.input ?? {} })),
+      usage: u && typeof u.input_tokens === "number" ? { prompt: u.input_tokens, completion: u.output_tokens ?? 0, total: u.input_tokens + (u.output_tokens ?? 0) } : undefined,
     };
   }
 }
@@ -212,7 +223,8 @@ export class GoogleClient implements LLMClient, ToolCallingLLM {
     const toolCalls: ToolCall[] = parts
       .filter((p) => p.functionCall)
       .map((p, i) => ({ id: `google-call-${i}-${p.functionCall!.name}`, name: p.functionCall!.name, arguments: p.functionCall!.args ?? {} }));
-    return { text, toolCalls };
+    const u = r.usageMetadata as { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | undefined;
+    return { text, toolCalls, usage: u && typeof u.promptTokenCount === "number" ? { prompt: u.promptTokenCount, completion: u.candidatesTokenCount ?? 0, total: u.totalTokenCount ?? u.promptTokenCount + (u.candidatesTokenCount ?? 0) } : undefined };
   }
 }
 

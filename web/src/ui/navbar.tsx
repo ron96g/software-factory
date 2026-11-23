@@ -7,6 +7,7 @@ import {
   IconBulb,
   IconBox,
   IconBrain,
+  IconChartBar,
   IconCloudDownload,
   IconFileDescription,
   IconFolderCode,
@@ -42,6 +43,7 @@ const SECTIONS: { title: string; entries: Entry[] }[] = [
       { label: "Knowledge", href: "/knowledge", icon: IconBulb, kind: "KnowledgeEntry" },
       { label: "Issues", href: "/resources/issueproposals", icon: IconFileDescription, kind: "IssueProposal" },
       { label: "Retrospectives", href: "/retrospectives", icon: IconRoute, kind: "RetrospectiveFeedback" },
+      { label: "Metrics", href: "/metrics", icon: IconChartBar },
     ],
   },
   {

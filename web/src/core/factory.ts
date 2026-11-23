@@ -69,6 +69,9 @@ import { DefaultModelProxy } from "./agents/model-proxy.ts";
 import { InMemoryModelTokens } from "./adapters/model-proxy/tokens.ts";
 import { createModelProxyHttpHandler } from "./adapters/model-proxy/http.ts";
 import { DefaultRuntimeModelAccess } from "./adapters/model-proxy/runtime-access.ts";
+import { TranscriptMetrics } from "./metrics/transcript-metrics.ts";
+import { DefaultModelPricing, type PriceSchedule } from "./metrics/pricing.ts";
+import { PrometheusMetricsExporter } from "./metrics/prometheus.ts";
 import { DefaultEgressProxy } from "./adapters/egress/proxy.ts";
 import { fetchUrlTool } from "./agents/egress-tool.ts";
 import { ExplainResponder } from "./agents/explain-responder.ts";
@@ -284,6 +287,10 @@ export async function createFactory(o: FactoryOptions) {
   const retrospectiveAggregation = new DefaultRetrospectiveAggregation(store, clock, o.retrospectivePolicy ?? DEFAULT_RETROSPECTIVE_POLICY);
   const retrospectiveReview = new RetrospectiveReview(store);
   const retrospectives = new RetrospectiveActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, aggregation: retrospectiveAggregation, clock, redactor, events });
+  // ADR-0082: factory metrics derived from transcripts and resources. The price schedule is optional and comes from
+  // configuration — with none, cost is omitted, never guessed.
+  const metrics = new TranscriptMetrics({ reader: store, transcripts, pricing: new DefaultModelPricing(parsePriceSchedule((o.env ?? process.env).FACTORY_MODEL_PRICES)), namespace: DEFAULT_NAMESPACE });
+  const metricsExport = new PrometheusMetricsExporter(metrics);
 
   // ── models, tools, skills ────────────────────────────────────────────
   const llmFactories = new Registry<LLMClientFactory>();
@@ -704,6 +711,10 @@ export async function createFactory(o: FactoryOptions) {
     modelProxy,
     /** Issues/revokes run-scoped model tokens for the proxy. */
     modelTokens,
+    /** ADR-0082: factory metrics (tools, tokens, agent/tool time, checks, cost). */
+    metrics,
+    /** ADR-0082: Prometheus/OpenMetrics export of the metrics, for Grafana scraping. */
+    metricsExport,
     /** The exposed tool catalog (also used by tests). */
     exposedTools,
     /** Notification center history (ADR-0069). */
@@ -737,3 +748,17 @@ export async function createFactory(o: FactoryOptions) {
 }
 
 export type Factory = Awaited<ReturnType<typeof createFactory>>;
+
+/** ADR-0052: an optional, operator-provided price schedule (JSON in `FACTORY_MODEL_PRICES`). Absent/invalid → none. */
+function parsePriceSchedule(raw: string | undefined): PriceSchedule | undefined {
+  if (!raw) return undefined;
+  try {
+    const v = JSON.parse(raw) as Partial<PriceSchedule>;
+    if (typeof v.version !== "string" || typeof v.source !== "string" || !Array.isArray(v.prices)) return undefined;
+    const prices = v.prices.filter((p): p is PriceSchedule["prices"][number] =>
+      !!p && typeof p.prefix === "string" && typeof p.prompt === "number" && typeof p.completion === "number");
+    return prices.length ? { version: v.version, source: v.source, prices } : undefined;
+  } catch {
+    return undefined;
+  }
+}

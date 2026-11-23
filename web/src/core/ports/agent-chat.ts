@@ -1,6 +1,6 @@
 import type { Agent, AgentRun, Approval, Artifact, Clarification, Conversation, FactoryEvent, InlineFeedback, WorkItem } from "../model/kinds.ts";
 import type { NewWorkItemInput, Principal } from "./app.ts";
-import type { BoundTool, ResolvedModel, ToolCall, ToolLoopMessage, ToolSchema } from "./integration.ts";
+import type { BoundTool, ResolvedModel, ToolCall, ToolLoopMessage, ToolSchema, TokenUsage } from "./integration.ts";
 import type { TranscriptMessage, TranscriptRecorder } from "./transcripts.ts";
 
 export interface AgentChatDetail {
@@ -50,7 +50,7 @@ export interface RecordedToolTurns {
     transcript: TranscriptRecorder; agent: string; step: number; turnId?: string;
     /** False when the caller uses an explicit completion protocol instead of plain text. */
     finalText?: boolean;
-  }): Promise<{ text?: string; toolCalls: ToolCall[] }>;
+  }): Promise<{ text?: string; toolCalls: ToolCall[]; usage?: TokenUsage }>;
   invoke(input: {
     call: ToolCall; tool?: BoundTool; transcript: TranscriptRecorder;
     agent: string; step: number; turnId?: string;

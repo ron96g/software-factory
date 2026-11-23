@@ -162,7 +162,14 @@ export type ToolLoopMessage =
   | { role: "tool"; toolCallId: string; name: string; content: string };
 
 export interface ToolCallingLLM {
-  completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }): Promise<{ text?: string; toolCalls: ToolCall[] }>;
+  completeWithTools(req: { messages: ToolLoopMessage[]; tools: ToolSchema[]; tier?: string }): Promise<{ text?: string; toolCalls: ToolCall[]; usage?: TokenUsage }>;
+}
+
+/** Provider-reported token usage for one model call (ADR-0052). Missing means the provider did not report it. */
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
 }
 
 /** Tool calling is an optional client capability (ISP), detected at runtime. */

@@ -14,7 +14,9 @@ export class DefaultRecordedToolTurns implements RecordedToolTurns {
     await transcript.record({
       role: "assistant", author: { type: "agent", id: agent },
       content: reply.text ?? (reply.toolCalls.length ? "" : "(empty)"),
-      meta: { step, turnId, latencyMs: Date.now() - started, model: model.model, toolCalls: reply.toolCalls.map((c) => c.name), final: input.finalText !== false && !reply.toolCalls.length && !!reply.text?.trim() },
+      meta: { step, turnId, latencyMs: Date.now() - started, model: model.model, toolCalls: reply.toolCalls.map((c) => c.name),
+        ...(reply.usage ? { tokens: { prompt: reply.usage.prompt, completion: reply.usage.completion, total: reply.usage.total } } : {}),
+        final: input.finalText !== false && !reply.toolCalls.length && !!reply.text?.trim() },
     });
     return reply;
   }
@@ -22,6 +24,7 @@ export class DefaultRecordedToolTurns implements RecordedToolTurns {
   async invoke(input: Parameters<RecordedToolTurns["invoke"]>[0]): Promise<string> {
     const { call, tool, transcript, agent, step, turnId } = input;
     await transcript.record({ role: "tool-call", author: { type: "agent", id: agent }, content: JSON.stringify(call.arguments), meta: { tool: call.name, step, turnId } });
+    const started = Date.now();
     let result: string;
     try {
       result = tool ? await tool.invoke(call.arguments) : `error: unknown or disallowed tool "${call.name}"`;
@@ -31,7 +34,7 @@ export class DefaultRecordedToolTurns implements RecordedToolTurns {
     const marker = parseMarker(result);
     await transcript.record({
       role: "tool-result", author: { type: "system", id: "tool-loop" }, content: result,
-      meta: { tool: call.name, step, turnId, truncated: marker ? { omitted: marker.omitted, next: marker.next } : false },
+      meta: { tool: call.name, step, turnId, latencyMs: Date.now() - started, truncated: marker ? { omitted: marker.omitted, next: marker.next } : false },
     });
     return result;
   }

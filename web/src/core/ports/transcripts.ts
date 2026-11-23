@@ -24,7 +24,7 @@ export interface TranscriptMessage {
   meta?: {
     tool?: string;
     delegatedRunRef?: Ref;
-    tokens?: { prompt?: number; completion?: number };
+    tokens?: { prompt?: number; completion?: number; total?: number };
     latencyMs?: number;
     [key: string]: unknown;
   };
