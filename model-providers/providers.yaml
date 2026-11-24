@@ -58,3 +58,22 @@ spec:
     reasoning: gemini-4-neon
     coding: gemini-4-neon
     fast: gemini-3.8-flash
+---
+# OpenRouter: one key for many vendors through an OpenAI-compatible endpoint. Model IDs are `vendor/model`
+# (https://openrouter.ai/models); any model the catalogue offers can be mapped to a tier or to a single agent (ADR-0028).
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openrouter
+spec:
+  type: openai-compatible
+  baseUrl: https://openrouter.ai/api/v1
+  secretRef: { name: openrouter-api-key }   # OPENROUTER_API_KEY
+  models:
+    reasoning: anthropic/claude-opus-5.5
+    coding: anthropic/claude-sonnet-5.5
+    fast: google/gemini-3.8-flash
+  # Broker default is off: set `default: true` to prefer this provider over the others when several keys resolve.
+  # ADR-0028: optional per-agent models, e.g.
+  # agentModels:
+  #   reviewer: openai/gpt-6.2-astra-pro

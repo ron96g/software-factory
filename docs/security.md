@@ -662,6 +662,7 @@ enforces what the profiles declare, and P2 (ADR-0080) moves the execution plane.
 | P1-2 | Enforce `SandboxProfile.resources` where the runtime can; refuse otherwise | SEC-9 |
 | P1-3 | Host process execution is declared per tool server (`ToolServer.spec.hostExecution`, ADR-0080 §12) and `http` traffic to tool servers goes through the egress proxy | SEC-12 |
 | P1-4 | Sensitive-at-rest treatment for the store (encryption, retention), provenance for tool reads | SEC-11 |
+| P1-5 | Review evidence runs a **pinned** `ocr` (version + checksum in the runtime toolchain, recorded in provenance) inside the runtime, with rules from a factory-controlled path (`--rule`), never the candidate-resident `.opencodereview/rule.json` | ADR-0083 (rules), SEC-2 (untrusted config) |
 
 ### P2 — move the execution plane (the structural fix)
 

@@ -79,6 +79,19 @@ test("only pull-request deliveries notify, linking to the PR; syncs only with ne
   assert.equal((await classifier.classify(await latest()))?.title, "New work items");
 });
 
+test("X63: a check that produced no evidence notifies; an ordinary failure stays in the timeline", async () => {
+  const { classifier, events, latest, child } = await setup();
+  await events.warning(child("CheckRun", "check-1"), "CheckCompleted", "UnknownFailure: security-scan: UnknownFailure (exit 1 in 900 ms)");
+  assert.equal(await classifier.classify(await latest()), null, "a real failure is not a tooling gap");
+  await events.warning(child("CheckRun", "check-2"), "CheckCompleted", "Unavailable: review-scope: Unavailable (exit 127 in 12 ms)");
+  const n = await classifier.classify(await latest());
+  assert.equal(n?.severity, "problem");
+  assert.equal(n?.category, "checks");
+  assert.equal(n?.title, "A check could not run");
+  assert.equal(n?.link, "/items/wi-1");
+  assert.match(n!.message, /^Fix login: review-scope: Unavailable/, "the outcome prefix is stripped and the item is named");
+});
+
 test("the feed lists notifications newest first, from `since` (inclusive), up to `limit`", async () => {
   const { feed, events, wi, latest } = await setup();
   await events.normal(wi, "Blocked", "a");

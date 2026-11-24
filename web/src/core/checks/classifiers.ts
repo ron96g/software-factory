@@ -156,9 +156,75 @@ export const npmAuditJsonClassifier: CheckResultClassifier & FindingExtractor = 
   },
 };
 
+/** The delegate JSON contract this classifier understands; a different version is never guessed at. */
+const delegatePreviewSchemaVersion = "1";
+const delegateModes = new Set(["workspace", "range", "commit"]);
+
+interface DelegatePreview {
+  schema_version?: unknown;
+  mode?: unknown;
+  total_files?: unknown;
+  reviewable_count?: unknown;
+  excluded_count?: unknown;
+  reviewable_files?: unknown;
+  excluded_files?: unknown;
+}
+
+interface ReviewScope {
+  mode: string;
+  totalFiles: number;
+  reviewable: number;
+  excluded: number;
+}
+
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const paths = (value: unknown): value is { path: string }[] =>
+  Array.isArray(value) && value.every((file) => !!file && typeof file === "object" && typeof (file as { path?: unknown }).path === "string");
+
+/** Parses `ocr delegate preview --format json`; undefined whenever the output cannot be trusted as a scope. */
+export function parseReviewScope(result: ExecResult): ReviewScope | undefined {
+  if (result.truncated) return undefined;
+  let doc: unknown;
+  try { doc = JSON.parse(result.stdout); } catch { return undefined; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return undefined;
+  const preview = doc as DelegatePreview;
+  if (preview.schema_version !== delegatePreviewSchemaVersion) return undefined;
+  if (typeof preview.mode !== "string" || !delegateModes.has(preview.mode)) return undefined;
+  const { total_files: total, reviewable_count: reviewable, excluded_count: excluded } = preview;
+  if (!count(total) || !count(reviewable) || !count(excluded)) return undefined;
+  if (!paths(preview.reviewable_files) || !paths(preview.excluded_files)) return undefined;
+  // The report must account for every changed file; a self-inconsistent one is not evidence.
+  if (reviewable + excluded !== total || preview.reviewable_files.length !== reviewable || preview.excluded_files.length !== excluded) return undefined;
+  return { mode: preview.mode, totalFiles: total, reviewable, excluded };
+}
+
+/**
+ * ADR-0083: OpenCodeReview delegation mode (`ocr delegate preview --format json`). Deterministic file selection with
+ * an exclusion reason per file, no LLM and no OCR provider config. The outcome asserts that the review scope was
+ * determined against the pinned base commit — never that the review found nothing. A missing CLI or unparseable
+ * output is a policy gap, not a pass (ADR-0042).
+ */
+export const ocrDelegatePreviewClassifier: CheckResultClassifier = {
+  format: "ocr-delegate-preview",
+  classify(result) {
+    const terminated = terminationOutcome(result);
+    if (terminated) return terminated;
+    if (result.exitCode !== 0) {
+      // The CLI is not installed in this runtime: an actionable outcome instead of a generic failure. Deliberately
+      // narrower than "not found" so a real git/tool error stays a failure.
+      return result.exitCode === 127 || /ocr: (command )?not found/i.test(result.stderr) ? "Unavailable" : "UnknownFailure";
+    }
+    const scope = parseReviewScope(result);
+    if (!scope) return "NotVerified";
+    // A base that compared nothing, or a change set with nothing reviewable, would make the scope evidence of nothing.
+    return scope.totalFiles > 0 && scope.reviewable > 0 ? "Passed" : "NotVerified";
+  },
+};
+
 export function registerCheckResultClassifiers(registrar: Registrar<CheckResultClassifier>): void {
   registrar.register(exitCodeClassifier.format, exitCodeClassifier);
   registrar.register(goTestJsonClassifier.format, goTestJsonClassifier);
   registrar.register(nodeTestTapClassifier.format, nodeTestTapClassifier);
   registrar.register(npmAuditJsonClassifier.format, npmAuditJsonClassifier);
+  registrar.register(ocrDelegatePreviewClassifier.format, ocrDelegatePreviewClassifier);
 }

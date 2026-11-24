@@ -64,7 +64,7 @@ tools/        validate.py: checks schemas + resolves every reference
 ```bash
 cd web
 npm install
-cp .env.example .env.local   # optional: OPENAI_API_KEY / ANTHROPIC_API_KEY / GITHUB_TOKEN
+cp .env.example .env.local   # optional: OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY / GITHUB_TOKEN
 npm run dev                  # http://127.0.0.1:3000 (loopback; set FACTORY_HOST to expose, behind auth)
 npm test                     # node:test, store + control plane + agent pipeline
 npm run typecheck

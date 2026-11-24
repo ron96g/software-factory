@@ -43,6 +43,12 @@ export function registerNotificationRules(r: Registrar<NotificationRule>): void 
   add("WorkItem", "AgentRunFailed", rule("problem", "failed", "Agent run failed"));
   add("WorkItem", "LoopExhausted", rule("problem", "loop", "Review loop exhausted"));
   add("WorkItem", "RecoveryExhausted", rule("problem", "failed", "Automatic recovery exhausted"));
+  // ADR-0042/ADR-0083: a check that produced no evidence at all (missing tooling, no runtime) is worth telling a
+  // human even when no policy gates on it. Ordinary failures stay in the timeline.
+  add("CheckRun", "CheckCompleted", rule("problem", "checks", "A check could not run", {
+    when: (e) => e.spec.message.startsWith("Unavailable"),
+    message: (e) => e.spec.message.replace(/^Unavailable:\s*/, ""),
+  }));
   add("AgentRun", "ModelUnavailable", rule("problem", "quota", "Waiting for model quota"));
   add("*", "ReconcileFailing", rule("problem", "controller", "Control loop failing"));
   for (const reason of ["DeliveryBlocked", "DeliveryFailed"]) add("OutboxMessage", reason, rule("problem", "write-back", "Write-back failed"));
