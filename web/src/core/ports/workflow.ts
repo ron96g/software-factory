@@ -32,6 +32,14 @@ export interface CompiledWorkflow {
   next(name: string): CompiledStage | undefined;
 }
 
+/** ADR-0084: progress of a stage's publication block; level-triggered, so asking again is safe. */
+export type PublicationProgress = { state: "pending" } | { state: "published"; message?: string } | { state: "blocked"; reason: string };
+
+/** A stage `publish` block other than the built-in pull request, registered by its key (e.g. `issue`). */
+export interface StagePublisher {
+  publish(workItem: WorkItem, stage: CompiledStage): Promise<PublicationProgress>;
+}
+
 export interface WorkflowCompiler {
   /** Resolves `ref` from `namespace` (falling back to factory-system, ADR-0011). */
   compile(ref: Ref, namespace: string): Promise<CompiledWorkflow>;

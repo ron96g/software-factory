@@ -9,8 +9,10 @@ import {
   type CandidateCompleteness, type CandidateSnapshots, type CandidateState, type CheckRunScheduler, type Clock, type CompiledStage,
   type EventRecorder, type GateContext, type GateDecision, type GateEvaluator, type Principal, type Redactor, type ResourceReader,
   type RunFailurePolicy, type StepAssignmentPolicy, type UnitLedgerReader, type UnitProgress, type UnitProgressQueries, type UnitProgressView,
-  type ValidationContract, type VerificationContracts, type WorkflowCompiler, type WorkspaceReaderFactory,
+  type ValidationContract, type VerificationContracts, type WorkflowCompiler, type WorkspaceReaderFactory, type FlakyTestReporter,
 } from "../ports/index.ts";
+import { flakyEvidence, untouchedFailures } from "../model/flaky.ts";
+import { canRerunFailed as canRerun } from "../checks/config.ts";
 import { checkDefinitionVersion } from "../checks/definition-version.ts";
 
 export const UNIT_PROGRESS_GATE = "unit-progress";
@@ -36,6 +38,8 @@ interface Deps {
   events: EventRecorder;
   clock: Clock;
   redactor: Redactor;
+  /** ADR-0086: records flaky decisions; without it they still count, just without events or issue proposals. */
+  flaky?: FlakyTestReporter;
 }
 
 interface UnitLedgerEntry {
@@ -72,6 +76,21 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
   private async checkRuns(item: WorkItem, contract: ValidationContract) {
     return (await this.d.reader.list<CheckRun>("CheckRun", owned(item))).filter((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid &&
       r.spec.workflow?.purpose === "unit-readiness" && r.spec.workflow.planFingerprint === contract.fingerprint);
+  }
+
+  /** ADR-0086: targeted re-runs of readiness attempts (never readiness evidence themselves). */
+  private async reruns(item: WorkItem, attempts: CheckRun[]) {
+    const names = new Set(attempts.map((a) => a.metadata.name));
+    return (await this.d.reader.list<CheckRun>("CheckRun", owned(item))).filter((r) => eligible(r) && r.spec.workItemUid === item.metadata.uid &&
+      r.spec.workflow?.purpose === "rerun-failed" && names.has(r.spec.workflow.rerunOf ?? ""));
+  }
+
+  /** ADR-0086: ready although no attempt passed, because every failure is flaky; reported once per decision. */
+  private async flaky(item: WorkItem, id: string, attempts: CheckRun[], reruns: CheckRun[]) {
+    const completed = attempts.filter((a) => a.status?.phase === "Completed");
+    const evidence = flakyEvidence([...completed, ...reruns.filter((r) => !active(r))]);
+    if (evidence) await this.d.flaky?.report(item, id, evidence);
+    return evidence;
   }
 
   /** Structural check of a recorded result; workspace paths are probed only when the attempt is first evaluated. */
@@ -118,6 +137,7 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     const attempts = await this.attempts(item, contract);
     const artifacts = await this.d.reader.list<Artifact>("Artifact", owned(item));
     const checks = await this.checkRuns(item, contract);
+    const reruns = (await this.reruns(item, checks)).filter((r) => !active(r));
     const entries: UnitLedgerEntry[] = [];
     for (const unit of units) {
       const runs = attempts.filter((r) => r.spec.assignment?.kind === "unit" && r.spec.assignment.unit === unit.id);
@@ -126,9 +146,12 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
         const reasons = await this.result(run, unit, artifacts);
         const evidence = unitChecks(unit).map((id) => {
           const [repository, check] = id.split("/");
-          const last = checks.filter((c) => c.spec.workflow?.unit === unit.id && c.spec.workflow.unitRun === run.metadata.name &&
-            c.spec.repositoryRef.name === repository && c.spec.check === check).at(-1);
-          return { id, checkRun: last?.metadata.name, outcome: last ? last.status?.outcome ?? "Pending" : undefined, snapshot: last?.spec.snapshot, ok: !!last && passed(last) };
+          const own = checks.filter((c) => c.spec.workflow?.unit === unit.id && c.spec.workflow.unitRun === run.metadata.name &&
+            c.spec.repositoryRef.name === repository && c.spec.check === check);
+          const last = own.at(-1);
+          const sameSnapshot = own.filter((c) => c.spec.snapshot === last?.spec.snapshot && c.status?.phase === "Completed");
+          const flaky = !!last && !passed(last) && !!flakyEvidence([...sameSnapshot, ...reruns.filter((r) => sameSnapshot.some((c) => c.metadata.name === r.spec.workflow?.rerunOf))]);
+          return { id, checkRun: last?.metadata.name, outcome: last ? flaky ? "Flaky" : last.status?.outcome ?? "Pending" : undefined, snapshot: last?.spec.snapshot, ok: !!last && (passed(last) || flaky) };
         });
         const ready = !reasons.length && evidence.every((e) => e.ok);
         const diagnostics = [...reasons, ...evidence.filter((e) => !e.ok).map((e) => `${e.id}: ${e.outcome ?? "not run"}`)];
@@ -157,6 +180,23 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     if (!trigger.metadata.uid) return { action: "fail", reason: "Recovery trigger has no durable identity." };
     return { action: "recovery", trigger: { kind: trigger.kind as "AgentRun" | "CheckRun", name: trigger.metadata.name, uid: trigger.metadata.uid },
       planFingerprint: contract.fingerprint, unit };
+  }
+
+  /** ADR-0086 §3: only the failed tests of `original`, once, on the same snapshot. */
+  private async submitRerun(item: WorkItem, contract: ValidationContract, state: CandidateState, id: string, origin: { stage: string }, original: CheckRun): Promise<GateDecision> {
+    const [repository, check] = id.split("/");
+    const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
+    const workspace = state.workspaces.find((w) => w.spec.repositoryRef.name === repository);
+    if (!workspace) return { action: "wait", retryAfterMs: 1000 };
+    try {
+      await this.d.scheduler.submit({ workItem: item, workspace, repository: repo, check, requestedBy: "unit-execution",
+        requestId: `rerun-failed/${digest([original.metadata.name])}`,
+        workflow: { stage: origin.stage, round: item.status!.round!, purpose: "rerun-failed", planFingerprint: contract.fingerprint, attempt: 1, rerunOf: original.metadata.name } });
+    } catch (error) {
+      if (isStoreError(error, "Conflict")) return { action: "wait", retryAfterMs: 1000 };
+      throw error;
+    }
+    return { action: "wait", retryAfterMs: 1000 };
   }
 
   private async submit(item: WorkItem, contract: ValidationContract, state: CandidateState, id: string, origin: { stage: string; unit: string; unitRun?: string },
@@ -194,8 +234,21 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
       r.spec.workspaceUid === workspace?.metadata.uid && r.spec.snapshot === snapshot);
     if (attempts.some(active)) return { action: "wait", retryAfterMs: 1000 };
     if (attempts.some(passed)) return undefined;
+    const reruns = await this.reruns(item, attempts);
+    if (reruns.some(active)) return { action: "wait", retryAfterMs: 1000 };
+    if (await this.flaky(item, id, attempts, reruns)) return undefined;
+    // ADR-0086: a named failure the change didn't touch may be flaky; confirm it before any code fix is charged.
+    const lastAttempt = attempts.at(-1);
+    let confirming = false;
+    if (lastAttempt && untouchedFailures(lastAttempt)) {
+      const repo = contract.repositories.find((r) => r.metadata.name === repository);
+      if (repo && !reruns.some((r) => r.spec.workflow?.rerunOf === lastAttempt.metadata.name) && canRerun(repo, check, lastAttempt)) {
+        return this.submitRerun(item, contract, state, id, origin, lastAttempt);
+      }
+      confirming = attempts.filter((r) => r.spec.workflow?.round === item.status?.round).length < policy.maxExecutionAttempts;
+    }
     const recoveryEnabled = !!item.spec.workflowRef && !!(await this.d.compiler.compile(item.spec.workflowRef, nsOf(item))).recovery;
-    if (recoveryEnabled) {
+    if (recoveryEnabled && !confirming) {
       const history = (await this.checkRuns(item, contract)).filter((r) => r.spec.repositoryRef.name === repository && r.spec.check === check &&
         r.spec.workflow?.unit === origin.unit);
       if (history.some(active)) return { action: "wait", retryAfterMs: 1000 };
@@ -205,16 +258,17 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     }
     const current = attempts.filter((r) => r.spec.workflow?.round === item.status?.round);
     const last = current.at(-1);
-    if (last?.status?.outcome === "AssertionFailed") {
+    if (last?.status?.outcome === "AssertionFailed" && !confirming) {
       const recovery = await this.recovery(item, contract, last, origin.unit);
       if (recovery) return recovery;
       return this.retry(item, codeKey, policy.maxCodeAttempts, contract.policy.implementationStage,
         `${id} still fails for ${origin.unit === BARRIER_UNIT ? "the complete candidate" : `Unit ${origin.unit}`} after the code-fix budget. Inspect CheckRun ${last.metadata.name}; answer to allow one more bounded attempt or revise the plan.`);
     }
-    if (last && current.length >= policy.maxExecutionAttempts) {
+    if (last && current.length >= policy.maxExecutionAttempts && !confirming) {
       const recovery = await this.recovery(item, contract, last, origin.unit);
       if (recovery) return recovery;
-      return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${current.length} readiness execution attempt(s). No code fix was charged. Inspect CheckRun ${last.metadata.name}, fix prerequisites or budget, then answer to retry.`] };
+      return { action: "block", details: checkEvidence(last), questions: [`${id} could not be evaluated: ${last.status?.outcome ?? "Interrupted"} after ${current.length} readiness attempt(s) (no named test failure, so no code fix was charged). ` +
+        "If the cause is the environment (a missing tool, a crashed service), fix it and answer to run the check again. If the change caused it, answer with what the developer should fix."] };
     }
     const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
     if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };
@@ -316,15 +370,22 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
       run.spec.environment.version === state.health.version && run.spec.environment.profileVersion === state.profiles[repository];
   }
 
-  /** Readiness checks without passing evidence for the current candidate; empty when the barrier is satisfied. */
-  private staleChecks(contract: ValidationContract, state: CandidateState, runs: CheckRun[]) {
-    return allUnitChecks(contract.plan.units!).filter((id) => !runs.some((r) => passed(r) && this.fresh(contract, state, r) &&
-      `${r.spec.repositoryRef.name}/${r.spec.check}` === id));
+  /**
+   * Readiness checks without passing (or, ADR-0086, flaky) evidence for the current candidate; empty when the barrier
+   * is satisfied. `reruns`: targeted re-runs of these runs.
+   */
+  private staleChecks(contract: ValidationContract, state: CandidateState, runs: CheckRun[], reruns: CheckRun[]) {
+    return allUnitChecks(contract.plan.units!).filter((id) => {
+      const current = runs.filter((r) => this.fresh(contract, state, r) && `${r.spec.repositoryRef.name}/${r.spec.check}` === id);
+      if (current.some(passed)) return false;
+      const completed = current.filter((r) => r.status?.phase === "Completed");
+      return !completed.length || !flakyEvidence([...completed, ...reruns.filter((r) => !active(r) && completed.some((c) => c.metadata.name === r.spec.workflow?.rerunOf))]);
+    });
   }
 
-  private gaps(contract: ValidationContract, state: CandidateState, ledger: UnitLedgerEntry[], runs: CheckRun[]) {
+  private gaps(contract: ValidationContract, state: CandidateState, ledger: UnitLedgerEntry[], runs: CheckRun[], reruns: CheckRun[]) {
     return [...ledger.filter((e) => !e.ready).map((e) => `Unit ${e.unit.id} not ready`),
-      ...this.staleChecks(contract, state, runs).map((id) => `${id} has no passing readiness evidence for the current candidate`)];
+      ...this.staleChecks(contract, state, runs, reruns).map((id) => `${id} has no passing readiness evidence for the current candidate`)];
   }
 
   async beforeCandidate(item: WorkItem, stage: CompiledStage, contract: ValidationContract): Promise<GateDecision> {
@@ -337,7 +398,7 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     }
     const state = await this.d.candidates.candidate(item, contract);
     const runs = await this.checkRuns(item, contract);
-    const stale = this.staleChecks(contract, state, runs);
+    const stale = this.staleChecks(contract, state, runs, await this.reruns(item, runs));
     if (!stale.length) return { action: "advance" };
     const gaps = stale.map((id) => `${id} lacks passing readiness evidence for the current candidate`);
     // After the review step has run, or past the barrier stage, stale evidence means the reviewed candidate drifted.
@@ -355,7 +416,8 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
 
   async assertComplete(item: WorkItem, contract: ValidationContract): Promise<void> {
     const ledger = await this.ledger(item, contract);
-    const gaps = this.gaps(contract, await this.d.candidates.candidate(item, contract), ledger, await this.checkRuns(item, contract));
+    const runs = await this.checkRuns(item, contract);
+    const gaps = this.gaps(contract, await this.d.candidates.candidate(item, contract), ledger, runs, await this.reruns(item, runs));
     if (gaps.length) invalid(`approved Units are incomplete for this candidate: ${gaps.join("; ")}`);
   }
 
@@ -388,7 +450,7 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     let barrier: UnitProgressView["barrier"];
     if (ledger.every((e) => e.ready)) {
       try {
-        const missing = this.gaps(contract, await this.d.candidates.candidate(item, contract), ledger, checks);
+        const missing = this.gaps(contract, await this.d.candidates.candidate(item, contract), ledger, checks, await this.reruns(item, checks));
         barrier = { satisfied: !missing.length, missing };
       } catch (e) {
         if (!isStoreError(e, "Invalid")) throw e;
@@ -397,4 +459,15 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
     } else barrier = { satisfied: false, missing: ledger.filter((e) => !e.ready).map((e) => `Unit ${e.unit.id} not ready`) };
     return { enabled: true, planFingerprint: contract.fingerprint, current, units, barrier };
   }
+}
+
+
+/** ADR-0086 §5: what a human needs to decide on an opaque failure, without opening the CheckRun. */
+function checkEvidence(run: CheckRun): string {
+  const failed = run.status?.tests?.failed.map((t) => `- \`${t.name}\`${t.file ? ` (${t.file})` : ""}`) ?? [];
+  return [
+    `**CheckRun \`${run.metadata.name}\`:** ${run.status?.message ?? run.status?.outcome ?? "no result"}`,
+    failed.length ? `**Failed tests**\n${failed.join("\n")}` : undefined,
+    run.status?.outputTail ? `**End of the output**\n\n\`\`\`text\n${run.status.outputTail}\n\`\`\`` : undefined,
+  ].filter(Boolean).join("\n\n");
 }

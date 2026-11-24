@@ -52,7 +52,8 @@ async function fixture() {
     git(other, "push", "-q", "origin", "main");
     return git(other, "rev-parse", "HEAD");
   };
-  return { root, origin, work, git, mergeHead, repo, ws, landOnMain, cleanup: () => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) };
+  return { root, origin, work, git, mergeHead, repo, ws, landOnMain,   // git may still be writing objects (auto-gc) when a test ends; retry instead of failing on ENOTEMPTY.
+    cleanup: () => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 test("ADR-0053: a parallel change on main that touches other files is not a conflict", async () => {

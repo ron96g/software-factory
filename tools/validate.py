@@ -116,6 +116,27 @@ def main():
                         if t not in allowed:
                             errors.append(f"{path}: step {step['name']}: tool '{t}' is not a tool of agent {step['agentRef']['name']}")
 
+    # ADR-0084: a publish.issue block publishes only a draft an earlier human-approval gate approved.
+    sources = {d["metadata"]["name"]: d for _, d in docs if d.get("kind") == "Source"}
+    for path, doc in docs:
+        if doc.get("kind") != "Workflow":
+            continue
+        stages = [s for phase in doc["spec"].get("phases", []) for s in phase.get("stages", [])]
+        for i, stage in enumerate(stages):
+            issue = (stage.get("publish") or {}).get("issue")
+            if not issue:
+                continue
+            where = f"{path}: stage {stage['name']}: publish.issue"
+            review = next((s for s in stages[:i] if s.get("name") == issue.get("reviewStage")), None)
+            if not review or (review.get("gate") or {}).get("type") != "human-approval":
+                errors.append(f"{where}: reviewStage must be an earlier human-approval stage")
+            produced = {o.get("artifactRef", {}).get("name") for s in stages[:i] for step in s.get("steps") or [] for o in step.get("outputs") or []}
+            if (issue.get("artifactRef") or {}).get("name") not in produced:
+                errors.append(f"{where}: artifactRef must be produced by an earlier step")
+            target = (issue.get("targetRef") or {}).get("name")
+            if target and not ((sources.get(target) or {}).get("spec", {}).get("writeBack") or {}).get("issues"):
+                errors.append(f"{where}: targetRef {target} does not permit creating issues (writeBack.issues)")
+
     # Per-agent model mappings must name existing agents (ADR-0028).
     for path, doc in docs:
         if doc.get("kind") == "ModelProvider":
@@ -146,14 +167,17 @@ def main():
         for entry in policy.get("autoWaive") or []:
             if entry.get("check") not in (policy.get("waivableChecks") or []):
                 errors.append(f"{path}: {name}: autoWaive check '{entry.get('check')}' must be in waivableChecks")
-            if entry.get("when") != "pre-existing":
-                errors.append(f"{path}: {name}: autoWaive '{entry.get('check')}' needs when: pre-existing")
+            if entry.get("when") not in ("pre-existing", "flaky"):
+                errors.append(f"{path}: {name}: autoWaive '{entry.get('check')}' needs when: pre-existing or flaky")
 
         # ADR-0061: tier-scoped checks and minScope (same rules as web/src/core/model/check-scope.ts and checks/config.ts).
         make_target = re.compile(r"^make [a-zA-Z0-9][a-zA-Z0-9_-]*$")
         for check, value in commands.items():
             if not isinstance(value, dict):
                 continue
+            # ADR-0086: a targeted re-run needs per-test results to know which tests failed.
+            if "rerunFailed" in value and (not isinstance(value["rerunFailed"], str) or not value["rerunFailed"].strip() or value.get("resultFormat") != "node-test-tap"):
+                errors.append(f"{path}: {name}/{check}: rerunFailed needs a command and resultFormat node-test-tap")
             scoped, legacy = value.get("scoped") is True, value.get("moduleScoped") is True
             if scoped and legacy:
                 errors.append(f"{path}: {name}/{check} sets both scoped and the legacy moduleScoped")

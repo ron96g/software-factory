@@ -11,6 +11,9 @@ import { SandboxUnavailableError, StoreError, isStoreError, type AgentBaselineRe
   type ValidationContract, type ValidationPlan, type VerificationActions, type VerificationApprovalGuard,
   type RecoveryCheckAuthorization, type StageEntryPolicy, type StageResumptionPolicy, type PlanReconfirmation, type PublicationRecovery, type ProposedArtifactCheck, type TranscriptReader, type VerificationContracts, type VerificationPublicationGuard, type WorkflowCompiler, type WorkspaceSnapshotter } from "../ports/index.ts";
 import type { PlanningReviewBinding, PlanningReviewOutcome } from "../ports/planning.ts";
+import type { FlakyTestReporter } from "../ports/verification.ts";
+import { flakyEvidence, untouchedFailures, type FlakyEvidence } from "../model/flaky.ts";
+import { canRerunFailed as canRerun } from "../checks/config.ts";
 import type { CandidateCompleteness, CandidateSnapshots, CandidateState } from "../ports/units.ts";
 import { parseUnitManifest, unitChecks } from "../model/units.ts";
 import { isScoped, scopeSatisfies } from "../model/check-scope.ts";
@@ -105,6 +108,8 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     planReview?: PlanningReviewOutcome;
     /** ADR-0047: required when a workflow enables unit execution; missing means construction cannot proceed. */
     completeness?: CandidateCompleteness;
+    /** ADR-0086: records flaky decisions (events, repeated-flaky issue proposals). */
+    flaky?: FlakyTestReporter;
   };
   readonly gates: (GateEvaluator & ApprovalGateEvaluator)[];
 
@@ -543,11 +548,20 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         r.spec.environment.version === candidate.health.version && r.spec.environment.profileVersion === candidate.profiles[repository]);
       if (passed) continue;
       missing.push(id);
-      if (!repo.spec.verification?.waivableChecks?.includes(check)) unwaivable.push(id);
+      // ADR-0086: a flaky result can always be waived by a human; the waiver lists it, it never counts as passed.
+      if (!repo.spec.verification?.waivableChecks?.includes(check) && !this.flakyOn(runs, ws, check, candidate.snapshots[ws.metadata.name])) unwaivable.push(id);
     }
     const pending = runs.some(active);
     return { ...candidate, runs, missing, unwaivable, pending,
       fingerprint: digest([candidate.fingerprint, missing, runs.map((r) => [r.metadata.uid, r.metadata.resourceVersion])]) };
+  }
+
+  /** ADR-0086: the verification attempts of `check` on this snapshot (with their targeted re-runs) are flaky. */
+  private flakyOn(runs: CheckRun[], ws: Workspace, check: string, snapshot: string | undefined): FlakyEvidence | undefined {
+    const attempts = runs.filter((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.check === check && r.spec.snapshot === snapshot &&
+      r.spec.workflow?.purpose === "verification" && r.status?.phase === "Completed");
+    const reruns = runs.filter((r) => r.spec.workflow?.purpose === "rerun-failed" && attempts.some((a) => a.metadata.name === r.spec.workflow?.rerunOf));
+    return attempts.length ? flakyEvidence([...attempts, ...reruns]) : undefined;
   }
 
   private async evaluateChecks(ctx: GateContext): Promise<GateDecision> {
@@ -580,14 +594,23 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
    * whose findings all exist in a baseline run under an identical key. An existing Approval (a human veto) is never overwritten.
    */
   private async policyWaiver(item: WorkItem, stage: CompiledStage, contract: ValidationContract,
-    state: { missing: string[]; runs: CheckRun[]; workspaces: Workspace[]; fingerprint: string }): Promise<boolean | "submitted"> {
+    state: { missing: string[]; runs: CheckRun[]; workspaces: Workspace[]; fingerprint: string; snapshots: Record<string, string> }): Promise<boolean | "submitted"> {
     const baselines: string[] = [];
+    const flaky: string[] = [];
     let policy = "";
     for (const id of state.missing) {
       const [repository, check] = id.split("/");
       const repo = contract.repositories.find((r) => r.metadata.name === repository)!;
-      const rule = repo.spec.verification?.autoWaive?.find((entry) => entry.check === check && entry.when === "pre-existing");
       const ws = state.workspaces.find((w) => w.spec.repositoryRef.name === repository);
+      // ADR-0086: opt-in policy waiver for checks whose every failure was shown to be flaky on this snapshot.
+      const flakyRule = repo.spec.verification?.autoWaive?.find((entry) => entry.check === check && entry.when === "flaky");
+      const flakyEvidenceHere = flakyRule && ws ? this.flakyOn(state.runs, ws, check, state.snapshots[ws.metadata.name]) : undefined;
+      if (flakyEvidenceHere) {
+        flaky.push(`${id} (${flakyEvidenceHere.tests.join(", ")})`);
+        policy ||= `policy:${repository}@${checkDefinitionVersion(repo)}`;
+        continue;
+      }
+      const rule = repo.spec.verification?.autoWaive?.find((entry) => entry.check === check && entry.when === "pre-existing");
       if (!rule || !ws?.status?.baseCommit) return false;
       const mine = state.runs.filter((r) => r.spec.workspaceUid === ws.metadata.uid && r.spec.check === check && r.status?.phase === "Completed");
       const candidate = mine.filter((r) => r.spec.workflow?.purpose === "verification").at(-1);
@@ -621,20 +644,21 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       baselines.push(baseline.metadata.name);
       policy ||= `policy:${repository}@${checkDefinitionVersion(repo)}`;
     }
-    if (!baselines.length) return false;
+    if (!baselines.length && !flaky.length) return false;
     const approval: Approval = {
       apiVersion: API_VERSION, kind: "Approval",
       metadata: { name: `${item.metadata.name}-${stage.name}-r${item.status!.round}`, namespace: nsOf(item), ownerReferences: [ownerRef(item)] },
       spec: { workItemRef: { name: item.metadata.name }, stage: stage.name, approvers: stage.gate?.approvers ?? [],
         criteria: [...(stage.gate?.criteria ?? []), `Verification waiver decided by policy. Binding: ${state.fingerprint}`],
         decision: "approve", decidedBy: policy,
-        comment: `Pre-existing findings also present in baseline CheckRun ${baselines.join(", ")}; waived by Git policy.`,
+        comment: [baselines.length ? `Pre-existing findings also present in baseline CheckRun ${baselines.join(", ")}` : "",
+          flaky.length ? `Flaky (every failure passed again on the same snapshot): ${flaky.join("; ")}` : ""].filter(Boolean).join(". ") + "; waived by Git policy.",
         verification: { kind: "waiver", fingerprint: state.fingerprint, planFingerprint: contract.fingerprint, requirements: state.missing } },
       status: { phase: "Pending" },
     };
     try { await this.d.writer.create(approval); }
     catch (e) { if (isStoreError(e, "AlreadyExists")) return false; throw e; }
-    await this.d.events.normal(item, "PolicyWaiver", `${state.missing.join(", ")}: decided automatically by ${policy} (baseline ${baselines.join(", ")}). Follow-up for the pre-existing findings recorded as this event.`);
+    await this.d.events.normal(item, "PolicyWaiver", `${state.missing.join(", ")}: decided automatically by ${policy}${baselines.length ? ` (baseline ${baselines.join(", ")})` : ""}${flaky.length ? ` (flaky: ${flaky.join("; ")})` : ""}. Follow-up recorded as this event.`);
     return true;
   }
 
@@ -691,7 +715,27 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
       const last = attempts.at(-1);
       if (last && countsAsPassed(last) && last.spec.snapshot === candidate.snapshots[ws.metadata.name] &&
           last.spec.repositoryVersion === checkDefinitionVersion(repo)) continue;
+      // ADR-0086: a flaky check is transient (re-run within budget, then the waiver); an untouched named failure is
+      // confirmed (targeted re-run, else another attempt) before the code-fix loop is charged.
+      let confirming = false;
       if (last?.status?.outcome === "AssertionFailed" && !preflight) {
+        const reruns = runs.filter((r) => eligible(r) && r.spec.workflow?.purpose === "rerun-failed" && attempts.some((a) => a.metadata.name === r.spec.workflow?.rerunOf));
+        const flaky = flakyEvidence([...attempts.filter((a) => a.status?.phase === "Completed" && a.spec.snapshot === last.spec.snapshot), ...reruns]);
+        if (flaky) {
+          await this.d.flaky?.report(item, id, flaky);
+          if (attempts.length >= contract.policy.maxExecutionAttempts) continue;
+          confirming = true;
+        } else if (untouchedFailures(last) && last.spec.snapshot === candidate.snapshots[ws.metadata.name]) {
+          if (!reruns.some((r) => r.spec.workflow?.rerunOf === last.metadata.name) && canRerun(repo, check, last)) {
+            await this.d.scheduler.submit({ workItem: item, workspace: ws, repository: repo, check, requestId: `rerun-failed/${digest([last.metadata.name])}`,
+              requestedBy: "verification-gate", workflow: { stage: stage.name, round: item.status!.round!, purpose: "rerun-failed",
+                planFingerprint: contract.fingerprint, attempt: 1, rerunOf: last.metadata.name } });
+            return { action: "wait", retryAfterMs: 1000 };
+          }
+          confirming = attempts.length < contract.policy.maxExecutionAttempts;
+        }
+      }
+      if (last?.status?.outcome === "AssertionFailed" && !preflight && !confirming) {
         if ((item.status?.retries?.[stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: stage.name };
         const recovery = await this.stageRecovery(item, stage, contract, last, "assertion failure");
         if (recovery) return recovery;
@@ -891,3 +935,4 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
     catch (e) { if (!isStoreError(e, "Invalid")) throw e; return { ...result, error: this.d.redactor.redact(e.message) }; }
   }
 }
+

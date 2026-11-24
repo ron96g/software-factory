@@ -4,7 +4,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, matchesGlob, relative } from "node:path";
 import { promisify } from "node:util";
 import type { ModuleCheckScope, ModuleScopeMode, Repository, Workspace } from "../../model/kinds.ts";
-import { StoreError, type ModuleScopePlanner } from "../../ports/index.ts";
+import { StoreError, type CandidateChanges, type ModuleScopePlanner } from "../../ports/index.ts";
 
 const exec = promisify(execFile);
 const safePath = (path: string) => /^[a-zA-Z0-9_.][a-zA-Z0-9_./-]*$/.test(path) &&
@@ -37,6 +37,27 @@ function moduleGraph(text: string): Record<string, Module> {
   return graph;
 }
 
+/** Committed, staged, unstaged and untracked changes since `baseCommit`, workspace-relative and sorted. */
+async function changedSince(cwd: string, baseCommit: string): Promise<string[]> {
+  const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
+  await git(["cat-file", "-e", `${baseCommit}^{commit}`]);
+  // Disabling rename detection includes both the old and new owners, including staged renames.
+  return [...new Set((
+    await git(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", baseCommit, "--"]) +
+    await git(["ls-files", "--others", "--exclude-standard", "-z"])
+  ).split("\0").filter(Boolean))].sort();
+}
+
+/** ADR-0086: the same changed-file view the module scope uses. */
+export class GitCandidateChanges implements CandidateChanges {
+  async changedFiles(workspace: Workspace): Promise<string[]> {
+    const cwd = workspace.status?.path;
+    const baseCommit = workspace.status?.baseCommit;
+    if (!cwd || !baseCommit || !/^[a-f0-9]{40,64}$/.test(baseCommit)) throw new StoreError("changed files require a workspace path and pinned baseCommit", "Invalid");
+    return changedSince(cwd, baseCommit);
+  }
+}
+
 /** Reuse the repository's CI graph; Git reads include the full candidate, not just its last commit. */
 export class GitModuleScopePlanner implements ModuleScopePlanner {
   async plan(workspace: Workspace, repository: Repository, selection: ModuleScopeMode = "affected"): Promise<ModuleCheckScope> {
@@ -58,13 +79,7 @@ export class GitModuleScopePlanner implements ModuleScopePlanner {
     if (graphRelative.startsWith("..") || isAbsolute(graphRelative)) throw new StoreError("module graph escapes the workspace", "Invalid");
     const graphText = await readFile(graphPath, "utf8");
     const graph = moduleGraph(graphText);
-    const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
-    await git(["cat-file", "-e", `${baseCommit}^{commit}`]);
-    // Disabling rename detection includes both the old and new owners, including staged renames.
-    const changed = [...new Set((
-      await git(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z", baseCommit, "--"]) +
-      await git(["ls-files", "--others", "--exclude-standard", "-z"])
-    ).split("\0").filter(Boolean))].sort();
+    const changed = await changedSince(cwd, baseCommit);
     const scope = {
       baseCommit, graphHash: createHash("sha256").update(graphText).digest("hex"),
       modules: Object.values(graph).map((module) => module.path).sort(),

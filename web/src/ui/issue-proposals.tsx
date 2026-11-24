@@ -70,19 +70,19 @@ function IssueRow({ issue: i, targets, onUse }: { issue: IssueProposal; targets:
       </Group>
       {tracked && <Text size="xs" c="dimmed">Tracker: {tracked.state}{tracked.assignee ? `, ${tracked.assignee}` : ""}{tracked.updatedAt ? `, updated ${new Date(tracked.updatedAt).toLocaleString()}` : ""}</Text>}
       {i.spec.provenance?.workItem && <Anchor href={`/items/${i.spec.provenance.workItem}`} size="xs">Work item {i.spec.provenance.workItem}</Anchor>}
-      {phase === "Created" && i.spec.purpose === "follow-up" && <Group><Button size="compact-xs" loading={busy} onClick={() => run(`${base}/start`, {}, "Implementation started")}>Start implementation</Button></Group>}
+      {phase === "Created" && (i.spec.purpose === "follow-up" || i.spec.purpose === "story") && <Group><Button size="compact-xs" loading={busy} onClick={() => run(`${base}/start`, {}, "Implementation started")}>Start implementation</Button></Group>}
       {linked?.reason === "Conflict" && <Text size="xs" c="red">{linked.message}</Text>}
       {(phase === "Uncertain" || phase === "Failed") && (
         <Text size="xs" c="dimmed">
           {i.status?.conditions?.find((c) => c.type !== "Linked")?.message ?? "The outcome of the last attempt is not confirmed."}
         </Text>
       )}
-      {owned && onUse && phase === "Proposed" && i.spec.purpose !== "mirror" ? (
+      {owned && onUse && phase === "Proposed" && i.spec.purpose !== "mirror" && i.spec.purpose !== "story" ? (
         <Group gap="xs">
           <Button size="compact-xs" onClick={() => onUse(i)}>Use</Button>
           <Button size="compact-xs" color="red" variant="light" loading={busy} onClick={() => run(`${base}/review`, { decision: "reject" }, "Dismissed")}>Dismiss</Button>
         </Group>
-      ) : owned && !onUse ? null : owned && i.spec.purpose === "follow-up" ? null : editing && !frozen ? (
+      ) : owned && !onUse ? null : owned && (i.spec.purpose === "follow-up" || i.spec.purpose === "story") ? null : editing && !frozen ? (
         <Stack gap={6}>
           <TextInput size="xs" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
           <Textarea size="xs" autosize minRows={4} value={body} onChange={(e) => setBody(e.currentTarget.value)} />

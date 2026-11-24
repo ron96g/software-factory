@@ -116,6 +116,13 @@ export interface StageSpec {
       /** ADR-0053: a conflict with the current base goes back to `next` (bounded); without it, a human resolves. */
       onConflict?: { next: string; /** @minimum 1 */ maxAttempts?: number };
     };
+    /** ADR-0084: create one tracker ticket from the draft the `reviewStage` human approval approved. */
+    issue?: {
+      artifactRef: Ref;
+      reviewStage: string;
+      /** Default target; `WorkItem.spec.ticketTarget` overrides it. */
+      targetRef?: Ref;
+    };
   };
   steps?: StepSpec[];
   gate?: GateSpec;
@@ -215,8 +222,9 @@ export interface RepositorySpec {
    * `scoped` (ADR-0061): the command takes a module selection whose scope follows the verification tier.
    * `moduleScoped` (legacy, ADR-0044): always the affected scope, whatever the tier.
    * @preserveUnknownValues a check is either a command string or an object, which a structural schema cannot express
+   * `rerunFailed` (ADR-0086): runs only named failed tests, given as `$FACTORY_RERUN_PATTERN` and `$FACTORY_RERUN_FILES`.
    */
-  checks?: Record<string, string | { command: string; timeoutMs?: number; maxOutputBytes?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean }>;
+  checks?: Record<string, string | { command: string; timeoutMs?: number; maxOutputBytes?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean; rerunFailed?: string }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
   moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
   verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[];
@@ -338,6 +346,8 @@ export interface WorkItemSpec {
   externalRef?: { id: string; url?: string };
   workflowRef?: Ref;
   repositoryRefs?: Ref[];
+  /** ADR-0084: Source a `publish.issue` block creates the ticket in (human-written; default from the block). */
+  ticketTarget?: Ref;
   /** Human-created handoff from a direct agent conversation (ADR-0036). */
   conversationRef?: Ref;
   /** Historical provenance, validated at creation; not a live dependency or cascade owner. */
@@ -520,13 +530,15 @@ export interface RetrospectiveSnapshot {
 
 /** ADR-0067: a comparable finding (e.g. an npm advisory) reported by a registered classifier. */
 export interface CheckFinding { id: string; severity?: string; title?: string }
-export interface AutoWaive { check: string; when: "pre-existing"; followUp?: "finding" }
+/** `flaky` (ADR-0086): every failure of the check passed in another attempt or targeted re-run on the same snapshot. */
+export interface AutoWaive { check: string; when: "pre-existing" | "flaky"; followUp?: "finding" }
 export type CheckOutcome = "Passed" | "FindingsReported" | "AssertionFailed" | "SetupFailed" | "UnknownFailure" | "Unavailable" | "TimedOut" | "Cancelled" | "NotVerified";
 
 export interface CheckWorkflowOrigin {
   stage: string;
   round: number;
-  purpose: "preflight" | "preparation" | "verification" | "unit-readiness" | "diagnostic" | "baseline";
+  /** `rerun-failed` (ADR-0086): only the failed tests of `rerunOf` again; evidence for flakiness, never a pass of the check. */
+  purpose: "preflight" | "preparation" | "verification" | "unit-readiness" | "diagnostic" | "baseline" | "rerun-failed";
   planFingerprint: string;
   attempt: number;
   /** ADR-0047 (`unit-readiness` only): Unit ID, or `*` for the aggregate pre-review barrier. */
@@ -540,6 +552,8 @@ export interface CheckWorkflowOrigin {
   /** Diagnostic evidence is scoped to an episode and never counts as readiness or verification. */
   recoveryEpisode?: string;
   baselineCommit?: string;
+  /** ADR-0086 (`rerun-failed` only): the CheckRun whose failed tests run again, on the same snapshot. */
+  rerunOf?: string;
 }
 
 /** ADR-0061: when a check runs decides how much a scoped check covers. */
@@ -553,6 +567,17 @@ export interface ModuleCheckScope {
   graphHash: string;
   modules: string[];
   reason: string;
+}
+
+/**
+ * ADR-0086: what a test check reported per test. A test's identity is its name path (`suite › test`): Node's TAP
+ * output names the file only for failures. `touched`: the candidate changed or added the failed test's file.
+ */
+export interface CheckTestResults {
+  failed: { name: string; file?: string; touched?: boolean }[];
+  /** Test ids (`testId(name)`) of passed tests, sorted. */
+  passed: string[];
+  skipped: number;
 }
 
 export interface CheckRunSpec {
@@ -585,6 +610,10 @@ export interface CheckRunStatus {
   failureEvidence?: { tests: string[] };
   /** ADR-0067: findings extracted by a FindingExtractor; only set with complete output. */
   findings?: CheckFinding[];
+  /** ADR-0086: per-test results of a test check; only set with complete, unchanged-snapshot output. */
+  tests?: CheckTestResults;
+  /** ADR-0086: the redacted end of the output of a run that did not pass, so a question can show the evidence. */
+  outputTail?: string;
   message?: string;
   exitCode?: number;
   signal?: string;
@@ -859,7 +888,8 @@ export interface WorkspaceStatus {
 export type Workspace = Resource<WorkspaceSpec, WorkspaceStatus>;
 
 /** ADR-0066: an issue the factory may create in a tracker once a human approves it. */
-export type IssuePurpose = "mirror" | "finding" | "escalation" | "unit" | "follow-up";
+/** `story`: published by a workflow's `publish.issue` block after a human approved the draft (ADR-0084). */
+export type IssuePurpose = "mirror" | "finding" | "escalation" | "unit" | "follow-up" | "story";
 export type IssuePhase = "Proposed" | "Approved" | "Creating" | "Created" | "Uncertain" | "Failed" | "Rejected";
 export interface IssueProposalSpec {
   purpose: IssuePurpose;
@@ -878,6 +908,9 @@ export interface IssueProposalSpec {
     agent?: string; agentRun?: string; workItem?: string; proposedAt?: string; proposedBy?: string; human?: boolean;
     /** ADR-0076: the agent that drafted the body the human approved, and its `draft-ticket` conversation. */
     draftedBy?: { agent: string; conversation: string };
+    /** ADR-0084: the gate approval and the exact artifact version a `story` ticket was published from. */
+    approval?: string;
+    artifact?: { name: string; uid: string; resourceVersion: string };
   };
   review?: { decision: "approve" | "reject"; contentHash?: string; by?: string; at?: string; comment?: string };
   resolution?: { action: "create-again" | "link"; externalId?: string; by?: string; at?: string };

@@ -17,7 +17,7 @@ import { Registry } from "./registry/registry.ts";
 import type { GateEvaluator } from "./ports/index.ts";
 import { checkDefinitionVersion } from "./checks/definition-version.ts";
 
-async function fixture(preparation = false, scan?: boolean) {
+async function fixture(preparation = false, scan?: boolean, flakyWaive = false) {
   const db = new DatabaseSync(":memory:");
   const clock = { now: () => new Date("2026-11-13T12:00:00Z") };
   const store = new SqliteStore(db, clock);
@@ -34,8 +34,9 @@ async function fixture(preparation = false, scan?: boolean) {
   const repo = await store.create<Repository>({ apiVersion: API_VERSION, kind: "Repository", metadata: { name: "repo", namespace: "factory-system" },
     spec: { checks: { preflight: "prepare", build: "build", test: { command: "tests", resultFormat: "go-test-json" }, ...(scan === undefined ? {} : { "manual-acceptance": "scan" }) },
       verification: { requiredChecks: ["build", "test", "manual-acceptance"], preflightChecks: ["preflight"],
-        ...(preparation ? { preparationChecks: ["build"] } : {}), waivableChecks: ["manual-acceptance"],
-        ...(scan ? { autoWaive: [{ check: "manual-acceptance", when: "pre-existing" as const, followUp: "finding" as const }] } : {}) } } });
+        ...(preparation ? { preparationChecks: ["build"] } : {}), waivableChecks: ["manual-acceptance", ...(flakyWaive ? ["test"] : [])],
+        ...(scan ? { autoWaive: [{ check: "manual-acceptance", when: "pre-existing" as const, followUp: "finding" as const }] } : {}),
+        ...(flakyWaive ? { autoWaive: [{ check: "test", when: "flaky" as const }] } : {}) } } });
   const item = await store.create<WorkItem>({ apiVersion: API_VERSION, kind: "WorkItem", metadata: { name: "item", namespace: "default" },
     spec: { title: "Verify", sourceRef: { name: "manual" }, repositoryRefs: [{ name: "repo" }], workflowRef: { name: "verified" } },
     status: { phase: "Running", stage: "spec-review", round: 1 } });
@@ -721,5 +722,52 @@ test("AC-3: pre-existing findings with a comparable baseline get a policy waiver
     const after = (await f.store.list<Approval>("Approval", { namespace: "default" })).filter((a) => a.spec.verification?.kind === "waiver");
     assert.equal(after.length, 1);
     assert.equal(after[0].spec.decision, "reject");
+  } finally { f.db.close(); }
+});
+
+async function flakyAtVerify(f: Awaited<ReturnType<typeof fixture>>, touched = false) {
+  const { testId } = await import("./model/tests.ts");
+  const fail = (run: CheckRun, failed: string, passed: string, isTouched = false) => f.store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed",
+    outcome: "AssertionFailed", finalSnapshot: run.spec.snapshot, logsIncomplete: false, finishedAt: "2026-11-13T11:00:00Z",
+    tests: { failed: [{ name: failed, file: "src/a.test.ts", touched: isTouched }], passed: [testId(passed)], skipped: 0 } } });
+  await f.approve("spec-review");
+  await f.seedPass("preflight", "preflight", "preflight");
+  await f.approve("code-review");
+  const wi = await f.current();
+  await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "verify" } });
+  for (const check of ["build", "manual-acceptance"]) await f.seedPass(check, "verification", "verify");
+  const testRuns = async () => (await f.store.list<CheckRun>("CheckRun")).filter((r) => r.spec.check === "test" && r.spec.workflow?.purpose === "verification");
+  assert.equal((await f.runStage("verify")).action, "wait");
+  await fail((await testRuns())[0], "cleanup", "drafting", touched);
+  const second = await f.runStage("verify");
+  if (touched) return second;
+  assert.equal(second.action, "wait", "an untouched failure is confirmed by another attempt, not sent to the developer");
+  assert.equal((await testRuns()).length, 2);
+  await fail((await testRuns())[1], "drafting", "cleanup");
+  return f.runStage("verify");
+}
+
+test("ADR-0086: a flaky required check reaches the human waiver even when not waivable; a touched failure goes to the developer", async () => {
+  const f = await fixture(false, false);
+  try {
+    const decision = await flakyAtVerify(f);
+    assert.equal(decision.action, "await-approval");
+    if (decision.action !== "await-approval") return;
+    assert.deepEqual(decision.verification?.requirements, ["repo/test"], "waived, never Passed");
+  } finally { f.db.close(); }
+  const t = await fixture(false, false);
+  try {
+    assert.deepEqual(await flakyAtVerify(t, true), { action: "goto", stage: "implement", retryOf: "verify" });
+  } finally { t.db.close(); }
+});
+
+test("ADR-0086: autoWaive when: flaky waives a flaky waivable check by policy", async () => {
+  const f = await fixture(false, false, true);
+  try {
+    assert.equal((await flakyAtVerify(f)).action, "await-approval");
+    const [approval] = (await f.store.list<Approval>("Approval", { namespace: "default" })).filter((a) => a.spec.verification?.kind === "waiver");
+    assert.match(approval.spec.decidedBy ?? "", /^policy:repo@/);
+    assert.equal(approval.spec.decision, "approve");
+    assert.match(approval.spec.comment ?? "", /Flaky .*repo\/test \(cleanup, drafting\)/);
   } finally { f.db.close(); }
 });

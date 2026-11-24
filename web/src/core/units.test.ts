@@ -451,3 +451,75 @@ test("check output capture keeps complete logs beyond 64 KiB up to the configure
   const capped = await runScrubbed(command, process.cwd(), 10_000);
   assert.equal(capped.truncated, true, "the default agent-tool cap stays visibly truncated");
 });
+
+test("ADR-0086: a Unit whose readiness failures are flaky is ready without a code fix; a failure the change touched is fixed", async () => {
+  const { testId } = await import("./model/tests.ts");
+  const fail = (f: Awaited<ReturnType<typeof fixture>>, run: CheckRun, failed: string, passed: string, touched = false) =>
+    f.store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed", outcome: "AssertionFailed", finalSnapshot: run.spec.snapshot, logsIncomplete: false,
+      finishedAt: "2026-11-14T11:00:00Z", tests: { failed: [{ name: failed, file: "src/a.test.ts", touched }], passed: [testId(passed)], skipped: 0 } } });
+  const pending = async (f: Awaited<ReturnType<typeof fixture>>) => (await f.checks()).filter((c) => !c.status && c.spec.workflow?.purpose === "unit-readiness");
+
+  const flaky = await fixture();
+  try {
+    await flaky.approvePlan();
+    await flaky.reconcile();
+    await flaky.develop("complete", "U0", ["src/loader.ts"]);
+    await flaky.reconcile();
+    await flaky.reconcile();
+    const [first] = await pending(flaky);
+    await fail(flaky, first, "cleanup", "drafting");
+    await flaky.reconcile();
+    assert.equal((await flaky.current()).status?.retries?.["unit:U0"], undefined, "no code fix for an untouched failure yet");
+    const [second] = await pending(flaky);
+    assert.ok(second, "the failure is confirmed by another attempt");
+    await fail(flaky, second, "drafting", "cleanup");
+    await flaky.reconcile();
+    const view = await flaky.units.view(await flaky.current());
+    assert.equal(view.units[0].state, "ready");
+    assert.equal(view.units[0].checks[0].outcome, "Flaky");
+    assert.equal((await flaky.current()).status?.retries?.["unit:U0"], undefined);
+  } finally { flaky.db.close(); }
+
+  const touched = await fixture();
+  try {
+    await touched.approvePlan();
+    await touched.reconcile();
+    await touched.develop("complete", "U0", ["src/loader.ts"]);
+    await touched.reconcile();
+    await touched.reconcile();
+    const [first] = await pending(touched);
+    await fail(touched, first, "loader works", "other", true);
+    await touched.reconcile();
+    assert.equal((await touched.current()).status?.retries?.["unit:U0"], 1, "a failure in a test the change touched goes to the developer");
+  } finally { touched.db.close(); }
+});
+
+test("ADR-0086: a flaky check at the pre-review barrier lets review start instead of waiting forever", async () => {
+  const { testId } = await import("./model/tests.ts");
+  const f = await fixture();
+  try {
+    await f.approvePlan();
+    for (const [unit, path] of [["U0", "src/loader.ts"], ["U1", "src/reload.ts"]]) {
+      await f.reconcile();
+      await f.develop("complete", unit, [path]);
+      await f.reconcile();
+      await f.reconcile();
+      await f.settle((wi) => wi.status?.stage === "code-review" || (wi.status?.stage === "implement" && wi.status.step === 0));
+    }
+    assert.equal((await f.current()).status?.stage, "code-review");
+    f.tree("tree-b"); // the final candidate differs: the barrier re-establishes readiness
+    const barrier = async () => (await f.checks()).filter((c) => c.spec.workflow?.unit === "*" && !c.status);
+    const fail = (run: CheckRun, failed: string, passed: string) => f.store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed", outcome: "AssertionFailed",
+      finalSnapshot: run.spec.snapshot, logsIncomplete: false, finishedAt: "2026-11-14T11:00:00Z",
+      tests: { failed: [{ name: failed, file: "src/a.test.ts", touched: false }], passed: [testId(passed)], skipped: 0 } } });
+    for (let i = 0; i < 12 && !(await f.runs()).some((r) => r.spec.stage === "code-review"); i++) {
+      await f.reconcile();
+      for (const run of await barrier()) {
+        if (run.spec.check !== "test") await f.finish(run, "Passed");
+        else await fail(run, run.spec.workflow!.attempt === 1 ? "cleanup" : "drafting", run.spec.workflow!.attempt === 1 ? "drafting" : "cleanup");
+      }
+    }
+    assert.ok((await f.runs()).some((r) => r.spec.stage === "code-review"), "review starts on flaky barrier evidence");
+    assert.equal((await f.units.view(await f.current())).barrier?.satisfied, true);
+  } finally { f.db.close(); }
+});

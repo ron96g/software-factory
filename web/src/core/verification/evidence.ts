@@ -6,6 +6,8 @@ const EXIT_CODE_FORMAT = "exit-code";
 export function countsAsPassed(run: CheckRun): boolean {
   const status = run.status;
   if (status?.phase !== "Completed" || status.outcome !== "Passed") return false;
+  // ADR-0086: a targeted re-run covers only the failed tests; it is evidence for flakiness, never a pass of the check.
+  if (run.spec.workflow?.purpose === "rerun-failed") return false;
   if (status.finalSnapshot !== run.spec.snapshot) return false;
   return !status.logsIncomplete || (run.spec.resultFormat ?? EXIT_CODE_FORMAT) === EXIT_CODE_FORMAT;
 }

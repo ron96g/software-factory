@@ -44,6 +44,7 @@ import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
 import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
+import { ticketDraftMarkdown } from "@/ui/artifact-content.ts";
 import { RecoveryPanel } from "@/ui/recovery-panel.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import { normalizeQuestions } from "@/core/questions.ts";
@@ -456,33 +457,88 @@ function ContextCard({ d }: { d: WorkItemDetail }) {
 
 /** Re-runs the workflow in a new round; earlier output stays visible as superseded history. */
 function RestartMenu({ d }: { d: WorkItemDetail }) {
+  // undefined: closed; null: from the beginning; string: from that stage.
+  const [target, setTarget] = useState<string | null | undefined>(undefined);
+  return (
+    <>
+      <Menu position="bottom-end" withinPortal>
+        <Menu.Target>
+          <Button variant="default" leftSection={<IconRefresh size={16} />}>
+            Restart
+          </Button>
+        </Menu.Target>
+        <Menu.Dropdown>
+          <Menu.Label>Re-run agents in a new round</Menu.Label>
+          <Menu.Item onClick={() => setTarget(null)}>From the beginning</Menu.Item>
+          <Menu.Divider />
+          {d.stages.map((s) => (
+            <Menu.Item key={s.name} onClick={() => setTarget(s.name)}>
+              From {s.name}{" "}
+              <Text span size="xs" c="dimmed">
+                ({s.lifecyclePhase})
+              </Text>
+            </Menu.Item>
+          ))}
+        </Menu.Dropdown>
+      </Menu>
+      {target !== undefined && <RestartDialog d={d} stage={target ?? undefined} onClose={() => setTarget(undefined)} />}
+    </>
+  );
+}
+
+/** ADR-0085: restart with the context and notes the re-run should see, in one step. */
+function RestartDialog({ d, stage, onClose }: { d: WorkItemDetail; stage?: string; onClose: () => void }) {
+  const wi = d.workItem;
+  const [context, setContext] = useState(wi.spec.context ?? "");
   const [busy, setBusy] = useState(false);
-  const restart = async (stage?: string) => {
+  const from = stage ? d.stages.findIndex((s) => s.name === stage) : 0;
+  const rerun = new Set(d.stages.slice(Math.max(0, from)).map((s) => s.name));
+  const drafts = d.feedback.filter((f) => !f.feedback.spec.submitted && rerun.has(f.feedback.spec.producedBy.stage));
+  const [includeNotes, setIncludeNotes] = useState(drafts.length > 0);
+  const limit = 20000 - (wi.spec.originSnapshot?.content.length ?? 0);
+  const restart = async () => {
     setBusy(true);
-    await act(`/api/workitems/${d.workItem.metadata.name}/restart`, { stage }, stage ? `Restarting from ${stage}` : "Restarting from the beginning");
+    const ok = await act(`/api/workitems/${wi.metadata.name}/restart`,
+      { stage, ...(context !== (wi.spec.context ?? "") ? { context } : {}), includeDraftNotes: includeNotes },
+      stage ? `Restarting from ${stage}` : "Restarting from the beginning");
     setBusy(false);
+    if (ok) onClose();
   };
   return (
-    <Menu position="bottom-end" withinPortal>
-      <Menu.Target>
-        <Button variant="default" leftSection={<IconRefresh size={16} />} loading={busy}>
-          Restart
-        </Button>
-      </Menu.Target>
-      <Menu.Dropdown>
-        <Menu.Label>Re-run agents in a new round</Menu.Label>
-        <Menu.Item onClick={() => restart()}>From the beginning</Menu.Item>
-        <Menu.Divider />
-        {d.stages.map((s) => (
-          <Menu.Item key={s.name} onClick={() => restart(s.name)}>
-            From {s.name}{" "}
-            <Text span size="xs" c="dimmed">
-              ({s.lifecyclePhase})
-            </Text>
-          </Menu.Item>
-        ))}
-      </Menu.Dropdown>
-    </Menu>
+    <Modal opened onClose={onClose} title={stage ? `Restart from ${stage}` : "Restart from the beginning"} size="lg" closeOnClickOutside={!busy}>
+      <Stack>
+        <Text size="sm">
+          Agents re-run {stage ? <><b>{stage}</b> and every later stage</> : "every stage"} in a new round. Earlier output of those stages is kept as
+          superseded history. Approvals of re-run stages are asked again.
+        </Text>
+        <Textarea
+          label="Additional context"
+          description="What every agent should know for this round, e.g. new decisions or requirements. Replaces the item's current additional context."
+          placeholder="CRD schemas must be strictly typed. Secrets only by reference, in one configured namespace..."
+          value={context}
+          onChange={(e) => setContext(e.currentTarget.value)}
+          autosize
+          minRows={4}
+          maxRows={14}
+          disabled={busy}
+          error={context.length > limit ? `At most ${limit} characters alongside inherited evidence.` : undefined}
+          data-autofocus
+        />
+        {drafts.length > 0 && (
+          <Checkbox
+            label={`Send my ${drafts.length} draft inline note${drafts.length === 1 ? "" : "s"} on the re-run stages (${[...new Set(drafts.map((f) => f.feedback.spec.producedBy.stage))].join(", ")})`}
+            description="Each note reaches the agent that produced the annotated passage, once."
+            checked={includeNotes}
+            onChange={(e) => setIncludeNotes(e.currentTarget.checked)}
+            disabled={busy}
+          />
+        )}
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button leftSection={<IconRefresh size={16} />} loading={busy} disabled={context.length > limit} onClick={restart}>Restart</Button>
+        </Group>
+      </Stack>
+    </Modal>
   );
 }
 
@@ -931,7 +987,7 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
 function ArtifactBody({ d, a }: { d: WorkItemDetail; a: Artifact }) {
   return (
     <AnnotatedArtifact detail={d} artifact={a.metadata.name}>
-      <MarkdownView>{a.spec.content}</MarkdownView>
+      <MarkdownView>{ticketDraftMarkdown(a) ?? a.spec.content}</MarkdownView>
     </AnnotatedArtifact>
   );
 }

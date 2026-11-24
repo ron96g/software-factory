@@ -61,6 +61,8 @@ import { createIssueProposalController } from "./issues/controller.ts";
 import { createKnowledgeController } from "./runtime/controllers/knowledge.ts";
 import { KnowledgeRefineResponder } from "./agents/knowledge-refine-responder.ts";
 import { ProductOwnerTicketDrafter } from "./issues/ticket-drafter.ts";
+import { storyPublisher } from "./issues/story-publisher.ts";
+import { EventFlakyTestReporter } from "./issues/flaky-tests.ts";
 import { baseConflictProvider, codeSearchProvider, repositoryDocsProvider } from "./agents/context-providers.ts";
 import { LocalWorkspaceProvider, RipgrepCodeSearch } from "./adapters/codesearch/ripgrep.ts";
 import { anthropicFactory, googleFactory, openAICompatibleFactory } from "./adapters/llm/clients.ts";
@@ -99,7 +101,7 @@ import { OpenCodeHost } from "./adapters/opencode/host.ts";
 import { OpenCodeExecutor } from "./adapters/opencode/executor.ts";
 import { DefaultRecordedToolTurns } from "./agents/recorded-tool-turns.ts";
 import { AgentChatRunner } from "./agents/agent-chat.ts";
-import type { AgentRuntime, CapabilityDetector, ConversationTurnRunner, DefinitionLoader, ExecutionContext, FinishValidator, ToolCapabilities, WorkspaceProbe } from "./ports/index.ts";
+import type { AgentRuntime, CapabilityDetector, ConversationTurnRunner, DefinitionLoader, ExecutionContext, FinishValidator, StagePublisher, ToolCapabilities, WorkspaceProbe } from "./ports/index.ts";
 import { LocalWorkspaceReaders } from "./adapters/workspaces/local-reader.ts";
 import { StoreOutbox, commentHandler, createClarificationSyncController, createOutboxController } from "./runtime/outbox.ts";
 import { TicketActions } from "./tickets/actions.ts";
@@ -108,7 +110,7 @@ import { checkRunValidator } from "./checks/admission.ts";
 import { issueProposalValidator } from "./issues/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
-import { GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
+import { GitCandidateChanges, GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
 import { DEFAULT_CHECK_OUTPUT_BYTES, SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
@@ -390,12 +392,14 @@ export async function createFactory(o: FactoryOptions) {
     checkArtifactSchemas().catch((err) => o.log?.("artifact schema check after reload failed", err));
   });
   const workspaceReaders = new LocalWorkspaceReaders(new RipgrepCodeSearch());
+  const draftNotes = new StoreDraftFeedbackBatch({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store });
   const planning = new PlanningService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler, events, redactor,
-    schemas, schemaValidator, readers: workspaceReaders,
-    notes: new StoreDraftFeedbackBatch({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store }) });
+    schemas, schemaValidator, readers: workspaceReaders, notes: draftNotes });
   // ADR-0047: verification and unit execution depend on each other's ports; the closure breaks the construction cycle.
+  // ADR-0086: flaky decisions become events, and repeatedly flaky tests one proposed issue.
+  const flakyTests = new EventFlakyTestReporter({ reader: store, writer: store, events, clock, redactor });
   const verification: VerificationService = new VerificationService({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store, compiler,
-    snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning, recoveryChecks: recoveryCheckPort, logs: transcripts,
+    snapshots, environments, scheduler: checkScheduler, events, clock, redactor, planning, planReview: planning, recoveryChecks: recoveryCheckPort, logs: transcripts, flaky: flakyTests,
     completeness: { beforeCandidate: (...a) => units.beforeCandidate(...a), assertComplete: (...a) => units.assertComplete(...a) } });
   const recoveryRouter = new ValidatedRecoveryRouter({ reader: store, schemas, validator: schemaValidator, contracts: verification,
     candidates: verification, readers: workspaceReaders });
@@ -406,7 +410,7 @@ export async function createFactory(o: FactoryOptions) {
   const runtimeNeed = runtimeRecoveryNeed(environments);
   recoveryNeeds.register(runtimeNeed.type, runtimeNeed);
   const units: UnitExecutionService = new UnitExecutionService({ namespace: DEFAULT_NAMESPACE, reader: store, compiler, contracts: verification, candidates: verification,
-    scheduler: checkScheduler, readers: workspaceReaders, events, clock, redactor });
+    scheduler: checkScheduler, readers: workspaceReaders, events, clock, redactor, flaky: flakyTests });
   // ADR-0055/0057: one check per artifact type, applied when the agent calls `finish` and again after the run.
   const proposedChecks = new Registry<ProposedArtifactCheck>();
   const artifactChecks = new Registry<ArtifactCheck>();
@@ -606,9 +610,12 @@ export async function createFactory(o: FactoryOptions) {
     claims: workspaceLock, fenced: new SqliteFencedStatusWriter(store, workspaceLock), holder: incarnation,
     maxPerWorkspace: Number(env.FACTORY_CHECKS_PER_WORKSPACE ?? 1), maxTotal: Number(env.FACTORY_CHECKS_TOTAL ?? 2),
     definitionsLoadedAt,
-    contracts: verification, recoveryChecks: recoveryCheckPort, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
+    changes: new GitCandidateChanges(), contracts: verification, recoveryChecks: recoveryCheckPort, onError: (message) => (o.log ?? console.error)(`[checkrun] ${message}`) });
   // ADR-0062 §3: the CheckRun execution controller runs in the worker (or in "all"); the web root never runs checks.
   if (role !== "web") manager.register(checkRunController);
+  // ADR-0084: stage publication blocks beyond the built-in pull request.
+  const publishers = new Registry<StagePublisher>();
+  publishers.register("issue", storyPublisher({ reader: store, writer: store, redactor, clock, factoryUrl: env.FACTORY_PUBLIC_URL }));
   const agentRunController = createAgentRunController({
     reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
     feedback: feedbackCapture,
@@ -624,7 +631,7 @@ export async function createFactory(o: FactoryOptions) {
     onError: (message) => (o.log ?? console.error)(`[conversation] ${message}`),
   });
   if (role !== "worker") {
-    manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend,
+    manager.register(createWorkItemController({ reader: store, writer: store, status: store, events, clock, compiler, gates, outbox, workspaces: workspaceBackend, publishers,
       stagePolicy: verification, resumptionPolicy: verification, publicationGuard: verification, planReconfirmation: verification, publicationRecovery: verification,
       questionPolicy: planning, intentPolicy: planning, assignments: units, runFailures: units, artifactChecks,
       recovery: recoveryRouter, recoveryNeeds, recoveryAllowances }));
@@ -679,6 +686,7 @@ export async function createFactory(o: FactoryOptions) {
     records: itemRecords,
     clock,
     baseConflicts: baseSync,
+    notes: draftNotes,
     ticketDrafter: new ProductOwnerTicketDrafter({ reader: store, transcripts, recorders, models, redactor, agent: "product-owner", skill: "ticket-writing" }),
   });
 

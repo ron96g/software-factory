@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import type { IssueProposal, Source, WorkItem } from "../model/kinds.ts";
+import type { Approval, Artifact, IssueProposal, Source, WorkItem } from "../model/kinds.ts";
 import { SYSTEM_NAMESPACE } from "../model/resource.ts";
+import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import type { Validator } from "../ports/index.ts";
 
 /** The fields a human approves; anything else (review, resolution, status) may change without invalidating approval. */
@@ -48,6 +49,32 @@ export function issueProposalValidator(): Validator {
       if (old && old.status?.phase && FROZEN.has(old.status.phase) &&
         JSON.stringify(publishingFields(old.spec)) !== JSON.stringify(publishingFields(p.spec))) {
         problems.push(`publishing fields are frozen once the proposal is ${old.status.phase}`);
+      }
+
+      // ADR-0084: a story ticket is published only from the exact draft a human approved at the gate.
+      if (!old && p.spec.purpose === "story") {
+        const pv = p.spec.provenance;
+        const itemName = pv?.workItem;
+        const item = itemName ? await ctx.reader.get<WorkItem>("WorkItem", ns, itemName) : null;
+        const approval = pv?.approval ? await ctx.reader.get<Approval>("Approval", ns, pv.approval) : null;
+        const artifact = pv?.artifact ? await ctx.reader.get<Artifact>("Artifact", ns, pv.artifact.name) : null;
+        if (!itemName || !item) problems.push("a story ticket must reference an existing work item");
+        else {
+          if (p.metadata.name !== `${itemName}-ticket`) problems.push(`the story ticket must be named ${itemName}-ticket (one per item)`);
+          if (!p.metadata.ownerReferences?.some((o) => o.kind === "WorkItem" && o.name === itemName)) problems.push("a story ticket must be owned by its work item");
+        }
+        if (!pv?.human) problems.push("a story ticket is published on behalf of the human who approved it");
+        if (!approval || approval.spec.decision !== "approve" || approval.spec.workItemRef.name !== itemName || approval.metadata.labels?.[LABEL_SUPERSEDED]) {
+          problems.push("a story ticket needs a current approved gate decision of its work item");
+        } else if (!approval.spec.decidedBy || approval.spec.decidedBy !== pv?.proposedBy || approval.spec.decidedBy !== p.spec.review?.by) {
+          problems.push("a story ticket is approved on behalf of the human who decided the gate");
+        }
+        if (!artifact || artifact.metadata.uid !== pv?.artifact?.uid || artifact.metadata.resourceVersion !== pv?.artifact?.resourceVersion || artifact.spec.workItemRef.name !== itemName) {
+          problems.push("a story ticket needs the exact draft version of its work item");
+        } else if (approval && (artifact.metadata.creationTimestamp ?? "") > (approval.metadata.creationTimestamp ?? "")) {
+          problems.push("the draft was written after the approval it claims");
+        }
+        if (p.spec.review?.decision !== "approve" || p.spec.review.contentHash !== issueContentHash(p.spec)) problems.push("the approval does not match the story ticket content");
       }
 
       if (!old && p.spec.purpose === "mirror") {

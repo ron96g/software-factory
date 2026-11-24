@@ -15,6 +15,22 @@ export interface CheckResultClassifier {
   failureEvidence?(result: ExecResult): { tests: string[] } | undefined;
 }
 
+/**
+ * ADR-0086 §6: makes a flaky decision visible (once per decision) and turns repeatedly flaky tests into one proposed
+ * issue. `check` is `<repository>/<check>`.
+ */
+export interface FlakyTestReporter {
+  report(item: WorkItem, check: string, evidence: import("../model/flaky.ts").FlakyEvidence): Promise<void>;
+}
+
+/**
+ * ADR-0086: optional, separate from classify (ISP). Every leaf test of a complete run; undefined when the output is not
+ * a complete test report. `file` is the failure location as printed (the controller makes it workspace-relative).
+ */
+export interface TestResultExtractor {
+  testResults(result: ExecResult): { failed: { name: string; file?: string }[]; passed: string[]; skipped: number } | undefined;
+}
+
 /** ADR-0067: optional, separate from classify (ISP). Returns undefined when output is not comparable. */
 export interface FindingExtractor {
   extractFindings(result: ExecResult): import("../model/kinds.ts").CheckFinding[] | undefined;

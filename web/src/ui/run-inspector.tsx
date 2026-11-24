@@ -1,4 +1,5 @@
 "use client";
+import { ticketDraftMarkdown } from "./artifact-content.ts";
 import { Accordion, Badge, Box, Button, Code, Divider, Drawer, Group, Loader, Paper, ScrollArea, SimpleGrid, Stack, Text, Textarea, ThemeIcon, Tooltip } from "@mantine/core";
 import { IconArrowsDiff, IconMessageQuestion, IconNote, IconRefresh, IconRobot, IconSend, IconSettings, IconTool, IconUser } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
@@ -291,7 +292,7 @@ function RunSummary({ run, artifacts }: { run: AgentRun; artifacts: Artifact[] }
         <Paper key={a.metadata.name} p="xs">
           <Badge size="xs" variant="light" mb={4}>{a.spec.artifactTypeRef.name}</Badge>
           <ScrollArea.Autosize mah={320}>
-            <MarkdownView>{a.spec.content}</MarkdownView>
+            <MarkdownView>{ticketDraftMarkdown(a) ?? a.spec.content}</MarkdownView>
           </ScrollArea.Autosize>
         </Paper>
       ))}

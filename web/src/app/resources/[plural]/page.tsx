@@ -1,5 +1,6 @@
 "use client";
-import { Anchor, Badge, Card, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Button, Card, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { IconPlus } from "@tabler/icons-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use } from "react";
@@ -7,6 +8,7 @@ import type { BrowsableKind } from "@/core/ports/app.ts";
 import type { Resource } from "@/core/model/resource.ts";
 import { useLive } from "@/ui/api.ts";
 import { PhaseBadge, timeAgo } from "@/ui/badges.tsx";
+import { STORY_WORKFLOW } from "@/ui/new-item.ts";
 
 /** Short, kind-aware summary column; everything else lives in the detail view. */
 function summary(r: Resource): React.ReactNode {
@@ -32,6 +34,8 @@ function summary(r: Resource): React.ReactNode {
       return `${s.repositoryRef?.name} · ${s.branch}${st.baseCommit ? ` @ ${String(st.baseCommit).slice(0, 10)}` : ""}`;
     case "AgentRun":
       return `${s.agentRef?.name} · ${s.stage}/${s.step} · ${st.provenance?.executor ?? ""}`;
+    case "IssueProposal":
+      return `${s.purpose} · ${s.targetRef?.name ?? "no target"}${st.externalRef?.externalId ? ` · ${st.externalRef.externalId}` : ""} · ${s.title}`;
     default:
       return st.message ?? "";
   }
@@ -54,6 +58,8 @@ export default function ResourceList({ params }: { params: Promise<{ plural: str
             {info?.scope === "definition" ? "Definition (from Git, read-only at runtime)" : "Runtime resource"} · {data?.length ?? "…"} item(s)
           </Text>
         </div>
+        {/* ADR-0084: a ticket is written by the story-refinement workflow, started like any work item. */}
+        {plural === "issueproposals" && <Button component={Link} href={`/?new=${STORY_WORKFLOW}`} leftSection={<IconPlus size={16} />}>New ticket</Button>}
       </Group>
       {error && <Text c="red">{error}</Text>}
       <Card className="sf-surface" p={0}>

@@ -440,6 +440,41 @@ spec:
                                           minimum: 1
                                       required:
                                         - next
+                                issue:
+                                  type: object
+                                  properties:
+                                    artifactRef:
+                                      type: object
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                        namespace:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                      required:
+                                        - name
+                                    reviewStage:
+                                      type: string
+                                      minLength: 1
+                                    targetRef:
+                                      type: object
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                        namespace:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                      required:
+                                        - name
+                                  required:
+                                    - artifactRef
+                                    - reviewStage
                             steps:
                               type: array
                               items:
@@ -1044,6 +1079,7 @@ spec:
                             type: string
                             enum:
                               - pre-existing
+                              - flaky
                           followUp:
                             type: string
                             enum:

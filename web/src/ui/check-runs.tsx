@@ -147,6 +147,11 @@ function CheckRunCard({ run }: { run: CheckRun }) {
       {preparationFinished && <Alert color="yellow">Preparation command succeeded. Its resulting tree requires review; this is not final verification evidence.</Alert>}
       {status?.message && <Alert color={preparationFinished ? "yellow" : status.outcome === "Passed" ? "blue" : "red"}>{status.message}</Alert>}
       {status?.logsIncomplete && <Alert color="yellow">Log evidence is incomplete.</Alert>}
+      {run.spec.workflow?.purpose === "rerun-failed" && <Text size="xs" c="dimmed">Targeted re-run of the failed tests of {run.spec.workflow.rerunOf} (ADR-0086): evidence for flakiness only, never a pass of the check.</Text>}
+      {status?.tests && <Text size="xs">
+        {status.tests.passed.length} passed · {status.tests.failed.length} failed{status.tests.skipped ? ` · ${status.tests.skipped} skipped` : ""}
+        {status.tests.failed.map((t) => <span key={t.name} style={{ display: "block", overflowWrap: "anywhere" }}>✗ {t.name}{t.file ? ` (${t.file}${t.touched ? ", changed by this item" : ""})` : ""}</span>)}
+      </Text>}
       <Button size="xs" variant="light" onClick={() => setShowLogs((value) => !value)}>{showLogs ? "Hide logs" : "View redacted logs"}</Button>
       {showLogs && <CheckLogs name={run.metadata.name} />}
     </Stack>

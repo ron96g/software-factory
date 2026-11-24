@@ -41,11 +41,23 @@ export interface NewWorkItemInput {
   repositoryRefs?: string[];
   /** ADR-0066: also propose mirroring the item as an issue in this source (still needs human approval). */
   mirrorTo?: string;
+  /** ADR-0084: tracker a workflow's `publish.issue` block creates the ticket in (default: the block's target). */
+  ticketTarget?: string;
+}
+
+/** What a human can change together with a restart, so the re-run sees it (ADR-0085). */
+export interface RestartOptions {
+  /** Replaces the additional context (ADR-0032) in the same write as the restart. */
+  context?: string;
+  /** Submits the draft inline notes on the re-run stages in the restart's batch (ADR-0071, ADR-0073). */
+  includeDraftNotes?: boolean;
 }
 
 export interface NewItemChoice {
   name: string;
   description?: string;
+  /** ADR-0084: the workflow ends by publishing a ticket; `target` is its default tracker. */
+  publishesTicket?: { target?: string };
 }
 
 /** What a human can pick when creating an item, plus the defaults the `manual` source would apply. */
@@ -105,7 +117,7 @@ export interface WorkItemCommands {
    * Re-runs the workflow from `stage` (default: first stage) in a new round, also for finished items.
    * Earlier output of the restarted stages is kept as superseded history and no longer used as agent input.
    */
-  restartWorkItem(p: Principal, name: string, stage?: string): Promise<WorkItem>;
+  restartWorkItem(p: Principal, name: string, stage?: string, options?: RestartOptions): Promise<WorkItem>;
   /** Sets the human-provided additional context (ADR-0032). Runs that already finished keep what they saw. */
   updateWorkItemContext(p: Principal, name: string, context: string): Promise<WorkItem>;
 }

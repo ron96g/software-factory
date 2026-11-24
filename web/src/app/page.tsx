@@ -20,14 +20,15 @@ import {
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconCloudDownload, IconPlus, IconAlertTriangle } from "@tabler/icons-react";
+import { IconCloudDownload, IconPlus, IconAlertTriangle, IconFileDescription } from "@tabler/icons-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Source, WorkItem } from "@/core/model/kinds.ts";
 import type { NewItemOptions } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { issueNeedsReview } from "@/ui/issue-proposals.tsx";
+import { STORY_WORKFLOW } from "@/ui/new-item.ts";
 import type { IssueProposal } from "@/core/model/kinds.ts";
 import { PhaseBadge, TypeBadge, timeAgo } from "@/ui/badges.tsx";
 
@@ -40,6 +41,13 @@ export default function Dashboard() {
   const { data: issues } = useLive<IssueProposal[]>("/api/issues", (n) => n.kind === "IssueProposal");
   const awaitingIssues = (issues ?? []).filter(issueNeedsReview).length;
   const [opened, { open, close }] = useDisclosure(false);
+  const [initialWorkflow, setInitialWorkflow] = useState<string | undefined>();
+  const openWith = (workflow?: string) => { setInitialWorkflow(workflow); open(); };
+  useEffect(() => {
+    // `/?new=<workflow>` (e.g. the Issues page's New ticket) opens New item with that workflow preselected.
+    const wanted = new URLSearchParams(window.location.search).get("new");
+    if (wanted) { openWith(wanted); window.history.replaceState(null, "", "/"); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [filter, setFilter] = useState<keyof typeof FILTERS>("all");
 
   const rows = useMemo(() => {
@@ -92,7 +100,10 @@ export default function Dashboard() {
               ))}
             </Menu.Dropdown>
           </Menu>
-          <Button leftSection={<IconPlus size={16} />} onClick={open}>
+          <Button variant="light" leftSection={<IconFileDescription size={16} />} onClick={() => openWith(STORY_WORKFLOW)}>
+            New ticket
+          </Button>
+          <Button leftSection={<IconPlus size={16} />} onClick={() => openWith()}>
             New item
           </Button>
         </Group>
@@ -186,26 +197,32 @@ export default function Dashboard() {
         </Table>
       </Card>
 
-      <NewItemModal opened={opened} onClose={close} onCreated={(name) => router.push(`/items/${name}`)} />
+      <NewItemModal key={initialWorkflow ?? "item"} initialWorkflow={initialWorkflow} opened={opened} onClose={close} onCreated={(name) => router.push(`/items/${name}`)} />
     </Stack>
   );
 }
 
-function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose: () => void; onCreated: (name: string) => void }) {
+function NewItemModal({ opened, onClose, onCreated, initialWorkflow }: { opened: boolean; onClose: () => void; onCreated: (name: string) => void; initialWorkflow?: string }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [context, setContext] = useState("");
   const [busy, setBusy] = useState(false);
   const [mirrorTo, setMirrorTo] = useState<string | null>(null);
+  const [ticketTargetPick, setTicketTarget] = useState<string | null>(null);
   const { data: options } = useLive<NewItemOptions>(opened ? "/api/new-item-options" : null, () => false);
   // null = untouched: follow the manual source's defaults until the user picks something.
   const [workflowPick, setWorkflow] = useState<string | null>(null);
   const [reposPick, setRepos] = useState<string[] | null>(null);
-  const workflow = workflowPick ?? options?.defaults.workflow ?? null;
+  const preselected = initialWorkflow && options?.workflows.some((w) => w.name === initialWorkflow) ? initialWorkflow : undefined;
+  const workflow = workflowPick ?? preselected ?? options?.defaults.workflow ?? null;
   const repos = reposPick ?? options?.defaults.repositories ?? [];
   const chosenWorkflow = options?.workflows.find((w) => w.name === workflow);
+  // ADR-0084: a workflow that publishes a ticket chooses its tracker here instead of mirroring the item.
+  const publishes = chosenWorkflow?.publishesTicket;
+  const ticketTarget = publishes ? ticketTargetPick ?? publishes.target ?? null : null;
   return (
-    <Modal opened={opened} onClose={onClose} title="New work item" size="lg">
+    <Modal opened={opened} onClose={onClose} title={publishes ? "New ticket" : "New work item"} size="lg">
+      {publishes && <Text size="sm" c="dimmed" mb="sm">Agents research the code and the product owner writes the story. You review it; then it is created in the tracker. Nothing is implemented. You can start implementation from the ticket later.</Text>}
       <Stack>
         <TextInput label="Title" placeholder="e.g. Show transcript tokens in the run viewer" value={title} onChange={(e) => setTitle(e.currentTarget.value)} data-autofocus required />
         <Textarea
@@ -249,7 +266,18 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
             styles={{ description: { marginTop: 6 } }}
           />
         </SimpleGrid>
-        {(options?.issueTargets.length ?? 0) > 0 && (
+        {publishes && (
+          <Select
+            label="Publish ticket to"
+            description="The tracker the approved story is created in."
+            data={(options?.issueTargets ?? []).map((t) => ({ value: t.source, label: `${t.source}${t.project ? ` (${t.project})` : ""}` }))}
+            value={ticketTarget}
+            onChange={setTicketTarget}
+            allowDeselect={false}
+            error={options && !ticketTarget ? "Choose a tracker" : undefined}
+          />
+        )}
+        {!publishes && (options?.issueTargets.length ?? 0) > 0 && (
           <Select
             label="Also create in …"
             description="Optional. Proposes an issue for this item in a tracker; it is only created after you approve it on the item page."
@@ -265,12 +293,13 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
           </Button>
           <Button
             loading={busy}
-            disabled={!title.trim() || !options || !workflow || repos.length === 0}
+            disabled={!title.trim() || !options || !workflow || repos.length === 0 || (!!publishes && !ticketTarget)}
             onClick={async () => {
               setBusy(true);
               const wi = await act<WorkItem>(
                 "/api/workitems",
-                { title, description, context, workflowRef: workflow, repositoryRefs: repos, mirrorTo: mirrorTo ?? undefined },
+                { title, description, context, workflowRef: workflow, repositoryRefs: repos, mirrorTo: publishes ? undefined : mirrorTo ?? undefined,
+                  ticketTarget: ticketTarget ?? undefined },
                 "Work item created",
               );
               setBusy(false);
@@ -281,6 +310,7 @@ function NewItemModal({ opened, onClose, onCreated }: { opened: boolean; onClose
                 setWorkflow(null);
                 setRepos(null);
                 setMirrorTo(null);
+                setTicketTarget(null);
                 onClose();
                 onCreated(wi.metadata.name);
               }

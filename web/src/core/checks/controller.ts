@@ -1,13 +1,15 @@
-import type { AgentRun, CheckFinding, CheckOutcome, CheckRun, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
+import type { AgentRun, CheckFinding, CheckOutcome, CheckRun, CheckTestResults, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type CandidateChanges, type TestResultExtractor, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
-import { resolveCheckConfig } from "./config.ts";
+import { rerunCheckConfig, rerunOriginal, resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
+import { testId } from "../model/tests.ts";
+import { isAbsolute, relative } from "node:path";
 
 export interface CheckControllerDeps {
   reader: ResourceReader;
@@ -33,7 +35,12 @@ export interface CheckControllerDeps {
   contracts?: VerificationContracts;
   scopes?: ModuleScopePlanner;
   recoveryChecks?: RecoveryCheckAuthorization;
+  /** ADR-0086: marks failed tests whose file the candidate changed. Without it, no failure counts as untouched. */
+  changes?: CandidateChanges;
 }
+
+const MAX_FAILED_TESTS = 200;
+const OUTPUT_TAIL = 2000;
 
 type CheckContext = { item: WorkItem; workspace: Workspace; repository: Repository };
 
@@ -145,7 +152,11 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     }
     let config: Awaited<ReturnType<typeof resolveCheckConfig>>;
     try {
-      config = await resolveCheckConfig(repository, run.spec.check, workspace, d.scopes, run.spec.workflow?.purpose);
+      if (run.spec.workflow?.purpose === "rerun-failed") {
+        const original = await rerunOriginal(d.reader, item, workspace, run.spec.check, run.spec.workflow);
+        if (original.spec.snapshot !== run.spec.snapshot) return { reason: "a targeted re-run needs the original attempt's snapshot" };
+        config = rerunCheckConfig(repository, run.spec.check, original);
+      } else config = await resolveCheckConfig(repository, run.spec.check, workspace, d.scopes, run.spec.workflow?.purpose);
     } catch (error) {
       return { reason: error instanceof Error ? error.message : "check configuration is invalid" };
     }
@@ -269,6 +280,27 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     await d.events.warning(interrupted, "CheckInterrupted", interrupted.status!.message!);
   }
 
+  /** ADR-0086: names must survive redaction unchanged; files become workspace-relative and are marked when the candidate changed them. */
+  async function testResults(workspace: Workspace, raw: ReturnType<TestResultExtractor["testResults"]>): Promise<CheckTestResults | undefined> {
+    if (!raw || raw.failed.length > MAX_FAILED_TESTS || raw.failed.some((t) => d.redactor.redact(t.name) !== t.name)) return undefined;
+    const root = workspace.status?.path;
+    const local = (file?: string) => {
+      if (!file || !root) return undefined;
+      const path = relative(root, file.replace(/^file:\/\//, ""));
+      return path && !path.startsWith("..") && !isAbsolute(path) ? path : undefined;
+    };
+    const failed: CheckTestResults["failed"] = raw.failed.map((t) => ({ name: t.name, ...(local(t.file) ? { file: local(t.file) } : {}) }));
+    if (failed.some((t) => t.file) && d.changes) {
+      try {
+        const changed = new Set(await d.changes.changedFiles(workspace));
+        for (const t of failed) if (t.file) t.touched = changed.has(t.file);
+      } catch {
+        // Unknown changes: no failure can be shown to be untouched (ADR-0086 §2).
+      }
+    }
+    return { failed, passed: [...new Set(raw.passed.map(testId))].sort(), skipped: raw.skipped };
+  }
+
   async function execute(run: CheckRun, lease: LeaseRef): Promise<void> {
     const namespace = nsOf(run);
     const eligibility = await loadContext(run);
@@ -299,6 +331,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     let finalSnapshot: string | undefined;
     let failureEvidence: { tests: string[] } | undefined;
     let findings: CheckFinding[] | undefined;
+    let tests: CheckTestResults | undefined;
     // ADR-0062 §2: keep the execution lease alive while a long check runs; a lost lease stops the result from being written.
     const ttlMs = claimTtlMs(run);
     const renew = setInterval(() => {
@@ -342,6 +375,9 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
             const evidence = selectedClassifier.failureEvidence?.(result);
             if (evidence && evidence.tests.every((name) => d.redactor.redact(name) === name)) failureEvidence = evidence;
           }
+          if ((outcome === "Passed" || outcome === "AssertionFailed") && finalSnapshot === run.spec.snapshot && "testResults" in selectedClassifier) {
+            tests = await testResults(workspace, (selectedClassifier as TestResultExtractor).testResults(result));
+          }
         }
         message = `${run.spec.check}: ${outcome} (exit ${result.exitCode} in ${result.durationMs} ms)`;
       }
@@ -357,6 +393,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
           outcome = "NotVerified";
           executionOutcome = undefined;
           failureEvidence = undefined;
+          tests = undefined;
           message += `; workflow origin changed during execution: ${afterAgentError}`;
         }
       }
@@ -384,6 +421,8 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         executionOutcome,
         failureEvidence,
         findings,
+        tests,
+        outputTail: outcome !== "Passed" && result ? d.redactor.redact(`${result.stdout}\n${result.stderr}`.trim()).slice(-OUTPUT_TAIL) || undefined : undefined,
         message: d.redactor.redact(message),
         finishedAt: now.toISOString(),
         exitCode: result?.exitCode,
@@ -393,12 +432,15 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
           result.termination?.kind === "timeout" || result.termination?.kind === "signal" ||
           result.termination?.kind === "spawn-error",
         finalSnapshot,
-        conditions: setCondition(current.status?.conditions, "Verified", outcome === "Passed" ? "True" : "False", outcome, d.redactor.redact(message), now),
+        // ADR-0086: a targeted re-run covers only some tests, so it never verifies the check, even when it passes.
+        conditions: setCondition(current.status?.conditions, "Verified", outcome === "Passed" && run.spec.workflow?.purpose !== "rerun-failed" ? "True" : "False",
+          run.spec.workflow?.purpose === "rerun-failed" ? `Rerun${outcome}` : outcome, d.redactor.redact(message), now),
       },
     }, lease);
     // A lost lease (expired or taken over) means another holder owns the result now (ADR-0062 §2): never write over it.
     if (!done) return;
-    if (outcome === "Passed") await d.events.normal(done, "CheckCompleted", done.status!.message!);
+    if (run.spec.workflow?.purpose === "rerun-failed") await d.events.normal(done, "RerunCompleted", `targeted re-run of ${run.spec.workflow.rerunOf}: ${done.status!.message}`);
+    else if (outcome === "Passed") await d.events.normal(done, "CheckCompleted", done.status!.message!);
     else await d.events.warning(done, "CheckCompleted", `${outcome}: ${done.status!.message}`);
   }
 

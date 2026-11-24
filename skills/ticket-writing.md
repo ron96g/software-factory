@@ -4,7 +4,7 @@ kind: Skill
 metadata:
   name: ticket-writing
 spec:
-  description: Write a short, plannable tracker ticket (SMART goal, Given/When/Then acceptance criteria) from investigation evidence (ADR-0076).
+  description: Write a short, plannable tracker ticket (SMART goal, Given/When/Then acceptance criteria) from investigation evidence (ADR-0076, ADR-0084).
 ---
 
 # Ticket Writing
@@ -43,3 +43,8 @@ Use these sections in this order. Leave out a section only if you have nothing t
   blocks. No tables, no nested lists, no task-list checkboxes, and no HTML.
 - The title is imperative and specific, at most 80 characters, with no prefix like "Follow-up:" or "Bug:".
 - Don't add links to the origin ticket or the factory. They are appended automatically.
+
+## Output in a workflow
+When your step outputs a `ticket-draft` artifact (the `story-refinement` workflow, ADR-0084), its content is JSON:
+`{"title": "<title>", "body": "<Markdown body with the sections above>"}`. A human reviews exactly this text before it
+is published. If a human rejected an earlier draft, address every point of the reason and the inline notes.
