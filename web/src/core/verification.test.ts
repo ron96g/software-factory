@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { originAuthorized } from "./checks/origin.ts";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentRun, Approval, Artifact, CheckOutcome, CheckRun, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
+import type { AgentRun, Approval, Artifact, CheckOutcome, CheckRun, Clarification, Repository, WorkItem, Workflow, Workspace } from "./model/kinds.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { keyOf, ownerRef } from "./model/meta.ts";
 import { ANONYMOUS, SandboxUnavailableError, type CheckRunScheduler, type ExecutionContext, type GateContext, type GateDecision } from "./ports/index.ts";
@@ -90,6 +90,10 @@ async function fixture(preparation = false, scan?: boolean, flakyWaive = false) 
   }
   async function finish(run: CheckRun, outcome: CheckOutcome) {
     return store.updateStatus<CheckRun>({ ...run, status: { phase: "Completed", outcome, finalSnapshot: run.spec.snapshot,
+      // A real runner records what it saw; the blocked question must carry it (a preflight stops at the first
+      // unmet prerequisite without printing anything of its own).
+      message: `${run.spec.check}: ${outcome} (exit 1 in 24 ms)`,
+      ...(outcome === "Passed" ? {} : { outputTail: "go version go1.27.1 linux/amd64\n/usr/bin/make" }),
       logsIncomplete: outcome !== "Passed", finishedAt: "2026-11-13T11:00:00Z" } });
   }
   const gate = service.gates.find((g) => g.type === "verified-checks")!;
@@ -419,6 +423,11 @@ test("infrastructure failures exhaust execution budget into durable attention wi
       assert.equal(blocked.status?.blockedBy?.kind, "Clarification");
       assert.equal(blocked.status?.retries, undefined);
       assert.equal((await f.store.list<AgentRun>("AgentRun")).length, 1, "no speculative developer execution");
+      // The question must be actionable: the outcome *and* the evidence the check itself produced.
+      const [question] = (await f.store.list<Clarification>("Clarification", { namespace: "default" })).at(-1)!.spec.questions;
+      assert.match(question, new RegExp(outcome), "the question names the outcome");
+      assert.match(question, /\/usr\/bin\/make/, "the question carries the check's own output, not just the outcome");
+      assert.match(question, /no code-fix retry was charged/, "and says that no code fix was blamed");
     } finally { f.db.close(); }
   }
 });

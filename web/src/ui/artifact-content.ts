@@ -1,4 +1,5 @@
 import type { Artifact } from "@/core/model/kinds.ts";
+import { renderVerificationReport } from "../core/artifacts/render.ts";
 
 /** A `ticket-draft` as the ticket that will be published (ADR-0084); null for any other artifact. */
 export function ticketDraftMarkdown(a: Artifact): string | null {
@@ -10,4 +11,15 @@ export function ticketDraftMarkdown(a: Artifact): string | null {
   } catch {
     return null;
   }
+}
+
+/** A `verification-report` as readable Markdown (ADR-0063); null for any other artifact or unparseable content. */
+export function verificationReportMarkdown(a: Artifact): string | null {
+  if (a.spec.artifactTypeRef.name !== "verification-report") return null;
+  return renderVerificationReport(a.spec.content);
+}
+
+/** Any structured artifact the UI can show as readable Markdown instead of raw JSON (ADR-0084 ticket drafts, ADR-0063 verification reports). */
+export function artifactMarkdown(a: Artifact): string | null {
+  return ticketDraftMarkdown(a) ?? verificationReportMarkdown(a);
 }

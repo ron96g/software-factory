@@ -101,7 +101,9 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
   if (events.some((e) => e.spec.reason === "LoopExhausted")) {
     items.push({ severity: "warning", label: "AI review loop exhausted", detail: "Blocking AI review findings may remain unresolved." });
   }
-  const open = input.clarifications.filter((c) => !c.spec.answers?.length);
+  // ADR-0029: a superseded clarification (a restarted stage, or a plan re-confirmation the item moved past) can no longer
+  // be acted on, so it must not be reported as an open question at the gate.
+  const open = input.clarifications.filter((c) => !c.spec.answers?.length && !c.metadata.labels?.[LABEL_SUPERSEDED]);
   if (open.length) items.push({ severity: "warning", label: `${open.length} open clarification(s)`, detail: open.flatMap((c) => c.spec.questions).join(" · ") });
 
   items.sort((a, b) => RANK[b.severity] - RANK[a.severity]);

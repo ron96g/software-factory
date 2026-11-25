@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Amended by ADR-0080 §10:** the `host` runtime was removed; the worker's `host` case now means "no primitive" (simulation/wait).
+- **Addendum (2026-11-24, worker heartbeat):** §3's "live workers" is measured with a long-lived `worker/<incarnation>` lease, renewed every TTL/3 and released on a clean stop; a crashed worker's lease expires with the **store's** clock and `reapStaleIncarnations` releases it like any other lock, so a dead worker overstates the count by at most one TTL. Counting `checkrun/…` leases cannot answer "is a worker alive?" — they exist only while a check runs — so `SystemHealth.checks.workers` counts heartbeats and `checks.running` counts the check leases.
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Amended by:** ADR-0064

@@ -684,6 +684,50 @@ test("ADR-0072 an agent's recorded question keeps the answer the human gave to t
   assert.equal(decisions.find((d) => d.id === "crd-owner")?.answer, undefined, "a decision with options still needs a matching signature");
 });
 
+test("ADR-0087 the same question recorded by several agents is one decision that keeps the options it offered", () => {
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const researcher = { spec: { stage: "triage", step: "0", agentRef: { name: "code-researcher" } },
+    status: { result: { questions: [{ id: "Q1", text: "Which database?", blocker: true, options: ["Postgres", "SQLite"] },
+      { id: "Q2", text: "Which region?" }] } } } as AgentRun;
+  const triager = { spec: { stage: "triage", step: "1", agentRef: { name: "triager" } },
+    status: { result: { questions: [{ id: "Q1", text: "Which database should the service use?", options: ["Postgres", "SQLite"] }] } } } as AgentRun;
+  const decisions = (service as unknown as { decisions(i: WorkItem, d: PlanningDocument, r: AgentRun[], s: Set<string>): { id: string; question: string; options: string[] }[] })
+    .decisions({ spec: {} } as WorkItem, { risks: "r", decisions: [] }, [researcher, triager], new Set(["triage"]));
+  const questions = decisions.filter((d) => d.id.startsWith("question-"));
+  assert.equal(questions.length, 2, "one decision per question id; a distinct id stays separate");
+  assert.equal(questions[0].question, "Which database?");
+  assert.deepEqual(questions[0].options, ["Postgres", "SQLite"], "the recorded options survive to the sheet");
+  assert.deepEqual(questions[1].options, [], "a question that offered none stays option-less");
+});
+
+test("ADR-0087 a recorded question's answer still binds by its text now that it shows options", () => {
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const run = { spec: { stage: "triage", agentRef: { name: "triager" } },
+    status: { result: { questions: [{ id: "Q1", text: "Which database?", blocker: true, options: ["Postgres", "SQLite"] }] } } } as AgentRun;
+  const item = { spec: { planning: { answers: {
+    old: { question: "Which database?", signature: "answered-when-option-less", answer: "SQLite" },
+  } } } } as unknown as WorkItem;
+  const decisions = (service as unknown as { decisions(i: WorkItem, d: PlanningDocument, r: AgentRun[], s: Set<string>): { id: string; answer?: string }[] })
+    .decisions(item, { risks: "r", decisions: [] }, [run], new Set(["triage"]));
+  assert.equal(decisions.find((d) => d.id.startsWith("question-"))?.answer, "SQLite");
+});
+
+test("ADR-0087 a same-id copy is suppressed once the first recording folds into a decision", () => {
+  const service = new PlanningService({ namespace: "default", reader: undefined!, writer: undefined!, compiler: undefined!,
+    events: undefined!, redactor: { redact: (t) => t } });
+  const document = parsePlanningDocument(JSON.stringify({ risks: "r",
+    decisions: [{ id: "D1", question: "Which database?", options: ["Postgres", "SQLite"], rationale: "r", required: true }] }));
+  const researcher = { spec: { stage: "triage", step: "0", agentRef: { name: "code-researcher" } },
+    status: { result: { questions: [{ id: "Q1", text: "Which database?" }] } } } as AgentRun;
+  const triager = { spec: { stage: "triage", step: "1", agentRef: { name: "triager" } },
+    status: { result: { questions: [{ id: "Q1", text: "Which database should the service use?" }] } } } as AgentRun;
+  const decisions = (service as unknown as { decisions(i: WorkItem, d: PlanningDocument, r: AgentRun[], s: Set<string>): { id: string }[] })
+    .decisions({ spec: {} } as WorkItem, document, [researcher, triager], new Set(["triage"]));
+  assert.deepEqual(decisions.map((d) => d.id), ["D1"], "the folded question and its reworded same-id copy add no decision");
+});
+
 test("ADR-0073 a planning revision takes the draft inline notes on re-run stages into the same batch", async () => {
   const f = await fixture();
   try {

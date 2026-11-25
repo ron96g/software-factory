@@ -267,6 +267,11 @@ export interface SandboxProfileSpec {
    * never put secrets here (rule 16); commands otherwise only get PATH, HOME, LANG, TERM, USER.
    */
   env?: Record<string, string>;
+  /**
+   * ADR-0088: binaries the sandbox must provide, and how to obtain each one. The factory installs them into its own
+   * persistent toolchain cache (on `PATH`), so a repository never scripts `PATH`/install plumbing into its checks.
+   */
+  tools?: ToolSpec[];
   /** Minimum isolation; runtimes below it are never used. */
   isolation?: "process" | "container" | "microvm";
   /**
@@ -277,6 +282,18 @@ export interface SandboxProfileSpec {
   acceptWeakerIsolation?: boolean;
 }
 export type SandboxProfile = Resource<SandboxProfileSpec>;
+
+/**
+ * ADR-0088: a binary the sandbox must provide. `provides` is where readiness is observed — a path relative to the
+ * factory-owned toolchain cache — so the factory can answer "is this tool ready?" without running anything. `via` names
+ * exactly one registered provisioner type (rule 4) and its parameters as data; `command` is the documented escape hatch
+ * for a tool no provisioner knows yet.
+ */
+export interface ToolSpec {
+  name: string;
+  provides: string;
+  via: { type: string; with?: Record<string, string> };
+}
 
 // ── Runtime ──────────────────────────────────────────────────────────────
 

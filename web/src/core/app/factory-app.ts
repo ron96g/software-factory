@@ -116,8 +116,12 @@ export interface FactoryAppDeps {
   environments: ExecutionEnvironmentSelector;
   models: ModelResolver;
   controllerHealth: ControllerHealth;
-  /** ADR-0062 §3: live check workers (distinct lease holders) and how many checks they run. */
+  /** ADR-0062 §3: live check workers (renewed heartbeats) and how many checks they run. */
   checkWorkers?: () => Promise<{ workers: number; running: number }>;
+  /** ADR-0062 §3: this process's role, so the UI can tell "no worker exists" from "no check is running". */
+  role?: "all" | "web" | "worker";
+  /** ADR-0088: profile-declared tools missing from the toolchain cache, per repository. */
+  toolGaps?: () => Promise<{ repository: string; tool: string; type: string }[]>;
   /** Audit trail for human overrides (ADR-0027) — required, an override must never go unlogged. */
   events: EventRecorder;
   /** ADR-0029 policy, reported in system health. */
@@ -1168,6 +1172,8 @@ export class FactoryApp
       failing: this.d.controllerHealth.failing(),
       policyGaps: (await this.d.reader.list<Repository>("Repository")).flatMap(verificationPolicyGaps),
       checks: this.d.checkWorkers ? await this.d.checkWorkers() : { workers: 0, running: 0 },
+      role: this.d.role ?? "all",
+      toolGaps: this.d.toolGaps ? await this.d.toolGaps() : [],
     };
   }
 

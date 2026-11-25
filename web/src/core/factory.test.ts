@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { resolve } from "node:path";
 import { createFactory, type Factory } from "./factory.ts";
 import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
@@ -435,4 +437,58 @@ test("AC-3: truncation marker is stable and actionable", async () => {
   const out = clipResult("a".repeat(MAX_RESULT * 2), "list_files", "narrow_glob");
   assert.ok(out.length <= MAX_RESULT);
   assert.equal(parseMarker(out)?.next, "narrow_glob");
+});
+
+/** ADR-0062 §3: "no check worker" must mean nobody will run checks, not "no check is running right now". */
+test("ADR-0062 §3: a role-`web` process registers no check worker, and a stopped worker withdraws its heartbeat", async () => {
+  const db = join(mkdtempSync(join(tmpdir(), "sf-heartbeat-")), "factory.db");
+  const boot = async (role?: "all" | "web") => {
+    const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: db, role,
+      env: { FACTORY_AGENT_RUNTIME: "tool-loop", FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
+    await f.start();
+    return f;
+  };
+
+  const web = await boot("web");
+  try {
+    const h = await web.app.systemHealth(p);
+    assert.equal(h.role, "web");
+    assert.equal(h.checks.workers, 0, "the web root never executes checks, so it announces nothing");
+  } finally { await web.stop(); }
+
+  const first = await boot();
+  assert.equal((await first.app.systemHealth(p)).checks.workers, 1, "a process that runs checks announces itself");
+  await first.stop();
+
+  const second = await boot();
+  try {
+    const h = await second.app.systemHealth(p);
+    assert.equal(h.role, "all");
+    assert.equal(h.checks.workers, 1, "the stopped worker withdrew its heartbeat (a stale one would count as a second worker)");
+  } finally { await second.stop(); }
+});
+
+/** ADR-0021: the workspaces directory belongs to the store, so an ephemeral store must never sweep the shared one. */
+test("ADR-0021: an in-memory store never touches the shared workspaces directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "sf-root-"));
+  // A worktree-shaped directory in the shared `<root>/.workspaces` a *running* factory would own.
+  const decoy = join(root, ".workspaces", "some-item", "some-repo");
+  mkdirSync(join(decoy, ".git"), { recursive: true });
+
+  const f = await createFactory({ definitionsRoot: root, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "bwrap" }, log: () => {} });
+  await f.start();
+  try {
+    assert.ok(existsSync(decoy), "a short-lived instance must not delete workspaces its store knows nothing about");
+  } finally { await f.stop(); }
+});
+
+/** ADR-0088: an environment gap is a badge, not a blocked item. */
+test("ADR-0088: a profile-declared tool missing from the toolchain cache is reported", async () => {
+  const f = await createFactory({ definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
+  await f.start();
+  try {
+    // `go-build` declares gotestsum; an in-memory store's cache starts empty.
+    const gaps = (await f.app.systemHealth(p)).toolGaps;
+    assert.ok(gaps.some((g) => g.repository === "controlplane" && g.tool === "gotestsum" && g.type === "goInstall"), JSON.stringify(gaps));
+  } finally { await f.stop(); }
 });

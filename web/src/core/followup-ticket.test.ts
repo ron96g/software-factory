@@ -13,7 +13,7 @@ import type { Conversation, IssueProposal } from "./model/kinds.ts";
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 test("AC-1/AC-2: a click creates one Approved, revision-bound follow-up proposal; stale and servicedesk are rejected", async () => {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
   try {
     const item = await f.app.createWorkItem(p, { title: "Spec key order", description: "Keys are reordered on the Playground." });
     const name = item.metadata.name;
@@ -47,7 +47,7 @@ test("body renderer puts the reviewed body first and always appends origin URL a
 });
 
 test("ADR-0076: without an LLM, drafting returns the template in one recorded draft-ticket conversation; Create uses the reviewed body", async () => {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }), log: () => {} });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }), log: () => {} });
   try {
     await f.start(); // the conversation controller opens the drafting transcript
     const item = await f.app.createWorkItem(p, { title: "Spec key order", description: "Keys are reordered on the Playground." });

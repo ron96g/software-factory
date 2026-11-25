@@ -10,7 +10,7 @@ import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
 const ROOT = resolve(import.meta.dirname, "../../..");
 
 async function setup() {
-  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
   const item = await f.app.createWorkItem(p, { title: "Spec key order", description: "Keys are reordered." });
   const name = item.metadata.name;
   const preview = await f.app.previewWorkItemFollowUp(p, name, "");

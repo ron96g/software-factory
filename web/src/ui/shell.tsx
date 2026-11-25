@@ -38,7 +38,9 @@ function HealthBadges() {
             <Text fw={600}>Check worker (ADR-0062)</Text>
             <Text size="xs">
               {data.checks.workers === 0
-                ? "No check worker is running: checks stay Pending until one starts (npm run worker)."
+                ? data.role === "web"
+                  ? "No check worker is running: checks stay Pending until one starts (npm run worker)."
+                  : "This process runs checks but its worker heartbeat is missing — checks may stay Pending."
                 : `${data.checks.workers} worker(s), ${data.checks.running} check(s) running.`}
             </Text>
           </Stack>
@@ -64,6 +66,26 @@ function HealthBadges() {
         >
           <Badge variant="filled" color="red" leftSection={<IconAlertTriangle size={12} />}>
             {data.failing.length} failing
+          </Badge>
+        </Tooltip>
+      )}
+      {data.toolGaps?.length > 0 && (
+        <Tooltip
+          multiline
+          w={420}
+          label={
+            <Stack gap={4}>
+              <Text size="xs">ADR-0088: these tools are declared by a repository's sandbox profile but are not in the factory's toolchain cache yet. They are installed the next time a sandbox is prepared (declared tools must be provisioned before a check can use them).</Text>
+              {data.toolGaps.slice(0, 8).map((g) => (
+                <Text key={`${g.repository}/${g.tool}`} size="xs">
+                  <b>{g.repository}/{g.tool}</b> · {g.type}
+                </Text>
+              ))}
+            </Stack>
+          }
+        >
+          <Badge variant="light" color="yellow" leftSection={<IconBox size={12} />}>
+            {data.toolGaps.length} tool gap{data.toolGaps.length === 1 ? "" : "s"}
           </Badge>
         </Tooltip>
       )}

@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { cp, lstat, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -13,8 +13,9 @@ import type {
   SandboxHealthInfo,
   SandboxSpec,
   ShellConfiner,
+  Toolchain,
 } from "../../ports/index.ts";
-import { SandboxUnavailableError } from "../../ports/index.ts";
+import { SandboxUnavailableError, TOOLCHAIN_MOUNT, declaredTools } from "../../ports/index.ts";
 import { scrubbedEnv } from "./process.ts";
 import { resolveReadInWorkspace, resolveWriteInWorkspace, writeInsideWorkspace } from "./workspace-paths.ts";
 
@@ -36,6 +37,22 @@ const SANDBOX_HOME = "/tmp/home";
  * (`ssl/`) and NSS libraries (`nsswitch.conf`). It is read-only and mostly non-secret.
  */
 export const SYSTEM_RO_BINDS = ["/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin", "/etc", "/opt", "/run/systemd/resolve", "/home/linuxbrew/.linuxbrew"];
+
+/**
+ * `/etc/resolv.conf` is often a symlink to somewhere outside `/etc` (WSL: `/mnt/wsl/resolv.conf`; systemd-resolved:
+ * `/run/systemd/resolve/…`). `/etc` is bound read-only, so without its target the link dangles inside the sandbox and
+ * every command loses DNS — which surfaces as an unrelated-looking failure (`go install …: lookup proxy.golang.org
+ * … connection refused`) in whichever check needed the network.
+ */
+export function resolverBinds(exists: (path: string) => boolean = existsSync, resolvConf = "/etc/resolv.conf",
+  realpath: (path: string) => string = realpathSync): string[] {
+  try {
+    const target = realpath(resolvConf);
+    return target === resolvConf || !exists(target) ? [] : [target];
+  } catch {
+    return [];
+  }
+}
 
 export const shellQuote = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`;
 
@@ -90,6 +107,15 @@ export interface BwrapArgsOptions {
   cwd: string;
   command: string;
   extraRoBinds?: readonly string[];
+  /**
+   * ADR-0088: factory-owned toolchain cache, mounted at `TOOLCHAIN_MOUNT` **read-only** — only the provisioning sandbox
+   * sets `writableToolchain`. A candidate must never be able to plant a binary another command executes.
+   */
+  toolchainDir?: string;
+  /** ADR-0088: the provisioning sandbox is the only place the cache is writable. */
+  writableToolchain?: boolean;
+  /** ADR-0088: a writable per-workspace `HOME` (caches live there). Absent: an ephemeral tmpfs (isolated snapshots). */
+  homeDir?: string;
   exists?: (path: string) => boolean;
 }
 
@@ -116,14 +142,22 @@ export function buildBwrapArgs(o: BwrapArgsOptions): string[] {
 
   // Mount `/tmp` and the workspace before the read-only binds, so a git bind under `/tmp` (a workspace
   // outside the checkout) is not shadowed by the tmpfs.
-  args.push(
-    "--dev", "/dev",
-    "--proc", "/proc",
-    "--tmpfs", "/tmp",
-    "--tmpfs", SANDBOX_HOME,
-    "--bind", workspace, workspace,
-  );
+  args.push("--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp");
+  // ADR-0088: the declared tools are bound read-only (writable only while the factory provisions them), and `HOME` is a
+  // per-workspace writable directory so module/package caches survive a command. An isolated snapshot keeps the ephemeral
+  // tmpfs `HOME` of ADR-0079: nothing the candidate writes may influence later evidence.
+  if (o.toolchainDir) {
+    args.push(o.writableToolchain ? "--bind" : "--ro-bind", resolve(o.toolchainDir), TOOLCHAIN_MOUNT);
+  }
+  if (o.homeDir) {
+    args.push("--bind", resolve(o.homeDir), SANDBOX_HOME);
+  } else {
+    args.push("--tmpfs", SANDBOX_HOME);
+  }
+  args.push("--bind", workspace, workspace);
   for (const dir of SYSTEM_RO_BINDS) addRo(dir);
+  // A symlinked `/etc/resolv.conf` needs its target bound too, or the sandbox silently has no DNS.
+  for (const file of resolverBinds(exists)) addRo(file);
   for (const dir of o.extraRoBinds ?? []) addRo(dir);
   for (const dir of worktreeGitBinds(workspace)) addRo(dir);
   // ADR-0079: overlay `.git` (worktree pointer file or real dir) read-only so confined commands cannot plant git hooks/fsmonitor.
@@ -147,6 +181,37 @@ export function buildBwrapArgs(o: BwrapArgsOptions): string[] {
   return args;
 }
 
+/**
+ * ADR-0088: the sandbox environment. The toolchain cache is on `PATH` with the per-language conventions an operator
+ * should not have to know (`GOBIN`, `GOPATH`, npm/pip/cargo caches); profile values win over the defaults, and `HOME`
+ * is always the sandbox home (never the operator's).
+ */
+export function sandboxEnv(profileEnv: Record<string, string> = {}, toolchainDir?: string): NodeJS.ProcessEnv {
+  const base = scrubbedEnv();
+  const env: NodeJS.ProcessEnv = { ...base, ...profileEnv };
+  if (toolchainDir) {
+    // The declared tools are on PATH first (they are the factory's, read-only); the *caches* are data and live in HOME.
+    env.PATH = `${TOOLCHAIN_MOUNT}/bin:${profileEnv.PATH ?? base.PATH ?? ""}`;
+    env.GOBIN = `${TOOLCHAIN_MOUNT}/bin`;
+    env.GOPATH = `${SANDBOX_HOME}/go`;
+    env.npm_config_cache = `${SANDBOX_HOME}/npm`;
+    env.PIP_CACHE_DIR = `${SANDBOX_HOME}/pip`;
+    env.CARGO_HOME = `${SANDBOX_HOME}/cargo`;
+  }
+  env.HOME = SANDBOX_HOME;
+  return env;
+}
+
+/**
+ * ADR-0088: the writable per-workspace home the caches live in. Derived from the workspace path, so every command of an
+ * item shares it and no other item does — and kept **outside** the mounted cache, so a sandbox cannot read another
+ * item's home (`.netrc`, `.npmrc`, module caches) through the read-only toolchain mount.
+ */
+export function sandboxHome(toolchainDir: string, workspace: string): string {
+  const cache = resolve(toolchainDir);
+  return join(`${cache}-homes`, createHash("sha256").update(resolve(workspace)).digest("hex").slice(0, 16));
+}
+
 function runBwrap(
   workspace: string,
   cwd: string,
@@ -155,10 +220,11 @@ function runBwrap(
   env: Record<string, string> = {},
   extraRoBinds: readonly string[] = [],
   outputCap = DEFAULT_OUTPUT_CAP,
+  toolchain?: { dir: string; writable?: boolean; home?: string },
 ): Promise<ExecResult> {
   const started = Date.now();
-  const args = buildBwrapArgs({ workspace, cwd, command, extraRoBinds });
-  const childEnv: NodeJS.ProcessEnv = { ...scrubbedEnv(), ...env, HOME: SANDBOX_HOME };
+  const args = buildBwrapArgs({ workspace, cwd, command, extraRoBinds, toolchainDir: toolchain?.dir, writableToolchain: toolchain?.writable, homeDir: toolchain?.home });
+  const childEnv = sandboxEnv(env, toolchain?.dir);
   return new Promise((done) => {
     const child = spawn("bwrap", args, { cwd, env: childEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout: Buffer = Buffer.alloc(0);
@@ -201,6 +267,10 @@ function runBwrap(
 export interface BwrapEnvironmentOptions {
   /** Additional host directories to bind read-only (e.g. from `FACTORY_BWRAP_RO_BINDS`). */
   extraRoBinds?: readonly string[];
+  /** ADR-0088: the factory-owned toolchain cache (created if missing) that profile-declared tools install into. */
+  toolchainDir?: string;
+  /** ADR-0088: provides the tools a profile declares before a sandbox is handed out. */
+  toolchain?: Toolchain;
 }
 
 /**
@@ -214,9 +284,15 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
   readonly runtime = "bwrap";
   readonly isolatesCandidate = true;
   private readonly extraRoBinds: readonly string[];
+  private readonly toolchainDir?: string;
+  private readonly toolchain?: Toolchain;
 
   constructor(options: BwrapEnvironmentOptions = {}) {
     this.extraRoBinds = options.extraRoBinds ?? [];
+    this.toolchainDir = options.toolchainDir;
+    this.toolchain = options.toolchain;
+    // The cache itself is bound into the sandbox, so it must exist (the per-workspace homes are created on demand).
+    if (this.toolchainDir) mkdirSync(this.toolchainDir, { recursive: true });
   }
 
   async health(): Promise<SandboxHealthInfo> {
@@ -232,7 +308,7 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
         isolation: "process",
         confinesShell: true,
         version: bwrapOut.trim(),
-        message: "Confines command execution (SandboxExec, OpenCode shell) via bubblewrap: workspace-only rw, ephemeral HOME, PID/IPC/UTS/cgroup namespaces, --cap-drop ALL, network allowed (ADR-0079/0081). File tools, OpenCode file tools, git plumbing and setup run in the factory process.",
+        message: "Confines command execution (SandboxExec, OpenCode shell) via bubblewrap: workspace-only rw, factory-owned HOME + toolchain cache, PID/IPC/UTS/cgroup namespaces, --cap-drop ALL, network allowed (ADR-0079/0081). File tools, OpenCode file tools, git plumbing and setup run in the factory process.",
       };
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -245,19 +321,60 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
     }
   }
 
+  /** The writable per-workspace home the caches live in (created on demand). */
+  private homeOf(workspace: string): string {
+    const home = sandboxHome(this.toolchainDir!, workspace);
+    mkdirSync(home, { recursive: true });
+    return home;
+  }
+
+  /**
+   * ADR-0088 §5: provide the tools the profile declares before anything runs in the sandbox. Idempotent — a tool whose
+   * `provides` file exists is not touched — and a tool that cannot be provided fails the environment visibly
+   * (`Unavailable`, which the recovery router treats as an environment problem, never as a code fix).
+   *
+   * Provisioning is the **only** writable use of the cache, and it runs with an **ephemeral `HOME`**: a candidate that
+   * wrote `~/.config/go/env`, `.gitconfig` or `.netrc` must not be able to steer what gets installed into a cache every
+   * item shares.
+   */
+  private async ensureTools(spec: SandboxSpec, wsPath: string, baseCommit: string): Promise<void> {
+    if (!this.toolchain || !this.toolchainDir || !declaredTools(spec.profile).length) return;
+    const provisioning = new BwrapSandbox(`bwrap-provision-${spec.workspaces[0]?.metadata.name ?? "tools"}`, wsPath, baseCommit,
+      spec.profile.spec?.env ?? {}, this.extraRoBinds, { dir: this.toolchainDir, writable: true });
+    let outcomes;
+    try {
+      outcomes = await this.toolchain.ensure(spec.profile, {
+        run: (command, o) => provisioning.exec(command, o?.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
+      });
+    } finally {
+      await provisioning.dispose();
+    }
+    const failed = outcomes.filter((o) => o.state === "failed");
+    if (failed.length) {
+      throw new SandboxUnavailableError(this.runtime,
+        `the sandbox could not provide ${failed.map((f) => `${f.name} (${f.type}): ${f.message ?? "unknown reason"}`).join("; ")}`);
+    }
+  }
+
   confineShell(input: { workspace: string; cwd: string; command: string; env: Record<string, string | undefined> }): {
     command: string;
     env: Record<string, string | undefined>;
   } {
-    const args = buildBwrapArgs({ workspace: input.workspace, cwd: input.cwd, command: input.command, extraRoBinds: this.extraRoBinds });
+    const home = this.toolchainDir ? this.homeOf(input.workspace) : undefined;
+    const args = buildBwrapArgs({ workspace: input.workspace, cwd: input.cwd, command: input.command, extraRoBinds: this.extraRoBinds,
+      toolchainDir: this.toolchainDir, homeDir: home });
     const command = `exec bwrap ${args.map(shellQuote).join(" ")}`;
-    return { command, env: { ...input.env, HOME: SANDBOX_HOME } };
+    const env = sandboxEnv(input.env as Record<string, string>, this.toolchainDir);
+    // OpenCode sets its own PATH/HOME; the cache stays read-only and HOME is the item's factory-owned one (ADR-0088).
+    return { command, env: { ...input.env, ...env } };
   }
 
   async prepare(spec: SandboxSpec): Promise<Sandbox> {
     const ws = spec.workspaces.find((w) => w.status?.phase === "Ready" && w.status.path);
     if (!ws) throw new SandboxUnavailableError(this.runtime, "the work item has no Ready workspace (ADR-0021)");
-    return new BwrapSandbox(`bwrap-${ws.metadata.name}`, ws.status!.path!, ws.status!.baseCommit!, spec.profile.spec?.env ?? {}, this.extraRoBinds);
+    await this.ensureTools(spec, ws.status!.path!, ws.status!.baseCommit!);
+    return new BwrapSandbox(`bwrap-${ws.metadata.name}`, ws.status!.path!, ws.status!.baseCommit!, spec.profile.spec?.env ?? {}, this.extraRoBinds,
+      this.toolchainDir ? { dir: this.toolchainDir, home: this.homeOf(ws.status!.path!) } : undefined);
   }
 
   async prepareIsolated(spec: SandboxSpec, input: { commit: string; mode: "baseline" | "candidate" }): Promise<Sandbox> {
@@ -265,6 +382,7 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
     if (!ws || !/^[a-f0-9]{40,64}$/.test(input.commit) || ws.status?.baseCommit !== input.commit) {
       throw new SandboxUnavailableError(this.runtime, "a Ready workspace and its exact pinned baseline commit are required");
     }
+    await this.ensureTools(spec, ws.status.path!, ws.status.baseCommit!);
     const source = await realpath(ws.status.path!);
     const parent = await realpath(dirname(source));
     const root = join(parent, input.mode === "baseline" ? ".factory-baselines" : ".factory-candidates");
@@ -282,12 +400,22 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
       } else {
         await cp(source, path, { recursive: true, verbatimSymlinks: true });
       }
-      return new IsolatedBwrapSandbox(`bwrap-${input.mode}-${ws.metadata.name}`, path, input.commit, spec.profile.spec?.env ?? {}, this.extraRoBinds);
+      // Read-only cache, no per-item home: evidence comes from a runtime the candidate cannot influence (ADR-0080 §13).
+      return new IsolatedBwrapSandbox(`bwrap-${input.mode}-${ws.metadata.name}`, path, input.commit, spec.profile.spec?.env ?? {}, this.extraRoBinds,
+        this.toolchainDir ? { dir: this.toolchainDir } : undefined);
     } catch (error) {
       await rm(path, { recursive: true, force: true });
       throw error;
     }
   }
+}
+
+/** ADR-0088: how a sandbox sees the toolchain cache. Only provisioning makes it writable. */
+interface ToolchainMount {
+  dir: string;
+  writable?: boolean;
+  /** Host directory bound at `SANDBOX_HOME`; absent means the ephemeral tmpfs (isolated snapshots). */
+  home?: string;
 }
 
 class BwrapSandbox implements Sandbox {
@@ -296,14 +424,16 @@ class BwrapSandbox implements Sandbox {
   private readonly base: string;
   private readonly env: Record<string, string>;
   private readonly extraRoBinds: readonly string[];
+  protected readonly toolchain?: ToolchainMount;
   private disposed = false;
 
-  constructor(id: string, dir: string, base: string, env: Record<string, string>, extraRoBinds: readonly string[]) {
+  constructor(id: string, dir: string, base: string, env: Record<string, string>, extraRoBinds: readonly string[], toolchain?: ToolchainMount) {
     this.id = id;
     this.dir = dir;
     this.base = base;
     this.env = env;
     this.extraRoBinds = extraRoBinds;
+    this.toolchain = toolchain;
   }
 
   private alive() {
@@ -313,7 +443,7 @@ class BwrapSandbox implements Sandbox {
   async exec(command: string, o: ExecOptions = {}): Promise<ExecResult> {
     this.alive();
     const cwd = o.cwd ? await resolveReadInWorkspace(this.dir, o.cwd) : this.dir;
-    return runBwrap(this.dir, cwd, command, o.timeoutMs, this.env, this.extraRoBinds, o.maxOutputBytes);
+    return runBwrap(this.dir, cwd, command, o.timeoutMs, this.env, this.extraRoBinds, o.maxOutputBytes, this.toolchain);
   }
 
   async readFile(p: string): Promise<string> {
@@ -345,8 +475,8 @@ class BwrapSandbox implements Sandbox {
 
 class IsolatedBwrapSandbox extends BwrapSandbox {
   private readonly pathToRemove: string;
-  constructor(id: string, dir: string, base: string, env: Record<string, string>, extraRoBinds: readonly string[]) {
-    super(id, dir, base, env, extraRoBinds);
+  constructor(id: string, dir: string, base: string, env: Record<string, string>, extraRoBinds: readonly string[], toolchain?: ToolchainMount) {
+    super(id, dir, base, env, extraRoBinds, toolchain);
     this.pathToRemove = dir;
   }
   override async dispose(): Promise<void> {

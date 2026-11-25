@@ -2,12 +2,14 @@
  * Composition root (AGENTS.md rule 3). The ONLY file that knows concrete implementations.
  */
 import { CREATE_ISSUE_ACTION, createIssuePolicy } from "./issues/policy.ts";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import type { ModelProvider, ToolServer, Source, Repository, ArtifactType } from "./model/kinds.ts";
+import type { ModelProvider, ToolServer, Source, Repository, ArtifactType, SandboxProfile } from "./model/kinds.ts";
+import { nsOf } from "./model/meta.ts";
+import { resolveRef } from "./refs/refs.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch, ResourceWatcher, AgentProcessKiller } from "./ports/index.ts";
+import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch, ResourceWatcher, AgentProcessKiller, ToolProvisioner } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -16,6 +18,7 @@ import { SqliteWorkspaceLock } from "./store/workspace-lock.ts";
 import { SqliteFencedStatusWriter } from "./store/fenced-status.ts";
 import { FeedWatcher } from "./store/feed-watcher.ts";
 import { NoProcessKiller, incarnationId, reapStaleIncarnations } from "./runtime/incarnations.ts";
+import { WORKER_LEASE_PREFIX, WorkerHeartbeat } from "./runtime/worker-heartbeat.ts";
 import { GitDefinitionLoader } from "./store/definition-loader.ts";
 import { BUILTIN_CAPABILITY_DETECTORS } from "./capabilities/detectors.ts";
 import { CompositeStore, ScopeRouter } from "./store/composite-store.ts";
@@ -89,6 +92,7 @@ import { DefaultEnvironmentSelector } from "./agents/environment-selector.ts";
 import { NoSandboxEnvironment } from "./adapters/sandbox/basic.ts";
 import { BwrapEnvironment } from "./adapters/sandbox/bwrap.ts";
 import { GitWorktreeWorkspaces } from "./adapters/workspaces/git-worktree.ts";
+import { COMMAND_TYPE, DefaultToolchain, GO_INSTALL_TYPE, commandProvisioner, goInstallProvisioner } from "./adapters/toolchain/toolchain.ts";
 import { createWorkspaceController } from "./runtime/controllers/workspace.ts";
 import { CONTEXT_TOOLS, SANDBOX_TOOLS } from "./agents/sandbox-tools.ts";
 import { ToolLoopExecutor } from "./agents/tool-loop.ts";
@@ -199,6 +203,8 @@ export interface FactoryOptions {
   databasePath: string;
   /** OpenCode agent runtime state (ADR-0060). Default: next to the database (a temp dir for ":memory:"). */
   agentRuntimeDir?: string;
+  /** ADR-0088 toolchain cache. Default: next to the database (a temp dir for ":memory:"), or `FACTORY_TOOLCHAIN_DIR`. */
+  toolchainDir?: string;
   env?: Record<string, string | undefined>;
   fetch?: typeof fetch;
   clock?: Clock;
@@ -327,11 +333,23 @@ export async function createFactory(o: FactoryOptions) {
   const incarnation = incarnationId(role, env);
   // ADR-0080 §7 / SEC-5: agent-initiated HTTP goes through the egress proxy (host allowlist + transcript audit).
   const egress = new DefaultEgressProxy({ policy: { allow: (env.FACTORY_EGRESS_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean) }, fetch: o.fetch });
+  // ADR-0088: the toolchain cache belongs to the store, exactly like the workspaces directory: an in-memory store gets
+  // a throwaway directory, and a real store keeps it next to its database.
+  const ownedToolchainDir = o.databasePath === ":memory:" && !o.toolchainDir && !env.FACTORY_TOOLCHAIN_DIR
+    ? mkdtempSync(join(tmpdir(), "factory-toolchain-"))
+    : undefined;
+  const toolchainDir = o.toolchainDir ?? env.FACTORY_TOOLCHAIN_DIR ?? ownedToolchainDir ?? join(dirname(o.databasePath), "toolchain");
+  const toolProvisioners = new Registry<ToolProvisioner>();
+  toolProvisioners.register(GO_INSTALL_TYPE, goInstallProvisioner);
+  toolProvisioners.register(COMMAND_TYPE, commandProvisioner);
+  const toolchain = new DefaultToolchain({ dir: toolchainDir, provisioners: toolProvisioners });
   const sandboxEnvs = new Registry<ExecutionEnvironment>();
   sandboxEnvs.register("none", new NoSandboxEnvironment());
   // ADR-0079: Linux bubblewrap process/filesystem isolation (ADR-0080 §11: the profile, not the env, decides isolation).
   sandboxEnvs.register("bwrap", new BwrapEnvironment({
     extraRoBinds: env.FACTORY_BWRAP_RO_BINDS?.split(":").filter(Boolean),
+    toolchainDir,
+    toolchain,
   }));
   for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
   const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [
@@ -355,13 +373,22 @@ export async function createFactory(o: FactoryOptions) {
   const usesWorktrees =
     env.FACTORY_SANDBOX_RUNTIME === "bwrap" ||
     ((!env.FACTORY_SANDBOX_RUNTIME || env.FACTORY_SANDBOX_RUNTIME === "auto") && (await environments.select()).health.runtime === "bwrap");
+  // ADR-0021: the workspaces directory belongs to the **store**, like the OpenCode state above: an in-memory store gets
+  // a throwaway directory. Sharing `<root>/.workspaces` would let a short-lived instance (a test booting a factory)
+  // sweep away every workspace the running factory still owns, because its own store knows none of them.
+  const ownedWorkspacesDir = o.databasePath === ":memory:" && !o.workspacesDir && !env.FACTORY_WORKSPACES_DIR
+    ? mkdtempSync(join(tmpdir(), "factory-workspaces-"))
+    : undefined;
+  const workspacesDir = o.workspacesDir ?? env.FACTORY_WORKSPACES_DIR ?? ownedWorkspacesDir ?? join(localRoot, ".workspaces");
   const workspaceBackend =
     o.workspaceBackend ??
     (usesWorktrees
       ? new GitWorktreeWorkspaces({
           definitionsRoot: localRoot,
           // Outside the web app, so Next.js/tsc never pick up workspace copies of the code.
-          workspacesDir: o.workspacesDir ?? env.FACTORY_WORKSPACES_DIR ?? join(localRoot, ".workspaces"),
+          workspacesDir,
+          // ADR-0021 addendum: clone the repository when the declared checkout is absent.
+          secrets,
         })
       : noWorkspaces);
 
@@ -375,6 +402,11 @@ export async function createFactory(o: FactoryOptions) {
   const compiler = new DefaultWorkflowCompiler(store);
   const snapshots = new GitWorkspaceSnapshotter();
   const jobs = new StoreWorkspaceJobs({ reader: store, lock: workspaceLock, holder: incarnation });
+  // ADR-0062 §3: a process that can execute checks announces itself, so "no check worker" means nobody will run them
+  // rather than "no check is running right now" (a check lease only exists while a check executes).
+  const heartbeat = role === "web"
+    ? undefined
+    : new WorkerHeartbeat({ lock: workspaceLock, holder: incarnation, onError: (message) => (o.log ?? console.error)(`[worker] ${message}`) });
   const checkScheduler = new WorkflowCheckScheduler({ reader: store, writer: store, snapshots, environments, redactor, scopes, jobs, recoveryChecks: recoveryCheckPort });
   const schemas = new DefinitionArtifactSchemas(store);
   const schemaValidator = new AjvSchemaValidator();
@@ -665,6 +697,7 @@ export async function createFactory(o: FactoryOptions) {
     capabilities,
     approvalGuards: [retrospectiveReview],
     verificationGuard: verification,
+    role,
     reader: store,
     writer: store,
     kinds,
@@ -675,9 +708,24 @@ export async function createFactory(o: FactoryOptions) {
     environments,
     models,
     controllerHealth: reconcileErrors,
+    // ADR-0088: profile-declared tools that are not in the cache yet, per repository (a badge, not a blocked item).
+    toolGaps: async () => {
+      const gaps: { repository: string; tool: string; type: string }[] = [];
+      for (const repository of await store.list<Repository>("Repository")) {
+        const profile = repository.spec.sandboxRef
+          ? (await resolveRef<SandboxProfile>(store, "SandboxProfile", repository.spec.sandboxRef, nsOf(repository))) ?? undefined
+          : undefined;
+        for (const outcome of await toolchain.status(profile)) {
+          if (outcome.state !== "ready") gaps.push({ repository: repository.metadata.name, tool: outcome.name, type: outcome.type });
+        }
+      }
+      return gaps;
+    },
     checkWorkers: async () => {
-      const live = await workspaceLock.list("checkrun/");
-      return { workers: new Set(live.map((l) => l.holder)).size, running: live.length };
+      // ADR-0062 §3: workers are the live heartbeats; `running` is how many checks they hold right now.
+      const workers = await workspaceLock.list(WORKER_LEASE_PREFIX);
+      const running = await workspaceLock.list("checkrun/");
+      return { workers: new Set(workers.map((l) => l.holder)).size, running: running.length };
     },
     events,
     responders,
@@ -741,16 +789,20 @@ export async function createFactory(o: FactoryOptions) {
       // ADR-0062 §2: release a previous incarnation's locks, but only after its agent processes are confirmed gone.
       const reaped = await reapStaleIncarnations({ lock: workspaceLock, killer: o.processKiller ?? new NoProcessKiller(), current: incarnation });
       if (reaped.length) (o.log ?? (() => {}))(`released workspace locks held by previous incarnation(s): ${reaped.join(", ")}`);
+      await heartbeat?.start();
       await feedWatcher?.start();
       await manager.start();
     },
     async stop() {
+      await heartbeat?.stop();
       feedWatcher?.stop();
       secretRefresh?.stop();
       await manager.stop();
       await Promise.all([agentRunController.stop(), conversationController.stop(), checkRunController.stop()]);
       await opencode?.close();
       db.close();
+      // Throwaway directories belong to the in-memory store that owned them.
+      for (const dir of [ownedWorkspacesDir, ownedToolchainDir, ownedToolchainDir && `${ownedToolchainDir}-homes`]) if (dir) rmSync(dir, { recursive: true, force: true });
     },
   };
 }

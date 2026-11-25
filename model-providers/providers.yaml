@@ -53,7 +53,6 @@ spec:
   type: google
   baseUrl: https://generativelanguage.googleapis.com/v1beta
   secretRef: { name: google-api-key }
-  default: true
   models:
     reasoning: gemini-4-neon
     coding: gemini-4-neon
@@ -69,11 +68,11 @@ spec:
   type: openai-compatible
   baseUrl: https://openrouter.ai/api/v1
   secretRef: { name: openrouter-api-key }   # OPENROUTER_API_KEY
+  default: true                             # ADR-0014: preferred over the others when several keys resolve
   models:
-    reasoning: anthropic/claude-opus-5.5
+    reasoning: deepseek/deepseek-v4.1-flash
     coding: anthropic/claude-sonnet-5.5
     fast: google/gemini-3.8-flash
-  # Broker default is off: set `default: true` to prefer this provider over the others when several keys resolve.
   # ADR-0028: optional per-agent models, e.g.
   # agentModels:
   #   reviewer: openai/gpt-6.2-astra-pro

@@ -44,7 +44,7 @@ import { RunList } from "@/ui/run-list.tsx";
 import { StartAgentChat } from "@/ui/start-agent-chat.tsx";
 import { FollowUpDialog, WorkItemFollowUps } from "@/ui/work-item-followups.tsx";
 import { IssueProposalsPanel } from "@/ui/issue-proposals.tsx";
-import { ticketDraftMarkdown } from "@/ui/artifact-content.ts";
+import { artifactMarkdown } from "@/ui/artifact-content.ts";
 import { RecoveryPanel } from "@/ui/recovery-panel.tsx";
 import type { PlanningWorkspace as PlanningWorkspaceData } from "@/core/ports/planning.ts";
 import { normalizeQuestions } from "@/core/questions.ts";
@@ -987,7 +987,7 @@ function Artifacts({ d }: { d: WorkItemDetail }) {
 function ArtifactBody({ d, a }: { d: WorkItemDetail; a: Artifact }) {
   return (
     <AnnotatedArtifact detail={d} artifact={a.metadata.name}>
-      <MarkdownView>{ticketDraftMarkdown(a) ?? a.spec.content}</MarkdownView>
+      <MarkdownView>{artifactMarkdown(a) ?? a.spec.content}</MarkdownView>
     </AnnotatedArtifact>
   );
 }

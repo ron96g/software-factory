@@ -67,6 +67,10 @@ test("S2: without a runtime, construction agents are simulated with a visible re
     assert.equal(h.sandbox.runtime, "none");
     assert.equal(h.sandbox.available, false);
     assert.equal(h.llm.available, false);
+    // ADR-0062 §3: this process runs checks (role "all"), so it announces itself as a live check worker.
+    assert.equal(h.role, "all");
+    assert.equal(h.checks.workers, 1);
+    assert.equal(h.checks.running, 0);
 
     const wi = await f.app.createWorkItem(ANONYMOUS, { title: "Sandbox reason", description: "A long enough description so triage accepts it right away.", workflowRef: "test-loop" });
     for (let i = 0; i < 400; i++) {
@@ -104,7 +108,7 @@ test("ADR-0021: git worktree workspace + unsandboxed test helper; changes persis
   g("add", ".");
   g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init");
 
-  const backend = new GitWorktreeWorkspaces({ definitionsRoot: repoDir, workspacesDir: `${repoDir}-ws` });
+  const backend = new GitWorktreeWorkspaces({ definitionsRoot: repoDir, workspacesDir: `${repoDir}-ws`, secrets: { resolve: () => undefined } });
   const repo = { metadata: { name: "repo" }, spec: { local: { path: repoDir } } } as never;
   assert.equal(backend.supports(repo), true);
   const ws = {

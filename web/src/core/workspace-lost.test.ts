@@ -62,7 +62,7 @@ test("GitWorktreeWorkspaces.exists detects a removed worktree and prepare re-att
   g("add", ".");
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repoDir });
 
-  const backend = new GitWorktreeWorkspaces({ definitionsRoot: repoDir, workspacesDir: mkdtempSync(join(tmpdir(), "sf-ws-")) });
+  const backend = new GitWorktreeWorkspaces({ definitionsRoot: repoDir, workspacesDir: mkdtempSync(join(tmpdir(), "sf-ws-")), secrets: { resolve: () => undefined } });
   const repo = { metadata: { name: "repo", namespace: "default" }, spec: { local: { path: repoDir } } } as unknown as Repository;
   const ws = { apiVersion: "v", kind: "Workspace", metadata: { name: "item-repo", namespace: "default" }, spec: { workItemRef: { name: "item" }, repositoryRef: { name: "repo" }, branch: "factory/item" } } as unknown as Workspace;
 

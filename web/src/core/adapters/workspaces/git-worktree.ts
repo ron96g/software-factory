@@ -1,16 +1,19 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
-import type { PreparedWorkspace, WorkspaceCleaner, WorkspaceProbe, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper } from "../../ports/index.ts";
+import type { PreparedWorkspace, SecretResolver, WorkspaceCleaner, WorkspaceProbe, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper } from "../../ports/index.ts";
 import { runScrubbed } from "../sandbox/process.ts";
 import { resolveLocalPath } from "../fs/paths.ts";
-import { GIT_HARDENING, gitLocalEnv } from "./git-auth.ts";
+import { GIT_HARDENING, gitLocalEnv, gitRemote } from "./git-auth.ts";
 
 const execFileP = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => (await execFileP("git", [...GIT_HARDENING, ...args], { cwd, env: gitLocalEnv(), maxBuffer: 16 * 1024 * 1024 })).stdout.trim();
+
+/** A directory git can work in: a clone (`.git` directory) or a worktree (`.git` file). */
+const isWorkTree = (path: string): boolean => existsSync(join(path, ".git"));
 
 /**
  * ADR-0021 host backend: one Git worktree per (work item, repository) under `<workspacesDir>/<item>/<repo>`,
@@ -19,9 +22,11 @@ const git = async (cwd: string, ...args: string[]) => (await execFileP("git", [.
 export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleaner, WorkspaceSupport, WorkspaceSweeper, WorkspaceProbe {
   private readonly root: string;
   private readonly dir: string;
-  constructor(o: { definitionsRoot: string; workspacesDir: string }) {
+  private readonly secrets: SecretResolver;
+  constructor(o: { definitionsRoot: string; workspacesDir: string; secrets: SecretResolver }) {
     this.root = o.definitionsRoot;
     this.dir = o.workspacesDir;
+    this.secrets = o.secrets;
   }
 
   supports(repo: Repository): boolean {
@@ -30,13 +35,51 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
 
   /** ADR-0021: a `Ready` workspace whose files are gone (a prune, a manual cleanup) is reported missing. */
   exists(ws: Workspace): boolean {
-    return !!ws.status?.path && existsSync(join(ws.status.path, ".git"));
+    return !!ws.status?.path && isWorkTree(ws.status.path);
   }
 
-  private source(repo: Repository): string {
+  private sourcePath(repo: Repository): string {
     const p = repo.spec.local?.path;
-    if (!p) throw new Error(`repository ${repo.metadata.name} has no spec.local.path (git clone arrives with isolated runtimes)`);
+    if (!p) throw new Error(`repository ${repo.metadata.name} has no spec.local.path; declare where the checkout lives (the factory clones spec.git.url into it when it is absent)`);
     return resolveLocalPath(this.root, p);
+  }
+
+  /**
+   * ADR-0021 addendum: the checkout the worktrees fork from. When the declared path is absent the factory
+   * **clones** the repository itself (ADR-0008 already allows a `git clone` behind the same ports), so a
+   * missing operator checkout is a cold cache instead of an item that fails with `spawn git ENOENT`.
+   */
+  private async source(repo: Repository): Promise<string> {
+    const path = this.sourcePath(repo);
+    if (await this.isUsableCheckout(path)) return path;
+    // An empty directory is cloned into; anything else is left alone (a leftover partial clone needs a human).
+    if (existsSync(path) && readdirSync(path).length > 0) {
+      throw new Error(`repository ${repo.metadata.name}: spec.local.path ${path} exists but is not a usable git checkout; remove it to let the factory clone, or point spec.local.path somewhere else`);
+    }
+    return this.clone(repo, path);
+  }
+
+  /** A checkout git can fork a worktree from: a `.git` (directory or file) with a commit at HEAD. */
+  private async isUsableCheckout(path: string): Promise<boolean> {
+    if (!isWorkTree(path)) return false;
+    try {
+      await git(path, "rev-parse", "--verify", "HEAD");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** SEC-3: the token travels in the environment, never in the clone's configuration or its remote URL. */
+  private async clone(repo: Repository, path: string): Promise<string> {
+    const { url, authEnv } = gitRemote(repo, this.secrets);
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      await execFileP("git", [...GIT_HARDENING, "clone", "--quiet", url, path], { env: authEnv, maxBuffer: 16 * 1024 * 1024 });
+    } catch (error) {
+      throw new Error(`repository ${repo.metadata.name}: cloning ${url} into ${path} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return path;
   }
 
   private pathOf(ws: Workspace): string {
@@ -52,10 +95,10 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
   }
 
   async prepare(ws: Workspace, repo: Repository): Promise<PreparedWorkspace> {
-    const source = this.source(repo);
+    const source = await this.source(repo);
     const path = this.pathOf(ws);
     let setupLog = ws.status?.setupLog;
-    if (!existsSync(join(path, ".git"))) {
+    if (!isWorkTree(path)) {
       await mkdir(join(this.dir, ws.spec.workItemRef.name), { recursive: true });
       await git(source, "worktree", "prune");
       const exists = await git(source, "branch", "--list", ws.spec.branch);
@@ -78,6 +121,10 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
   }
 
   async sweep(live: { workItem: string; repository: string }[]): Promise<string[]> {
+    // ADR-0021: with an empty store there is nothing to compare against, so the sweep cannot tell an orphaned worktree
+    // from one another instance still owns (a test booting a factory, a dev instance on a different database). Refuse to
+    // delete anything rather than wipe the workspaces of a factory that is running.
+    if (!live.length) return [];
     const removed = await sweepWorktrees(this.dir, new Set(live.map((l) => `${l.workItem}/${l.repository}`)), (p) => this.guard(p));
     return removed; // stale `git worktree` metadata is pruned on the next prepare
   }
@@ -85,7 +132,9 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
   async remove(ws: Workspace, repo: Repository | null): Promise<void> {
     const path = this.guard(ws.status?.path ?? this.pathOf(ws));
     if (!existsSync(path)) return;
-    const source = repo?.spec.local?.path ? this.source(repo) : path;
+    // Never clone just to delete: use the checkout only when it is already usable.
+    const declared = repo?.spec.local?.path ? this.sourcePath(repo) : undefined;
+    const source = declared && (await this.isUsableCheckout(declared)) ? declared : path;
     // The branch is kept (it may back a pull request); only the working copy goes.
     await git(source, "worktree", "remove", "--force", path).catch(async () => {
       const { rm } = await import("node:fs/promises");

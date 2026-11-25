@@ -441,9 +441,9 @@ network position (P0-9).
 
 ### SEC-13 — The documented posture is stronger than the enforced one (Low)
 
-**Evidence.** `SandboxHealthInfo.message` reports "Filesystem-isolated via bubblewrap (workspace-only rw, ephemeral
-HOME, network allowed; ADR-0079)" while §4 shows the file tools, OpenCode's tools, the git plumbing and setup are not in
-that scope. ADR-0079's title and consequences section describe an isolation of "agents and checks" that §4 qualifies.
+**Evidence.** `SandboxHealthInfo.message` reports "Filesystem-isolated via bubblewrap (workspace-only rw, factory-owned
+HOME + toolchain cache, network allowed; ADR-0079/0088)" while §4 shows the file tools, OpenCode's tools, the git
+plumbing and setup are not in that scope. ADR-0079's title and consequences section describe an isolation of "agents and checks" that §4 qualifies.
 
 **Impact.** It is the reason this document exists: a careful reader of the ADRs reached the wrong conclusion twice in one
 conversation. Misstated controls distort design and review decisions, which is how the rest of this register went
@@ -620,6 +620,28 @@ so the reviewer has to notice it in the diff.
 and consider binding the check *configuration*, not only the command, to the base commit for the verification tier.
 
 ---
+
+### SEC-22 — Environment state is shared, and provisioning runs repository code (Low, accepted)
+
+**Evidence.** ADR-0088 gives every command a toolchain cache that is on `PATH` and holds the declared tools. Three ways
+it could be abused were found in review and closed in the same change: (a) the cache was writable and first on `PATH`, so
+a candidate could plant `git`/`go`/`gotestsum` and forge the evidence of *any* later check; (b) `HOME` was shared and
+persistent, so `~/.gitconfig`, `~/.npmrc`, `.netrc` or `.cargo/config` written by one command were read by the next; and
+(c) the per-workspace homes sat *inside* the mounted cache, so the read-only mount exposed every other item's home. The
+cache is now writable **only** in the sandbox the factory creates to provision it; every check, agent shell and isolated
+snapshot mounts it read-only; the writable caches live in a per-workspace home **outside** the mounted directory; an
+isolated snapshot gets an ephemeral `HOME`; and provisioning itself runs with an ephemeral `HOME`, so a poisoned
+`~/.config/go/env` or `.netrc` cannot steer what is installed into a cache every item shares.
+
+**Impact of what remains.** A `command`-type provisioner still runs repository-authored code, in a sandbox whose workspace
+is the item's candidate, with the cache writable. A candidate can therefore influence the cache *while it is being
+provisioned*, which is the same trust level as running the repository's own `Makefile` (§4) — but it is a cross-item
+channel, because the cache is shared by every item of the store. `goInstall` (the common case) runs no repository code.
+
+**Fix / accepted.** Accepted for the increment, and recorded here so it is not rediscovered: closing it is the runtime
+work of ADR-0080 — provisioning in a factory-controlled runtime from the pinned base commit, with the tool set pinned per
+profile version. The value bought in exchange is that a repository stops scripting installs and `PATH` plumbing into every
+check (which cannot work for `scoped` checks at all), and that a cold Go/npm cache stops being re-downloaded per command.
 
 ## 7. Remediation roadmap
 

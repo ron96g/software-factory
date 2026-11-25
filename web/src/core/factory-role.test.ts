@@ -7,7 +7,7 @@ import { testDefinitions } from "./testing/definitions.ts";
 const ROOT = resolve(import.meta.dirname, "../..");
 
 const make = (role: "all" | "web" | "worker") =>
-  createFactory({ role, definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: {}, log: () => {} });
+  createFactory({ role, definitionsRoot: ROOT, definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
 
 test("X42c (ADR-0062 §3): the worker registers only the CheckRun controller; the web root omits it", async () => {
   const worker = await make("worker");

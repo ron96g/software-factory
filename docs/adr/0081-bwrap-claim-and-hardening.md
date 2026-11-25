@@ -53,6 +53,12 @@ Add `--new-session`, `--unshare-ipc`, `--unshare-uts`, `--unshare-cgroup` and `-
 bind, and document next to it what it is for (DNS resolution, TLS roots, NSS libraries). A seccomp profile is *not*
 applied by this ADR; it is recorded as the remaining hardening step for the runtime work of ADR-0080.
 
+**Addendum (2026-11-24, resolver target):** binding `/etc` read-only is not enough for DNS where `/etc/resolv.conf` is a
+**symlink out of `/etc`** — WSL points it at `/mnt/wsl/resolv.conf`, systemd-resolved at `/run/systemd/resolve/…`. The
+link then dangles inside the sandbox and every command silently loses name resolution, which surfaces as an unrelated
+failure in whichever check needed the network (`go install …: lookup proxy.golang.org … connection refused`). The
+resolved target of `/etc/resolv.conf` is bound read-only too (`resolverBinds`).
+
 ### 4. The claim is tested, not asserted
 
 The bwrap test suite must cover: a symlink escaping the workspace, a read of `$HOME`, a read of another worktree's branch

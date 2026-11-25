@@ -198,7 +198,7 @@ test("pending standalone checks block human restarts; unhandled restarts block n
   const directory = await mkdtemp(join(tmpdir(), "sf-check-guard-"));
   const path = join(directory, "checks.sqlite");
   const f = await fixture(path);
-  const factory = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: path, env: {}, log: () => {} });
+  const factory = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), databasePath: path, env: { FACTORY_SANDBOX_RUNTIME: "none" }, log: () => {} });
   try {
     const run = await f.submit();
     await assert.rejects(factory.app.restartWorkItem(ANONYMOUS, "item"), /standalone check/);

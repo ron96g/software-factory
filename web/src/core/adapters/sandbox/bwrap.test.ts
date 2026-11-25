@@ -1,11 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BwrapEnvironment, buildBwrapArgs, shellQuote } from "./bwrap.ts";
-import { canConfineShell, canPrepareIsolated, type SandboxSpec } from "../../ports/index.ts";
+import { BwrapEnvironment, buildBwrapArgs, resolverBinds, sandboxEnv, sandboxHome, shellQuote } from "./bwrap.ts";
+import { canConfineShell, canPrepareIsolated, TOOLCHAIN_MOUNT, type SandboxSpec } from "../../ports/index.ts";
+
+/** A dangling `/etc/resolv.conf` symlink leaves the sandbox without DNS, so its target must be bound too. */
+test("ADR-0081 §3: a symlinked resolv.conf has its target bound; a real file needs no extra bind", () => {
+  const exists = () => true;
+  assert.deepEqual(resolverBinds(exists, "/etc/resolv.conf", () => "/mnt/wsl/resolv.conf"), ["/mnt/wsl/resolv.conf"], "WSL");
+  assert.deepEqual(resolverBinds(exists, "/etc/resolv.conf", () => "/run/systemd/resolve/stub-resolv.conf"), ["/run/systemd/resolve/stub-resolv.conf"], "systemd-resolved");
+  assert.deepEqual(resolverBinds(exists, "/etc/resolv.conf", () => "/etc/resolv.conf"), [], "a regular file is already inside /etc");
+  assert.deepEqual(resolverBinds(() => false, "/etc/resolv.conf", () => "/mnt/wsl/resolv.conf"), [], "a missing target is not bound");
+  assert.deepEqual(resolverBinds(exists, "/etc/resolv.conf", () => { throw new Error("ENOENT"); }), [], "no resolv.conf at all");
+});
 
 test("ADR-0079: buildBwrapArgs confines filesystem to workspace, uses ephemeral HOME, and keeps network", () => {
   const workspace = "/tmp/fake-workspaces/item-1/repo";
@@ -212,4 +222,77 @@ test("ADR-0081 §4: a confined command keeps its own branch but cannot read anot
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/** ADR-0088: declared tools are read-only for every command; only provisioning writes, and HOME is per workspace. */
+test("ADR-0088: buildBwrapArgs mounts the toolchain cache read-only unless it provisions, with a per-workspace HOME", () => {
+  const workspace = "/tmp/fake-workspaces/item-1/repo";
+  const toolchainDir = "/tmp/fake-toolchain";
+  const homeDir = sandboxHome(toolchainDir, workspace);
+  const mounts = (args: string[]) => args.flatMap((a, i) => (a === "--bind" || a === "--ro-bind" ? [[a, args[i + 1], args[i + 2]]] : []));
+
+  // A command sandbox: the cache is read-only and HOME is the item's own writable directory.
+  const command = buildBwrapArgs({ workspace, cwd: workspace, command: "make test", toolchainDir, homeDir });
+  assert.deepEqual(mounts(command).filter(([, , to]) => to === TOOLCHAIN_MOUNT), [["--ro-bind", toolchainDir, TOOLCHAIN_MOUNT]]);
+  assert.deepEqual(mounts(command).filter(([, , to]) => to === "/tmp/home"), [["--bind", homeDir, "/tmp/home"]]);
+
+  // An isolated snapshot: read-only cache and an ephemeral HOME, so nothing the candidate writes can reach evidence.
+  const isolated = buildBwrapArgs({ workspace, cwd: workspace, command: "make test", toolchainDir });
+  assert.deepEqual(mounts(isolated).filter(([, , to]) => to === TOOLCHAIN_MOUNT), [["--ro-bind", toolchainDir, TOOLCHAIN_MOUNT]]);
+  const tmpfs = isolated.flatMap((a, i) => (a === "--tmpfs" ? [isolated[i + 1]] : []));
+  assert.ok(tmpfs.includes("/tmp/home"), "an isolated snapshot gets an ephemeral HOME");
+  assert.ok(!mounts(isolated).some(([, , to]) => to === "/tmp/home"), "and no writable HOME is bound into it");
+
+  // Only the provisioning sandbox may write the cache — and it runs with an ephemeral HOME, so a candidate that wrote
+  // `~/.config/go/env` or `.netrc` cannot steer what lands in a cache every item shares.
+  const provisioning = buildBwrapArgs({ workspace, cwd: workspace, command: "go install x@v1", toolchainDir, writableToolchain: true });
+  assert.deepEqual(mounts(provisioning).filter(([, , to]) => to === TOOLCHAIN_MOUNT), [["--bind", toolchainDir, TOOLCHAIN_MOUNT]]);
+  assert.ok(!mounts(provisioning).some(([, , to]) => to === "/tmp/home"), "provisioning must not see a writable per-workspace HOME");
+
+  // The same workspace always maps to the same home; another workspace does not share it, and the homes live OUTSIDE
+  // the mounted cache so a sandbox cannot read another item's home through the read-only toolchain mount.
+  assert.equal(sandboxHome(toolchainDir, workspace), homeDir);
+  assert.notEqual(sandboxHome(toolchainDir, "/tmp/fake-workspaces/item-2/repo"), homeDir);
+  assert.ok(!sandboxHome(toolchainDir, workspace).startsWith(`${toolchainDir}/`), "homes are not inside the mounted cache");
+});
+
+/** ADR-0088: tools are read-only on PATH; the caches they fill are data and live in the writable HOME. */
+test("ADR-0088: sandboxEnv puts the cache first on PATH and the caches in HOME", () => {
+  const toolchainDir = "/tmp/fake-toolchain";
+  const env = sandboxEnv({ GOPROXY: "https://proxy.golang.org" }, toolchainDir);
+  assert.match(String(env.PATH), /^\/factory-tools\/bin:/);
+  assert.equal(env.GOBIN, `${TOOLCHAIN_MOUNT}/bin`);
+  assert.equal(env.GOPATH, "/tmp/home/go", "the module cache must be writable");
+  assert.equal(env.npm_config_cache, "/tmp/home/npm");
+  assert.equal(env.HOME, "/tmp/home", "HOME is never the operator's");
+  assert.equal(env.GOPROXY, "https://proxy.golang.org", "profile values still apply");
+
+  assert.equal(sandboxEnv({}, undefined).GOBIN, undefined, "without a cache there is no cache environment");
+  assert.equal(sandboxEnv({ PATH: "/custom" }, undefined).PATH, "/custom", "a profile PATH is untouched without a cache");
+  assert.equal(sandboxEnv({ PATH: "/custom" }, toolchainDir).PATH, `${TOOLCHAIN_MOUNT}/bin:/custom`, "the cache is prepended to a profile PATH");
+});
+
+/** ADR-0088 §5: an environment that cannot provide a declared tool fails visibly as Unavailable, naming the tool. */
+test("ADR-0088: prepare() fails as Unavailable when a declared tool cannot be provided", async () => {
+  const ws = { apiVersion: "v", kind: "Workspace", metadata: { name: "item-repo", namespace: "default" },
+    spec: { workItemRef: { name: "item" }, repositoryRef: { name: "repo" }, branch: "b" },
+    status: { phase: "Ready", path: "/tmp/fake-workspaces/item-1/repo", baseCommit: "a".repeat(40) } };
+  const profile = { apiVersion: "v", kind: "SandboxProfile", metadata: { name: "p", namespace: "factory-system" },
+    spec: { image: "x", tools: [{ name: "gotestsum", provides: "bin/gotestsum", via: { type: "goInstall" } }] } };
+  const failing = {
+    async status() { return []; },
+    async ensure() { return [{ name: "gotestsum", type: "goInstall", state: "failed", message: "lookup proxy.golang.org: connection refused" }]; },
+  };
+  const environment = new BwrapEnvironment({ toolchainDir: "/tmp/fake-toolchain", toolchain: failing as never });
+
+  await assert.rejects(environment.prepare({ profile, repositories: [], workspaces: [ws] } as never),
+    /could not provide gotestsum \(goInstall\): lookup proxy\.golang\.org: connection refused/);
+});
+
+/** ADR-0088: the cache is bound into the sandbox, so it must exist before the first command. */
+test("ADR-0088: the environment creates its toolchain cache directory", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "sf-cache-")), "toolchain");
+  assert.ok(!existsSync(dir));
+  new BwrapEnvironment({ toolchainDir: dir });
+  assert.ok(existsSync(dir), "binding a missing directory would fail every command");
 });

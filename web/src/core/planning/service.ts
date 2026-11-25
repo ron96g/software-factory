@@ -61,14 +61,17 @@ const normalized = (text: string) => text.trim().toLowerCase().replace(/\s+/g, "
 const signature = (decision: PlanningDecision) => hash([
   normalized(decision.question), decision.options.map(normalized).sort(), decision.required,
 ]);
+/** ADR-0087: the id prefix of a decision built from an agent's recorded question (never a plan/review decision). */
+const QUESTION_PREFIX = "question-";
 type RecordedAnswers = NonNullable<WorkItem["spec"]["planning"]>["answers"];
 /**
- * ADR-0072: an answer binds to its decision by signature, or by the same question text when the decision offers no
- * options (an agent's recorded question): that is the question the human already answered. Changed options or
- * wording still need a fresh answer.
+ * ADR-0072/0087: an answer binds to its decision by signature, or by the same question text when the decision offers
+ * no options, or when it is an agent's recorded question (`question-…`): that is the question the human already
+ * answered, and a recorded question is identified by its text (its options are the agent's suggestions, ADR-0087).
+ * A plan decision's changed options or wording still need a fresh answer.
  */
 const binds = (answer: { question: string; signature: string }, decision: PlanningDecision) => answer.signature === signature(decision) ||
-  !decision.options.length && normalized(answer.question) === normalized(decision.question);
+  normalized(answer.question) === normalized(decision.question) && (!decision.options.length || decision.id.startsWith(QUESTION_PREFIX));
 const answerFor = (answers: RecordedAnswers | undefined, decision: PlanningDecision) => {
   const own = answers?.[decision.id];
   return own && binds(own, decision) ? own : Object.values(answers ?? {}).find((answer) => binds(answer, decision));
@@ -217,14 +220,19 @@ export class PlanningService implements PlanningQueries, PlanningCommands, Plann
   private decisions(item: WorkItem, document: PlanningDocument, runs: AgentRun[], stages: Set<string>, review?: PlanningReviewDocument) {
     const decisions = [...document.decisions, ...(review?.decisions ?? [])];
     const linked = new Set(decisions.flatMap((decision) => decision.answersQuestionIds ?? []));
+    // ADR-0087: the same question is often recorded more than once — the researcher raises it, the triager
+    // re-records it under the same id with different wording. Keep the first recording per stable id, and keep the
+    // options it offered, so the human answers one question with the choices the agent proposed.
+    const recorded = new Set<string>();
     for (const run of runs.filter((run) => stages.has(run.spec.stage))) {
-      for (const { id: questionId, text: question } of normalizeQuestions(run.status?.result?.questions)) {
-        if (linked.has(questionId)) continue;
+      for (const { id: questionId, text: question, options } of normalizeQuestions(run.status?.result?.questions)) {
+        if (linked.has(questionId) || recorded.has(questionId)) continue;
+        recorded.add(questionId);
         if (decisions.some((decision) => normalized(decision.question) === normalized(question))) continue;
         // A question that explicitly cites a structured decision ("OD-1: …") is that decision, not a new blocker.
         const cited = /^\s*\[?([a-zA-Z0-9][a-zA-Z0-9_-]{0,79})\]?\s*[:—–]/.exec(question)?.[1];
         if (cited && decisions.some((decision) => decision.id === cited)) continue;
-        decisions.push({ id: `question-${hash(normalized(question)).slice(0, 20)}`, question, options: [], required: true,
+        decisions.push({ id: `${QUESTION_PREFIX}${hash(normalized(question)).slice(0, 20)}`, question, options, required: true,
           rationale: `Unresolved question recorded by ${run.spec.agentRef.name} in ${run.spec.stage}.` });
       }
     }

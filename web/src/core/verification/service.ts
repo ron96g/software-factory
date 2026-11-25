@@ -35,6 +35,21 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const invalid = (message: string): never => { throw new StoreError(message, "Invalid"); };
 const active = (run: CheckRun) => !run.status || run.status.phase === "Running";
 const owned = (wi: WorkItem) => ({ namespace: nsOf(wi), ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) } });
+
+/**
+ * ADR-0042 §X23b: what a human needs to act on a check that did not pass. The outcome alone ("SetupFailed") says
+ * nothing about *what* is missing, and a preflight is usually an `&&` chain that stops at the first unmet prerequisite
+ * without printing anything — so the check's own message and the end of its output travel with the question.
+ */
+function checkEvidence(run: CheckRun, lines = 8): string {
+  const status = run.status;
+  const parts = [status?.message ?? `${run.spec.check}: ${status?.outcome ?? "Interrupted"}`];
+  const tail = status?.outputTail?.trim();
+  if (tail) parts.push(`output (last ${lines} lines):\n\`\`\`\n${tail.split("\n").slice(-lines).join("\n")}\n\`\`\``);
+  if (status?.logsIncomplete) parts.push("the log is incomplete, so this is all the factory captured");
+  return parts.join("\n\n");
+}
+
 const eligible = (r: { metadata: { labels?: Record<string, string> } }) =>
   !r.metadata.labels?.[LABEL_SUPERSEDED] && !r.metadata.labels?.["factory.ai-dlc.io/replay"];
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string" && !!v.trim());
@@ -739,7 +754,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
         if ((item.status?.retries?.[stage.name] ?? 0) < contract.policy.maxCodeAttempts) return { action: "goto", stage: contract.policy.implementationStage, retryOf: stage.name };
         const recovery = await this.stageRecovery(item, stage, contract, last, "assertion failure");
         if (recovery) return recovery;
-        return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget. Inspect CheckRun ${last.metadata.name} and its redacted logs.`] };
+        return { action: "block", questions: [`${id}: assertion failure exhausted the code-fix budget.\n\n${checkEvidence(last)}\n\nCheckRun ${last.metadata.name} and its redacted logs hold the failing tests.`] };
       }
       if (last?.status?.outcome === "FindingsReported" && !preflight) {
         // A comparable result is final: re-running cannot change it. Waivable checks reach the (policy or human) waiver.
@@ -753,7 +768,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
           const recovery = await this.stageRecovery(item, stage, contract, last, "opaque failure");
           if (recovery) return recovery;
         }
-        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts. No code-fix retry was charged. Inspect CheckRun ${last.metadata.name}; the check cannot be waived, so fix prerequisites or scope and restart the stage.`] };
+        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts; no code-fix retry was charged.\n\n${checkEvidence(last)}\n\nCheckRun ${last.metadata.name} cannot be waived. Act on the evidence above (install the missing prerequisite, or narrow the scope), then restart the stage.`] };
       }
       const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
       if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };

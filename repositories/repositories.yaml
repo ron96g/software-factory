@@ -127,12 +127,14 @@ spec:
     focused-tests: { command: make test-all, timeoutMs: 900000, scoped: true }
     full-build: { command: make build-all, timeoutMs: 1800000 }
     full-tests: { command: make test-all, timeoutMs: 3600000 }
-    preflight:
+    preflight:                 # Same-environment prerequisites (ADR-0042 §X23c). `gotestsum` is declared on the go-build
+                               # profile (ADR-0088) and provided by the factory on PATH, so this only prepares what the
+                               # repository itself must build, and verifies the declared tool is really there.
       command: >-
         go version && command -v make && command -v gotestsum &&
         make -C rover controller-gen envtest &&
         rover/bin/setup-envtest use 1.32.0 --bin-dir rover/bin -p path
-      timeoutMs: 600000
+      timeoutMs: 900000
   verification:
     requiredChecks: [build, unit-tests, integration-tests, acceptance-criteria, security-scan]
     preflightChecks: [preflight]

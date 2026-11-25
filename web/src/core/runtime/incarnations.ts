@@ -1,7 +1,7 @@
 import type { AgentProcessKiller, WorkspaceLock } from "../ports/index.ts";
 
 /** Lock holders that identify a process incarnation (ADR-0062 §2). */
-export const INCARNATION_PREFIXES = ["web:", "worker:"] as const;
+export const INCARNATION_PREFIXES = ["web:", "worker:", "all:"] as const;
 
 /** The identity this process uses as a lock holder; override with `FACTORY_INCARNATION`. */
 export function incarnationId(role: string, env: Record<string, string | undefined> = process.env, pid = process.pid): string {

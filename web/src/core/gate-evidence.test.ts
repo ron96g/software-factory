@@ -5,7 +5,7 @@ import { deriveGateEvidence, parseVerdict } from "./app/gate-evidence.ts";
 import { createFactory } from "./factory.ts";
 import { testDefinitions } from "./testing/definitions.ts";
 import { ANONYMOUS } from "./ports/index.ts";
-import type { AgentRun, FactoryEvent } from "./model/kinds.ts";
+import type { AgentRun, Clarification, FactoryEvent } from "./model/kinds.ts";
 import { InMemorySandboxEnvironment } from "./adapters/sandbox/basic.ts";
 
 const run = (name: string, step: string, outcome: string, outcomes = ["pass", "partial", "fail"]): AgentRun =>
@@ -88,6 +88,22 @@ test("X5: evidence uses the latest round per step; a later passing check clears 
   const p = deriveGateEvidence({ runs: [run("x-verify-0-r7", "verify-against-spec", "partial")], events: [ev("CheckFailed", "unit-tests on repo: exit 2", "t")], clarifications: [] });
   assert.equal(p.status, "blocking");
   assert.deepEqual(p.items.map((i) => i.severity), ["blocking", "warning"]);
+});
+
+test("ADR-0029: a superseded clarification is no longer an open question at the gate", () => {
+  const clar = (name: string, labels?: Record<string, string>) => ({
+    kind: "Clarification", metadata: { name, labels },
+    spec: { workItemRef: { name: "x" }, stage: "preflight", questions: [`${name} question`] }, status: { phase: "Open" },
+  }) as unknown as Clarification;
+  const superseded = clar("x-preflight-r13", { "factory.ai-dlc.io/superseded": "restart-1" });
+  const open = clar("x-preflight-r14");
+  const none = deriveGateEvidence({ runs: [], events: [], clarifications: [superseded] });
+  assert.equal(none.items.find((i) => /open clarification/.test(i.label)), undefined, "a superseded clarification is not an open question");
+  const some = deriveGateEvidence({ runs: [], events: [], clarifications: [superseded, open] });
+  const item = some.items.find((i) => /open clarification/.test(i.label));
+  assert.equal(item?.label, "1 open clarification(s)");
+  assert.match(item!.detail, /x-preflight-r14 question/);
+  assert.doesNotMatch(item!.detail, /x-preflight-r13 question/);
 });
 
 test("X5: a failed verification can't be approved by accident (server-enforced override with reason)", async () => {

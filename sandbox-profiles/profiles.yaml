@@ -24,6 +24,11 @@ spec:
   resources: { cpu: "4", memory: 8Gi, pids: 1024, timeout: 60m }
   env:                       # ADR-0033: plain values for every command (never secrets)
     GOPROXY: https://proxy.golang.org,direct
+  tools:                     # ADR-0088: the factory provides these into its toolchain cache (on PATH, persistent), so no
+                             # check has to know how to install them or how to put them on PATH.
+    - name: gotestsum
+      provides: bin/gotestsum
+      via: { type: goInstall, with: { module: gotest.tools/gotestsum@v1.13.0 } }
   network:
     mode: allowlist
     allow: [proxy.golang.org, sum.golang.org, storage.googleapis.com, github.com]

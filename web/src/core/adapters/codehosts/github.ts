@@ -44,8 +44,21 @@ export class GithubCodeHost implements CodeHost {
     const existing = (await this.call(repo, `/repos/${r.owner}/${r.repo}/pulls?state=open&head=${encodeURIComponent(`${r.owner}:${input.head}`)}`)) as {
       html_url: string;
       number: number;
+      title: string;
+      body: string | null;
     }[];
-    if (existing.length) return { url: existing[0].html_url, number: existing[0].number, created: false };
+    if (existing.length) {
+      const pr = existing[0];
+      // ADR-0054: a re-publish refreshes the description, so the reader sees the current evidence, not the first
+      // publish's. Only when it actually differs (idempotent re-delivery must not churn the PR).
+      if (pr.title !== input.title || (pr.body ?? "") !== input.body) {
+        await this.call(repo, `/repos/${r.owner}/${r.repo}/pulls/${pr.number}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: input.title, body: input.body }),
+        });
+      }
+      return { url: pr.html_url, number: pr.number, created: false };
+    }
     const pr = (await this.call(repo, `/repos/${r.owner}/${r.repo}/pulls`, {
       method: "POST",
       body: JSON.stringify({ head: input.head, base: input.base, title: input.title, body: input.body, draft: input.draft }),

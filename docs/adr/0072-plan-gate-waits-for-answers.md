@@ -1,6 +1,6 @@
 # ADR-0072: The plan gate waits visibly for answers, and answers stay bound to their question
 
-- **Status:** Accepted
+- **Status:** Accepted (binding clause amended by ADR-0087)
 - **Date:** 2026-11-19
 - **Deciders:** project owner
 - **Builds on:** ADR-0046 (direct planning decisions), ADR-0050 (one planner run, revocable answers), ADR-0051

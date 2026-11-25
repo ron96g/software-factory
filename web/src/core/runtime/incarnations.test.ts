@@ -26,3 +26,13 @@ test("X42c: FACTORY_INCARNATION overrides the generated holder identity", () => 
   assert.equal(incarnationId("web", { FACTORY_INCARNATION: "web:custom" }, 999), "web:custom");
   assert.equal(incarnationId("worker", {}, 42), "worker:42");
 });
+
+test("X42c: a role-`all` process is an incarnation too (its heartbeat lease is reaped like any other)", async () => {
+  const db = new DatabaseSync(":memory:");
+  const lock = new SqliteWorkspaceLock(db, clock);
+  await lock.acquire("worker/all:100", "all:100", 60_000);
+  await lock.acquire("checkrun/default/uid1/check", "all:100", 60_000);
+
+  assert.deepEqual(await reapStaleIncarnations({ lock, killer: { kill: async () => true }, current: "all:200" }), ["all:100"]);
+  assert.equal((await lock.list()).length, 0);
+});

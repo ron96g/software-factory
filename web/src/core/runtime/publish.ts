@@ -2,6 +2,7 @@ import type { Artifact, Repository, WorkItem, Workspace } from "../model/kinds.t
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import type { BaseConflictDetector, BranchPublisher, CodeHost, OutboxHandler, ResourceReader } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
+import { renderVerificationReport } from "../artifacts/render.ts";
 
 const section = (title: string, body?: string, max = 2500) => (body ? `### ${title}\n\n${body.length > max ? `${body.slice(0, max)}\n…` : body}\n` : "");
 
@@ -26,6 +27,9 @@ export function pullRequestHandler(d: { reader: ResourceReader; publisher: Branc
       const arts = await d.reader.list<Artifact>("Artifact", { namespace: ns, ownedBy: { kind: "WorkItem", name: ws.spec.workItemRef.name, namespace: ns } });
       const latest = (type: string) =>
         arts.filter((a) => a.spec.artifactTypeRef.name === type && !a.metadata.labels?.["factory.ai-dlc.io/replay"]).at(-1)?.spec.content;
+      // A verification-report is structured JSON; a human reads the PR, so render it as Markdown (fall back to raw).
+      const verification = latest("verification-report");
+      const verificationReadable = verification ? renderVerificationReport(verification) ?? verification : undefined;
 
       const base = repo.spec.git?.defaultBranch ?? "main";
       const report = await d.conflicts.detect(ws, repo, base);
@@ -39,7 +43,7 @@ export function pullRequestHandler(d: { reader: ResourceReader; publisher: Branc
         wi?.spec.description ?? "",
         "",
         section("Spec", latest("spec")),
-        section("Verification", latest("verification-report")),
+        section("Verification", verificationReadable, 12000),
         section("Review", latest("review-report"), 1500),
         `_Base: \`${ws.status.baseCommit?.slice(0, 10)}\` · head: \`${pushed.commit.slice(0, 10)}\`_`,
       ].join("\n");
