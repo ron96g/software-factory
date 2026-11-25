@@ -8,6 +8,19 @@ export interface WorkspaceSnapshotter {
   fingerprint(workspace: Workspace): Promise<string>;
 }
 
+/**
+ * ADR-0061 §2: a check must leave the candidate as it found it. The check controller captures the workspace tree before
+ * a check runs and restores it afterwards when the check wrote to the workspace, so a command that regenerates files
+ * cannot pollute the candidate that is later reviewed and published. The handle is the Git tree object of the captured
+ * working copy; a restore writes the tree back and removes files the check added.
+ */
+export interface WorkspaceCheckpoint {
+  /** Captures the current working tree (tracked and non-ignored untracked content) and returns a durable handle. */
+  capture(workspace: Workspace): Promise<string>;
+  /** Restores the working tree to a captured handle; returns true when the tree had to be changed. */
+  restore(workspace: Workspace, checkpoint: string): Promise<boolean>;
+}
+
 /** ADR-0086: workspace-relative files the candidate changed or added since the workspace's pinned base commit. */
 export interface CandidateChanges {
   changedFiles(workspace: Workspace): Promise<string[]>;

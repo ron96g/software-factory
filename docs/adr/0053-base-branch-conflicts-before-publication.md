@@ -1,6 +1,7 @@
 # ADR-0053: Detect and resolve base-branch conflicts before publishing a pull request
 
 - **Status:** Accepted
+- **Amended by:** ADR-0091 (the head branch is replaced with a lease; the base reconciliation below is unchanged)
 - **Date:** 2026-11-14
 - **Deciders:** Maintainers
 

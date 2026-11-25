@@ -476,7 +476,8 @@ Invalid/missing graphs or baselines fail visibly. Repository CI remains responsi
 Immutable CheckRun specs pin the resolved command and scope (modules, baseline, graph hash and reason). Admission
 and execution revalidate them; snapshot, environment and approved-plan checks remain unchanged. The UI shows scope
 and exact commands; legacy events explain full-scope selection. Controlplane defaults build/test/preparation to
-affected-module coverage; `full-build` and `full-tests` remain available when acceptance requires broader evidence.
+affected-module coverage; a dependency-manifest change is module-local and the module graph is read from the base
+commit, so only shared tooling or configuration (or a non-build-only change set) runs full validation (ADR-0089).
 Changing repository policy invalidates existing approved contracts and requires fresh human plan review.
 See [ADR-0044](adr/0044-affected-module-verification.md).
 

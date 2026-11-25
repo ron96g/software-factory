@@ -130,3 +130,32 @@ test("ADR-0053: when the base moves again, a resolved earlier merge is finished 
     await f.cleanup();
   }
 });
+
+test("ADR-0091: a moved remote head does not block publication; the factory branch is replaced with a lease", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\n");
+    const first = await new GitBranchPublisher(secrets).publish(f.ws(), f.repo, "Item title");
+    assert.equal(f.git(f.origin, "rev-parse", "factory/item"), first.commit);
+
+    // A human merges main into the pull request branch (GitHub "Update branch"): the remote head moves.
+    const human = join(f.root, "human");
+    f.git(f.root, "clone", "-q", f.origin, human);
+    f.git(human, "config", "user.email", "human@example.invalid");
+    f.git(human, "config", "user.name", "Human");
+    f.git(human, "checkout", "-q", "-b", "factory/item", "origin/factory/item");
+    await writeFile(join(human, "a.txt"), "one\nTWO (item)\nthree\nhuman merge\n");
+    f.git(human, "commit", "-q", "-am", "Merge branch 'main' into factory/item");
+    f.git(human, "push", "-q", "origin", "factory/item");
+    const diverged = f.git(f.origin, "rev-parse", "factory/item");
+    assert.notEqual(diverged, first.commit);
+
+    // The factory publishes again: it owns the branch and replaces the head, so publication is not blocked.
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\nagain\n");
+    const second = await new GitBranchPublisher(secrets).publish(f.ws(), f.repo, "Item title");
+    assert.equal(f.git(f.origin, "rev-parse", "factory/item"), second.commit);
+    assert.notEqual(second.commit, diverged);
+  } finally {
+    await f.cleanup();
+  }
+});

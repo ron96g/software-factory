@@ -1,6 +1,7 @@
 # ADR-0023: Real automated checks and draft pull requests
 
 - **Status:** Superseded by ADR-0042 for migrated verification contracts; Accepted for legacy checks and publication
+- **Amended by:** ADR-0091 (publication replaces the factory branch with a lease)
 - **Date:** 2026-11-11
 
 ## Context

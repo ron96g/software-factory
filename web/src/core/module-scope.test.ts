@@ -148,7 +148,7 @@ test("declared non-build paths do not expand code scope or override shared-path 
   } finally { await f.cleanup(); }
 });
 
-test("invalid graph, unsafe arguments, escaped graph and missing baseline fail visibly", async () => {
+test("invalid base graph, unsafe arguments, escaped graph and missing baseline fail visibly", async () => {
   const f = await fixture();
   const outside = await mkdtemp(join(tmpdir(), "factory-scope-outside-"));
   try {
@@ -157,10 +157,17 @@ test("invalid graph, unsafe arguments, escaped graph and missing baseline fail v
       { ...f.graph, api: { path: "../outside", depends_on: [] } },
       { ...f.graph, api: { path: "api", depends_on: ["missing"] } },
       { ...f.graph, api: { path: "shared", depends_on: [] } }]) {
+      // ADR-0089: the graph that scopes a check is the one at the base commit, so that is the one that must be valid.
       await f.put(".ci/graph.json", JSON.stringify(graph));
+      f.git("add", ".ci/graph.json");
+      f.git("commit", "-qm", "bad graph");
+      f.workspace.status!.baseCommit = f.git("rev-parse", "HEAD");
       await assert.rejects(f.scopes.plan(f.workspace, f.repository), /graph|module|dependency/);
     }
     await f.put(".ci/graph.json", JSON.stringify(f.graph));
+    f.git("add", ".ci/graph.json");
+    f.git("commit", "-qm", "restore graph");
+    f.workspace.status!.baseCommit = f.git("rev-parse", "HEAD");
     const copy = structuredClone(f.workspace);
     delete copy.status!.baseCommit;
     await assert.rejects(f.scopes.plan(copy, f.repository), /baseCommit/);
@@ -171,6 +178,49 @@ test("invalid graph, unsafe arguments, escaped graph and missing baseline fail v
     await symlink(join(outside, "graph.json"), join(f.root, ".ci/graph.json"));
     await assert.rejects(f.scopes.plan(f.workspace, f.repository), /escapes/);
   } finally { await f.cleanup(); await rm(outside, { recursive: true, force: true }); }
+});
+
+test("ADR-0089: dependency manifests scope to their module, and the base graph is the module map", async () => {
+  const f = await fixture();
+  try {
+    // A repository that scopes dependency manifests to their module and declares its derived graph as metadata.
+    f.repository.spec.moduleScope!.sharedPaths = ["Makefile", "hack/**"];
+    f.repository.spec.moduleScope!.nonBuildPaths = ["docs/**", ".ci/graph.json"];
+    await f.put("shared/go.mod", "module shared\n");
+    assert.deepEqual((await f.scopes.plan(f.workspace, f.repository)).modules, ["api", "client", "shared"]);
+    // A candidate cannot narrow its own scope: the graph is read from the base commit, not the working tree.
+    await rm(join(f.root, "shared/go.mod"));
+    await f.put(".ci/graph.json", JSON.stringify({ ...f.graph, api: { path: "api", depends_on: [] } }));
+    await f.put("shared/source.go", "changed");
+    const scope = await f.scopes.plan(f.workspace, f.repository);
+    assert.equal(scope.mode, "affected");
+    assert.deepEqual(scope.modules, ["api", "client", "shared"], "the base graph still knows api depends on shared");
+    // A graph-only change is non-build metadata: it neither forces full nor needs a module owner.
+    await f.put("shared/source.go", "original");
+    const graphOnly = await f.scopes.plan(f.workspace, f.repository);
+    assert.equal(graphOnly.mode, "full");
+    assert.match(graphOnly.reason ?? "", /non-build/);
+    // Genuinely shared tooling still forces full validation.
+    await f.put("hack/verify.sh", "changed");
+    const shared = await f.scopes.plan(f.workspace, f.repository);
+    assert.equal(shared.mode, "full");
+    assert.match(shared.reason ?? "", /Shared tooling/);
+  } finally { await f.cleanup(); }
+});
+
+test("ADR-0089: a symlinked graph cannot redirect the base lookup", async () => {
+  const f = await fixture();
+  try {
+    f.repository.spec.moduleScope!.sharedPaths = ["Makefile"];
+    f.repository.spec.moduleScope!.nonBuildPaths = ["docs/**", ".ci/graph.json", ".ci/other.json"];
+    // The candidate replaces the graph with a symlink to a graph that hides api's dependency on shared.
+    await f.put(".ci/other.json", JSON.stringify({ ...f.graph, api: { path: "api", depends_on: [] } }));
+    await rm(join(f.root, ".ci/graph.json"));
+    await symlink("other.json", join(f.root, ".ci/graph.json"));
+    await f.put("shared/source.go", "changed");
+    const scope = await f.scopes.plan(f.workspace, f.repository);
+    assert.deepEqual(scope.modules, ["api", "client", "shared"], "the base graph, not the symlink target, decides scope");
+  } finally { await f.cleanup(); }
 });
 
 test("legacy gates resolve the same narrow Make commands for build and tests without running unrelated modules", async () => {

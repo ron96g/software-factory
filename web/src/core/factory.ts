@@ -113,7 +113,7 @@ import { CheckActions } from "./checks/actions.ts";
 import { checkRunValidator } from "./checks/admission.ts";
 import { issueProposalValidator } from "./issues/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
-import { GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
+import { GitWorkspaceCheckpoint, GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
 import { GitCandidateChanges, GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
 import { DEFAULT_CHECK_OUTPUT_BYTES, SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
@@ -638,7 +638,7 @@ export async function createFactory(o: FactoryOptions) {
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
     transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
-    runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, clock, events, redactor, classifiers, scopes,
+    runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, checkpoints: new GitWorkspaceCheckpoint(), clock, events, redactor, classifiers, scopes,
     claims: workspaceLock, fenced: new SqliteFencedStatusWriter(store, workspaceLock), holder: incarnation,
     maxPerWorkspace: Number(env.FACTORY_CHECKS_PER_WORKSPACE ?? 1), maxTotal: Number(env.FACTORY_CHECKS_TOTAL ?? 2),
     definitionsLoadedAt,

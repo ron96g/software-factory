@@ -118,15 +118,21 @@ spec:
   sandboxRef: { name: go-build }
   moduleScope:
     graph: .github/ci/module-graph.json
-    sharedPaths: [Makefile, "hack/**", ".github/**", ".golangci.yml", ".ko.yaml", "**/go.mod", "**/go.sum", "go.work*"]
-    nonBuildPaths: ["docs/**"]
-  checks:                    # ADR-0061: scoped checks follow the tier (readiness: changed modules; preparation/verification:
-                             # changed + transitive dependents); shared/unknown changes always run full validation.
+    # ADR-0089: dependency manifests scope to their owning module (the graph supplies the transitive dependents), and the
+    # graph is read from the base commit; only genuinely shared tooling/configuration forces full validation.
+    sharedPaths: [Makefile, "hack/**", ".github/workflows/**", ".github/scripts/**", ".golangci.yml", ".ko.yaml", "go.work*"]
+    # The derived graph is metadata, not shared tooling, and needs no module owner.
+    nonBuildPaths: ["docs/**", ".github/ci/module-graph.json"]
+  checks:                    # ADR-0061/ADR-0089: scoped checks follow the tier (readiness: changed modules;
+                             # preparation/verification: changed + transitive dependents); only shared tooling or
+                             # configuration changes run full validation. No check runs the whole monorepo.
     build: { command: make build-all, timeoutMs: 1800000, scoped: true }
     unit-tests: { command: make test-all, timeoutMs: 3600000, scoped: true }
     focused-tests: { command: make test-all, timeoutMs: 900000, scoped: true }
-    full-build: { command: make build-all, timeoutMs: 1800000 }
-    full-tests: { command: make test-all, timeoutMs: 3600000 }
+    # Deprecated aliases: kept scoped so in-flight plans that reference them still resolve, without ever running the
+    # whole monorepo. The planner is told not to add them; remove them once no open plan references them.
+    full-build: { command: make build-all, timeoutMs: 1800000, scoped: true }
+    full-tests: { command: make test-all, timeoutMs: 3600000, scoped: true }
     preflight:                 # Same-environment prerequisites (ADR-0042 §X23c). `gotestsum` is declared on the go-build
                                # profile (ADR-0088) and provided by the factory on PATH, so this only prepares what the
                                # repository itself must build, and verifies the declared tool is really there.

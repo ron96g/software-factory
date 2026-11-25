@@ -24,6 +24,11 @@ spec:
   resources: { cpu: "4", memory: 8Gi, pids: 1024, timeout: 60m }
   env:                       # ADR-0033: plain values for every command (never secrets)
     GOPROXY: https://proxy.golang.org,direct
+    # The declared image pins Go 1.26, but the local `bwrap` runtime executes the *host* Go (ADR-0080 §11). Generated
+    # files embed a flate-compressed OpenAPI spec whose bytes differ between Go minor versions, so `go generate` on a
+    # newer host rewrites them even when the spec is unchanged. Pin the exact toolchain the repository builds with
+    # (its `go` directive) so generation is reproducible. Keep this in step with the repository's Go version.
+    GOTOOLCHAIN: go1.26.11
   tools:                     # ADR-0088: the factory provides these into its toolchain cache (on PATH, persistent), so no
                              # check has to know how to install them or how to put them on PATH.
     - name: gotestsum

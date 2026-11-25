@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Amended by ADR-0080 §10:** the `host` runtime was removed; "runtimes without isolation" in this ADR now means `none` (which executes nothing).
 - **Amended by:** ADR-0064
+- **Amended by ADR-0089 §1:** dependency manifests and a changed module graph no longer force `full` scope; the graph is read from the base commit.
 - **Date:** 2026-11-17
 - **Deciders:** project owner
 - **Amends:** ADR-0042 §4 (check side effects), ADR-0044 (scope selection), ADR-0047 (readiness checks)
@@ -85,6 +86,15 @@ An item on the `controlplane` Go monorepo stayed in "checking" for a long time w
   Until then `isolated` checks resolve to `Unavailable` and are shown as such. They never run on the live workspace.
 - Race detection, coverage and similar expensive options belong in checks that only higher tiers list. That is
   repository configuration, not a factory rule.
+- **Implementation note (this change).** The "must leave the candidate as it found it" rule is enforced by a
+  `WorkspaceCheckpoint` port: the check controller captures the working tree before a check (as a Git tree object in
+  the workspace's own object store, so the handle survives a restart) and, when the check changed the workspace,
+  restores the paths it changed and removes the files it added, then reports `NotVerified` with "check modified the
+  workspace" for **every** outcome. The restore refuses to touch a path whose deepest existing ancestor resolves
+  outside the workspace (a check could otherwise replace a directory with a symlink and redirect the write). The
+  checkpoint dependency is optional in the controller: without it, mutation is still detected, just not undone.
+  Writing loose objects into the candidate's object store is deliberate (durability) and is bounded by the check's
+  own window. Isolated candidate copies (`isolated` checks, X41b) remain the longer-term mechanism.
 
 ### 3. Caches are declared, partitioned and never trusted for evidence
 - `SandboxProfile.spec.caches` declares named caches, each with a **kind**:

@@ -53,6 +53,8 @@ async function fixture(database = ":memory:") {
   });
   let fingerprint = "tree-a";
   const snapshots = { fingerprint: async () => fingerprint };
+  let restores = 0;
+  const checkpoints = { capture: async () => fingerprint, restore: async (_workspace: Workspace, tree: string) => { restores++; fingerprint = tree; return true; } };
   const actions = new CheckActions({ namespace: "default", reader: store, writer: store, transcripts: logs,
     snapshots, environments: selector, redactor });
   let calls = 0;
@@ -61,14 +63,14 @@ async function fixture(database = ":memory:") {
   const errors: string[] = [];
   const lock = new SqliteWorkspaceLock(db, clock);
   const controller = (execution = runner) => createCheckRunController({ reader: store, status: store, logs, runner: execution,
-    snapshots, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message),
+    snapshots, checkpoints, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message),
     claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test" });
   const controllerFor = (holder: string, options: { definitionsLoadedAt?: string; maxPerWorkspace?: number; maxTotal?: number } = {}) =>
-    createCheckRunController({ reader: store, status: store, logs, runner, snapshots, clock, events: new StoreEventRecorder(store), redactor,
+    createCheckRunController({ reader: store, status: store, logs, runner, snapshots, checkpoints, clock, events: new StoreEventRecorder(store), redactor,
       onError: (message) => errors.push(message), claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder, ...options });
   const submit = (requestId = "request") => actions.submit(ANONYMOUS, "item", { workspace: "workspace", check: "test", requestId });
   return { db, store, logs, actions, controller, controllerFor, lock, submit, item, workspace, repository, errors,
-    calls: () => calls, snapshot: (value: string) => { fingerprint = value; }, result: (value: ExecResult) => { result = value; } };
+    calls: () => calls, restores: () => restores, snapshot: (value: string) => { fingerprint = value; }, result: (value: ExecResult) => { result = value; } };
 }
 
 test("standalone checks: idempotent named submission, immutable evidence, redacted logs and no workflow progress", async () => {
@@ -133,6 +135,26 @@ test("structured outcomes distinguish timeout, signal, nonzero exit, incomplete 
         scenario.result.termination?.kind === "spawn-error");
       assert.equal((await f.store.get<WorkItem>("WorkItem", "default", "item"))?.status?.phase, "Failed");
     }
+  } finally { f.db.close(); }
+});
+
+test("ADR-0061 §2: a check that rewrites the candidate is restored and NotVerified, whatever the outcome", async () => {
+  const f = await fixture();
+  try {
+    // A failing check that regenerated files is not trustworthy code feedback either: the result must not be
+    // UnknownFailure with a polluted tree, and the candidate must be put back the way the check found it.
+    f.snapshot("tree-a");
+    f.result({ exitCode: 1, stdout: "regenerated", stderr: "", truncated: false, durationMs: 5, termination: { kind: "exit" } });
+    const run = await f.submit("restore");
+    const c = f.controller({ execute: async () => { f.snapshot("tree-b"); return { exitCode: 1, stdout: "regenerated", stderr: "", truncated: false, durationMs: 5, termination: { kind: "exit" } }; } });
+    await c.reconcile(keyOf(run));
+    await c.stop();
+    const done = (await f.store.get<CheckRun>("CheckRun", "default", run.metadata.name))!;
+    assert.equal(done.status?.outcome, "NotVerified");
+    assert.match(done.status?.message ?? "", /modified the workspace/);
+    assert.match(done.status?.message ?? "", /restored/);
+    assert.equal(f.restores(), 1);
+    assert.equal(f.errors.length, 0);
   } finally { f.db.close(); }
 });
 

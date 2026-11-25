@@ -37,6 +37,24 @@ function moduleGraph(text: string): Record<string, Module> {
   return graph;
 }
 
+/**
+ * ADR-0089: read the module graph from the pinned base commit, not the working tree, so a candidate cannot narrow its
+ * own verification scope by editing the graph. `graphRelative` is the declared, normalised path (used for the base
+ * lookup, so a symlinked working-tree graph cannot redirect it); `graphPath` is the working-tree path, read only when
+ * the graph is new in this candidate (absent at the base). The declared path is resolved first, so a graph that escapes
+ * the workspace is rejected.
+ */
+async function graphTextAt(cwd: string, baseCommit: string, graphRelative: string, graphPath: string): Promise<string> {
+  const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
+  try {
+    await git(["cat-file", "-e", `${baseCommit}:${graphRelative}`]);
+  } catch {
+    // The path is absent at the base (a graph that is new in this candidate); the base commit itself was validated first.
+    return readFile(graphPath, "utf8");
+  }
+  return git(["show", `${baseCommit}:${graphRelative}`]);
+}
+
 /** Committed, staged, unstaged and untracked changes since `baseCommit`, workspace-relative and sorted. */
 async function changedSince(cwd: string, baseCommit: string): Promise<string[]> {
   const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
@@ -74,12 +92,18 @@ export class GitModuleScopePlanner implements ModuleScopePlanner {
       throw new StoreError("module scope requires a workspace path and pinned baseCommit", "Invalid");
     }
     const root = await realpath(cwd);
-    const graphPath = await realpath(join(root, policy.graph));
-    const graphRelative = relative(root, graphPath);
-    if (graphRelative.startsWith("..") || isAbsolute(graphRelative)) throw new StoreError("module graph escapes the workspace", "Invalid");
-    const graphText = await readFile(graphPath, "utf8");
-    const graph = moduleGraph(graphText);
+    // The base lookup uses the declared, normalised path, so a candidate cannot redirect it by symlinking the graph
+    // file. The working-tree path is resolved only to reject a graph that escapes the workspace (and for the fallback).
+    const graphPath = join(root, policy.graph);
+    const resolved = await realpath(graphPath).catch(() => undefined);
+    if (resolved) {
+      const inside = relative(root, resolved);
+      if (inside.startsWith("..") || isAbsolute(inside)) throw new StoreError("module graph escapes the workspace", "Invalid");
+    }
+    // `changedSince` validates the base commit, so `graphTextAt` only falls back when the graph path is absent at the base.
     const changed = await changedSince(cwd, baseCommit);
+    const graphText = await graphTextAt(cwd, baseCommit, policy.graph, graphPath);
+    const graph = moduleGraph(graphText);
     const scope = {
       baseCommit, graphHash: createHash("sha256").update(graphText).digest("hex"),
       modules: Object.values(graph).map((module) => module.path).sort(),
@@ -87,8 +111,10 @@ export class GitModuleScopePlanner implements ModuleScopePlanner {
     const full = (reason: string): ModuleCheckScope => ({ ...scope, mode: "full", reason });
     if (selection === "full") return full("Verification policy requires full scope for this check.");
     if (!changed.length) return full("No candidate changes; validate the full baseline.");
-    if (changed.some((path) => path === policy.graph || policy.sharedPaths.some((pattern) => matchesGlob(path, pattern)))) {
-      return full("Shared tooling, dependency or graph changes require full validation.");
+    // ADR-0089: a changed dependency manifest is module-local, and the repository declares its derived graph under
+    // nonBuildPaths, so the graph is metadata. Genuinely shared tooling and configuration still require full validation.
+    if (changed.some((path) => policy.sharedPaths.some((pattern) => matchesGlob(path, pattern)))) {
+      return full("Shared tooling or configuration changes require full validation.");
     }
     const buildChanges = changed.filter((path) => !policy.nonBuildPaths?.some((pattern) => matchesGlob(path, pattern)));
     if (!buildChanges.length) return full("Only non-build paths changed; validate the full baseline.");

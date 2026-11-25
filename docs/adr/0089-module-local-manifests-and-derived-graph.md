@@ -1,13 +1,13 @@
 # ADR-0089: Module-local dependency manifests and the derived module graph do not force full scope
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-24
 - **Deciders:** project owner
 - **Amends:** ADR-0044 (dependency manifests and a changed graph select full scope) and ADR-0061 (the same rule
   applies "in every tier")
 - **Related:** ADR-0044 (affected-module policy), ADR-0061 (`changed`/`affected`/`full`, tiers and side-effect-free
   checks), ADR-0047 (per-Unit readiness), ADR-0064 (check-definition version), ADR-0054 (definition-change
-  re-confirmation)
+  re-confirmation), ADR-0061 §2 (`WorkspaceCheckpoint`, the companion fix that restores a candidate a check rewrote)
 
 ## Context
 
@@ -60,8 +60,12 @@ an unknown/unowned path forces `full`, and a change set that is only non-build p
 2. **The repository's derived module graph is metadata, not shared tooling.** `moduleScope.graph` is declared under
    `moduleScope.nonBuildPaths`; it no longer forces `full` and no longer requires a module owner. A change set that is
    *only* non-build paths still resolves to `full`, preserving the "validate the full baseline" rule.
-3. **The planner stops special-casing `path === policy.graph`.** The graph is still read from the workspace and
-   fingerprinted into the resolved scope, and files outside known modules still fail visibly to `full`.
+3. **The planner stops special-casing `path === policy.graph`.** The graph is read from the **pinned base commit**
+   (`git show <baseCommit>:<graph>`), not the working tree, and fingerprinted into the resolved scope. The graph that
+   decides scope is therefore the reviewed one, so a candidate cannot narrow its own scope by editing the graph; a
+   graph that is new in the candidate (absent at the base) falls back to the working tree. The declared graph path is
+   resolved first, so a graph that escapes the workspace is rejected. Files outside known modules still fail visibly
+   to `full`.
 4. **Scope selection stays deterministic and factory-owned** (ADR-0044): never from an agent-supplied module list; the
    graph hash, base commit and resolved modules remain pinned in the immutable CheckRun spec.
 
@@ -72,6 +76,9 @@ an unknown/unowned path forces `full`, and a change set that is only non-build p
   conservatively validates the full baseline.
 - Full runs become the exception (root/CI/lint changes), which is what ADR-0061 intended, instead of the default for
   every dependency change.
+- `controlplane`'s `full-build`/`full-tests` become **scoped aliases**: they follow the tier scope (never the whole
+  monorepo), kept only so in-flight plans that reference them still resolve; the validation-plan instructions no longer
+  ask the planner for explicit full checks, and the aliases can be removed once no open plan references them.
 - It removes a class of **candidate corruption**: `build-all`/`test-all` no longer run codegen in untouched modules.
   It does **not** fix the underlying problem that a check may run codegen that rewrites the candidate; that remains
   ADR-0061 §(b) / X41b (writing checks on isolated candidate copies).

@@ -3,7 +3,7 @@ import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type CandidateChanges, type TestResultExtractor, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type CandidateChanges, type TestResultExtractor, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceCheckpoint, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { rerunCheckConfig, rerunOriginal, resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
@@ -17,6 +17,8 @@ export interface CheckControllerDeps {
   logs: TranscriptWriter;
   runner: CheckExecutionRunner;
   snapshots: WorkspaceSnapshotter;
+  /** ADR-0061 §2: restores the candidate when a check wrote to it. Without it, mutation is only detected, never undone. */
+  checkpoints?: WorkspaceCheckpoint;
   clock: Clock;
   events: EventRecorder;
   redactor: Redactor;
@@ -318,7 +320,10 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       await finishWithoutRun(run, "another check became active for this work item");
       return;
     }
-    if (await d.snapshots.fingerprint(workspace) !== run.spec.snapshot) {
+    // ADR-0061 §2: capture the candidate before the check so a command that regenerates files can be undone. When the
+    // runtime has no checkpoint, mutation is still detected below, just not restored.
+    const checkpoint = d.checkpoints ? await d.checkpoints.capture(workspace) : undefined;
+    if ((checkpoint ?? await d.snapshots.fingerprint(workspace)) !== run.spec.snapshot) {
       await finishWithoutRun(run, "workspace changed since check submission");
       return;
     }
@@ -382,9 +387,18 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
         message = `${run.spec.check}: ${outcome} (exit ${result.exitCode} in ${result.durationMs} ms)`;
       }
       executionOutcome = outcome;
-      if (outcome === "Passed" && finalSnapshot !== run.spec.snapshot) {
+      // ADR-0061 §2: a check must leave the candidate as it found it, whatever the outcome. Restore it and keep the
+      // result NotVerified, so a tree a check rewrote is never reviewed or published.
+      if (finalSnapshot && finalSnapshot !== run.spec.snapshot) {
         outcome = "NotVerified";
-        message += "; check changed the candidate workspace";
+        message += "; check modified the workspace";
+        if (d.checkpoints && checkpoint) {
+          try {
+            if (await d.checkpoints.restore(workspace, checkpoint)) message += " (restored)";
+          } catch (error) {
+            message += `; could not restore the workspace: ${d.redactor.redact(error instanceof Error ? error.message : String(error))}`;
+          }
+        }
       }
       if (executionOutcome === "Passed" || failureEvidence) {
         const after = await loadContext(run);
