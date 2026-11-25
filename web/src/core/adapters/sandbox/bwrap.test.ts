@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BwrapEnvironment, buildBwrapArgs, resolverBinds, sandboxEnv, sandboxHome, shellQuote } from "./bwrap.ts";
-import { canConfineShell, canPrepareIsolated, TOOLCHAIN_MOUNT, type SandboxSpec } from "../../ports/index.ts";
+import { CandidateCommitRejectedError, canConfineShell, canPrepareIsolated, TOOLCHAIN_MOUNT, type CommitHookSetup, type SandboxSpec } from "../../ports/index.ts";
 
 /** A dangling `/etc/resolv.conf` symlink leaves the sandbox without DNS, so its target must be bound too. */
 test("ADR-0081 §3: a symlinked resolv.conf has its target bound; a real file needs no extra bind", () => {
@@ -295,4 +295,72 @@ test("ADR-0088: the environment creates its toolchain cache directory", () => {
   assert.ok(!existsSync(dir));
   new BwrapEnvironment({ toolchainDir: dir });
   assert.ok(existsSync(dir), "binding a missing directory would fail every command");
+});
+
+/** ADR-0092: the publication commit is made inside bwrap, over a throwaway overlay of the workspace, into a private git directory. */
+test("ADR-0092: commitCandidate commits in bwrap without writing the workspace or the shared clone; a hook that changes files is rejected and its writes vanish", async (t) => {
+  const hooked: CommitHookSetup = {
+    type: "rewrite",
+    // A "formatter" that rewrites a file and writes a cache: the change rejects the commit, and neither write survives.
+    install: `mkdir -p "$GIT_DIR/hooks" && printf '#!/bin/bash\\nmkdir -p "$GIT_WORK_TREE/.cache" && echo reformatted > "$GIT_WORK_TREE/a.txt"\\n' > "$GIT_DIR/hooks/pre-commit" && chmod +x "$GIT_DIR/hooks/pre-commit"`,
+  };
+  const forge: CommitHookSetup = {
+    type: "forge",
+    install: `mkdir -p "$GIT_DIR/hooks" && printf '#!/bin/bash\nfor f in "$OUT"/../commit/candidate.bundle "$OUT"/../*/candidate.bundle; do echo forged > "$f" 2>/dev/null; done; exit 0\n' > "$GIT_DIR/hooks/pre-commit" && chmod +x "$GIT_DIR/hooks/pre-commit"`,
+  };
+  const setups: Record<string, CommitHookSetup> = { rewrite: hooked, forge };
+  const env = new BwrapEnvironment({ commitHooks: { get: (k) => setups[k], keys: () => Object.keys(setups) } });
+  const health = await env.health();
+  if (!health.available) {
+    t.skip(`bwrap unavailable on this host: ${health.message}`);
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), "factory-bwrap-commit-"));
+  try {
+    const src = join(dir, "src");
+    mkdirSync(src, { recursive: true });
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } }).toString().trim();
+    git(src, "init", "-q");
+    writeFileSync(join(src, "a.txt"), "one\n");
+    git(src, "add", ".");
+    git(src, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-qm", "init");
+    const baseCommit = git(src, "rev-parse", "HEAD");
+    const ws = join(dir, "ws");
+    git(src, "worktree", "add", "-q", "-b", "factory/item-1", ws, "HEAD");
+    writeFileSync(join(ws, "a.txt"), "two\n");
+    writeFileSync(join(ws, "new.txt"), "new\n");
+    const spec: SandboxSpec = {
+      profile: { apiVersion: "factory.ai-dlc.io/v1alpha1", kind: "SandboxProfile", metadata: { name: "p" }, spec: { image: "", isolation: "process" } },
+      repositories: [],
+      workspaces: [{ apiVersion: "factory.ai-dlc.io/v1alpha1", kind: "Workspace", metadata: { name: "item-repo" },
+        spec: { repositoryRef: { name: "repo" }, workItemRef: { name: "item" }, branch: "factory/item-1" },
+        status: { phase: "Ready", path: ws, baseCommit } }],
+    };
+    const outDir = mkdtempSync(join(tmpdir(), "factory-bwrap-commit-out-"));
+    const made = await env.commitCandidate(spec, { branch: "factory/item-1", message: "feat: change a\n\nWork item: item", outDir });
+    assert.match(made.commit, /^[a-f0-9]{40}$/);
+    const bundled = git(src, "bundle", "list-heads", made.bundlePath);
+    assert.match(bundled, new RegExp(`^${made.commit} refs/heads/factory/item-1$`));
+    assert.equal(git(ws, "rev-parse", "HEAD"), baseCommit, "the workspace branch did not move");
+    assert.throws(() => git(src, "cat-file", "-e", made.commit), "the shared object store never received the commit");
+    rmSync(outDir, { recursive: true, force: true });
+
+    const out2 = mkdtempSync(join(tmpdir(), "factory-bwrap-commit-out-"));
+    await assert.rejects(env.commitCandidate(spec, { branch: "factory/item-1", message: "m", outDir: out2, hooks: "rewrite" }),
+      (e: unknown) => e instanceof CandidateCommitRejectedError && /changed the candidate/.test(e.message));
+    assert.equal(execFileSync("cat", [join(ws, "a.txt")]).toString(), "two\n", "the hook could not change the workspace");
+    assert.ok(!existsSync(join(ws, ".cache")), "the hook's writes went to the throwaway overlay");
+    rmSync(out2, { recursive: true, force: true });
+
+    // A hook that passes but tries to replace the published bundle: it runs separately and cannot reach the commit run's
+    // directory, so what is published is still the factory-made commit (the reviewer's forgery scenario).
+    const out3 = mkdtempSync(join(tmpdir(), "factory-bwrap-commit-out-"));
+    const honest = await env.commitCandidate(spec, { branch: "factory/item-1", message: "m", outDir: mkdtempSync(join(tmpdir(), "factory-bwrap-commit-ref-")) });
+    const forging = await env.commitCandidate(spec, { branch: "factory/item-1", message: "m", outDir: out3, hooks: "forge" });
+    assert.equal(forging.tree, honest.tree, "the published tree is the candidate's");
+    assert.equal(git(src, "bundle", "list-heads", forging.bundlePath).split(" ")[0], forging.commit, "the bundle is the commit run's, not the hook's");
+    rmSync(out3, { recursive: true, force: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

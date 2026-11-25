@@ -9,7 +9,7 @@ import type { ModelProvider, ToolServer, Source, Repository, ArtifactType, Sandb
 import { nsOf } from "./model/meta.ts";
 import { resolveRef } from "./refs/refs.ts";
 import { DatabaseSync } from "node:sqlite";
-import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch, ResourceWatcher, AgentProcessKiller, ToolProvisioner } from "./ports/index.ts";
+import type { DefinitionFeed, NamespacedSecretReader, SecretWatcher, SecretResolver, BaseConflictDetector, BranchPublisher, CodeHost, WorkspaceIntegrator, ConversationResponder, AgentTool, Clock, ExecutionEnvironment, WorkspaceCleaner, WorkspacePreparer, WorkspaceSupport, WorkspaceSweeper, ArtifactCheck, ProposedArtifactCheck, GateCheck, GateEvaluator, LLMClientFactory, OutboxHandler, SkillHandler, SourceConnector, KnowledgeSourceSearch, ResourceWatcher, AgentProcessKiller, ToolProvisioner, CommitHookSetup, CommitMessageConvention } from "./ports/index.ts";
 import { KindRegistry, Registry } from "./registry/registry.ts";
 import { BUILTIN_KINDS } from "./registry/kinds.ts";
 import { SqliteStore } from "./store/sqlite-store.ts";
@@ -39,6 +39,9 @@ import { decisionGate, humanApprovalGate } from "./workflow/gates.ts";
 import { automatedGate } from "./workflow/checks.ts";
 import { SandboxCommandRunner } from "./agents/command-runner.ts";
 import { GitBranchPublisher } from "./adapters/workspaces/git-publish.ts";
+import { SandboxCandidateCommitter } from "./adapters/sandbox/candidate-committer.ts";
+import { PRE_COMMIT_HOOKS } from "./adapters/sandbox/candidate-commit.ts";
+import { conventionalCommits } from "./runtime/commit-message.ts";
 import { GitBaseSync } from "./adapters/workspaces/git-base-sync.ts";
 import { GitBundleIngest, GitCandidateDiffer } from "./adapters/workspaces/git-export.ts";
 import { GithubCodeHost } from "./adapters/codehosts/github.ts";
@@ -343,6 +346,9 @@ export async function createFactory(o: FactoryOptions) {
   toolProvisioners.register(GO_INSTALL_TYPE, goInstallProvisioner);
   toolProvisioners.register(COMMAND_TYPE, commandProvisioner);
   const toolchain = new DefaultToolchain({ dir: toolchainDir, provisioners: toolProvisioners });
+  // ADR-0092: hook setups a repository may opt into for its publication commit.
+  const commitHooks = new Registry<CommitHookSetup>();
+  commitHooks.register(PRE_COMMIT_HOOKS.type, PRE_COMMIT_HOOKS);
   const sandboxEnvs = new Registry<ExecutionEnvironment>();
   sandboxEnvs.register("none", new NoSandboxEnvironment());
   // ADR-0079: Linux bubblewrap process/filesystem isolation (ADR-0080 §11: the profile, not the env, decides isolation).
@@ -350,6 +356,7 @@ export async function createFactory(o: FactoryOptions) {
     extraRoBinds: env.FACTORY_BWRAP_RO_BINDS?.split(":").filter(Boolean),
     toolchainDir,
     toolchain,
+    commitHooks,
   }));
   for (const e of o.sandboxes ?? []) sandboxEnvs.register(e.runtime, e);
   const environments = new DefaultEnvironmentSelector(sandboxEnvs, env.FACTORY_SANDBOX_RUNTIME, [
@@ -602,11 +609,15 @@ export async function createFactory(o: FactoryOptions) {
   // so the git detector works wherever a PR can be opened. A custom publisher must bring its own detector.
   if (o.publisher && !o.baseSync) throw new Error("a custom publisher needs a baseSync (ADR-0053): no pull request is opened without base-conflict detection");
   const baseSync = o.baseSync ?? new GitBaseSync(secrets);
+  const conventions = new Registry<CommitMessageConvention>();
+  conventions.register(conventionalCommits.type, conventionalCommits);
   const pr = pullRequestHandler({
     reader: store,
-    publisher: o.publisher ?? new GitBranchPublisher(secrets),
+    // ADR-0092: the commit is made in the sandbox; the factory only ingests the bundle and pushes.
+    publisher: o.publisher ?? new GitBranchPublisher(secrets, new SandboxCandidateCommitter(store, environments)),
     codeHosts: o.codeHosts ?? [new GithubCodeHost(secrets, o.fetch)],
     conflicts: baseSync,
+    conventions,
   });
   outboxHandlers.register(pr.action, pr);
   for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);

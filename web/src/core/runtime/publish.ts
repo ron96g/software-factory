@@ -1,6 +1,7 @@
 import type { Artifact, Repository, WorkItem, Workspace } from "../model/kinds.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
-import type { BaseConflictDetector, BranchPublisher, CodeHost, OutboxHandler, ResourceReader } from "../ports/index.ts";
+import type { BaseConflictDetector, BranchPublisher, CodeHost, CommitMessageConvention, Lookup, OutboxHandler, ResourceReader } from "../ports/index.ts";
+import { plainCommitMessage } from "./commit-message.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { renderVerificationReport } from "../artifacts/render.ts";
 
@@ -12,7 +13,9 @@ const section = (title: string, body?: string, max = 2500) => (body ? `### ${tit
  * ADR-0053: a candidate that does not merge cleanly into the current base is neither pushed nor opened; the
  * delivered result `{ conflict: true, … }` lets the WorkItem controller recover.
  */
-export function pullRequestHandler(d: { reader: ResourceReader; publisher: BranchPublisher; codeHosts: CodeHost[]; conflicts: BaseConflictDetector }): OutboxHandler {
+export function pullRequestHandler(d: { reader: ResourceReader; publisher: BranchPublisher; codeHosts: CodeHost[]; conflicts: BaseConflictDetector;
+  /** ADR-0092: `Repository.spec.git.commit.convention` → message format. */
+  conventions?: Lookup<CommitMessageConvention> }): OutboxHandler {
   return {
     action: "open-pull-request",
     async deliver({ payload }) {
@@ -36,7 +39,11 @@ export function pullRequestHandler(d: { reader: ResourceReader; publisher: Branc
       if (report.conflicts.length) return { conflict: true, base, baseCommit: report.baseCommit, files: report.conflicts };
 
       const title = String(payload.title ?? wi?.spec.title ?? ws.spec.workItemRef.name);
-      const pushed = await d.publisher.publish(ws, repo, `${title}\n\nWork item: ${ws.spec.workItemRef.name}`);
+      const conventionType = repo.spec.git?.commit?.convention;
+      const convention = conventionType ? d.conventions?.get(conventionType) : undefined;
+      if (conventionType && !convention) throw new Error(`repository ${repo.metadata.name}: unknown commit message convention "${conventionType}"`);
+      const message = { title, workItem: ws.spec.workItemRef.name, classification: wi?.status?.classification?.type };
+      const pushed = await d.publisher.publish(ws, repo, convention ? convention.format(message) : plainCommitMessage(message));
       const body = [
         `> Opened by the **Software Factory** for work item \`${ws.spec.workItemRef.name}\`. Draft until a human approves.`,
         "",

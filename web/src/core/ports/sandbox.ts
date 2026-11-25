@@ -111,6 +111,55 @@ export function canConfineShell(environment: ExecutionEnvironment): environment 
   return typeof (environment as Partial<ShellConfiner>).confineShell === "function";
 }
 
+/** ADR-0092: what the sandboxed commit job is asked to produce. */
+export interface CandidateCommitInput {
+  /** The branch the bundle carries (`refs/heads/<branch>`), e.g. the workspace's `factory/<item>`. */
+  branch: string;
+  message: string;
+  /** Factory-owned scratch directory, read-write in the job; the bundle is written there. */
+  outDir: string;
+  /** Registered commit hook setup (e.g. `pre-commit`); absent: hooks stay disabled. */
+  hooks?: string;
+}
+
+/** The job's output: a self-contained bundle, untrusted until ingested (ADR-0080 §13). */
+export interface CandidateCommit {
+  bundlePath: string;
+  ref: string;
+  /** Commit the bundle's ref points at, as reported by the job. */
+  commit: string;
+  /** Tree staged from the working copy; the committed tree equals it (hooks may check, never change). */
+  tree: string;
+}
+
+/** A hook run or the job itself rejected the commit; `output` is the job's redactable log. */
+export class CandidateCommitRejectedError extends Error {
+  readonly output: string;
+  constructor(message: string, output: string) {
+    super(message);
+    this.output = output;
+  }
+}
+
+/**
+ * ADR-0092: commits the workspace's working copy **inside** the sandbox (read-only workspace, private git directory,
+ * no token) and bundles it. The factory only ingests and pushes the bundle.
+ */
+export interface SandboxCommitter {
+  commitCandidate(spec: SandboxSpec, input: CandidateCommitInput): Promise<CandidateCommit>;
+}
+
+export function canCommitCandidate(environment: ExecutionEnvironment): environment is ExecutionEnvironment & SandboxCommitter {
+  return typeof (environment as Partial<SandboxCommitter>).commitCandidate === "function";
+}
+
+/** ADR-0092: a registered way to install a repository's commit hooks into the job's private git directory. */
+export interface CommitHookSetup {
+  readonly type: string;
+  /** Shell run in the job (cwd = workspace, `GIT_DIR` = private git directory) before `git commit`. */
+  readonly install: string;
+}
+
 /** Picks the runtime (explicit or auto-detected). Cached after the first call; `refresh` re-probes. */
 export interface ExecutionEnvironmentSelector {
   select(): Promise<{ environment: ExecutionEnvironment; health: SandboxHealthInfo; candidates: SandboxHealthInfo[] }>;

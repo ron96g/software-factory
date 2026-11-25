@@ -5,8 +5,10 @@ import { isAbsolute, join, matchesGlob, relative } from "node:path";
 import { promisify } from "node:util";
 import type { ModuleCheckScope, ModuleScopeMode, Repository, Workspace } from "../../model/kinds.ts";
 import { StoreError, type CandidateChanges, type ModuleScopePlanner } from "../../ports/index.ts";
+import { GIT_HARDENING, gitLocalEnv } from "./git-auth.ts";
 
 const exec = promisify(execFile);
+// The workspace is agent-writable: its git config must not run here (SEC-2, ADR-0092 §6).
 const safePath = (path: string) => /^[a-zA-Z0-9_.][a-zA-Z0-9_./-]*$/.test(path) &&
   path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 type Module = { path: string; depends_on: string[] };
@@ -45,7 +47,7 @@ function moduleGraph(text: string): Record<string, Module> {
  * the workspace is rejected.
  */
 async function graphTextAt(cwd: string, baseCommit: string, graphRelative: string, graphPath: string): Promise<string> {
-  const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
+  const git = async (args: string[]) => (await exec("git", [...GIT_HARDENING, ...args], { cwd, env: gitLocalEnv(), maxBuffer: 16 * 1024 * 1024 })).stdout;
   try {
     await git(["cat-file", "-e", `${baseCommit}:${graphRelative}`]);
   } catch {
@@ -57,7 +59,7 @@ async function graphTextAt(cwd: string, baseCommit: string, graphRelative: strin
 
 /** Committed, staged, unstaged and untracked changes since `baseCommit`, workspace-relative and sorted. */
 async function changedSince(cwd: string, baseCommit: string): Promise<string[]> {
-  const git = async (args: string[]) => (await exec("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 })).stdout;
+  const git = async (args: string[]) => (await exec("git", [...GIT_HARDENING, ...args], { cwd, env: gitLocalEnv(), maxBuffer: 16 * 1024 * 1024 })).stdout;
   await git(["cat-file", "-e", `${baseCommit}^{commit}`]);
   // Disabling rename detection includes both the old and new owners, including staged renames.
   return [...new Set((

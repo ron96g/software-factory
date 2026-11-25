@@ -5,7 +5,7 @@
 import type { KnowledgeSearcher } from "./knowledge.ts";
 import type { ModelProvider, Repository, Source, SourceHistory, Workspace } from "../model/kinds.ts";
 import type { OwnerReference, Ref } from "../model/resource.ts";
-import type { FileReader, FileWriter, SandboxArtifacts, SandboxExec } from "./sandbox.ts";
+import type { CandidateCommit, FileReader, FileWriter, SandboxArtifacts, SandboxExec } from "./sandbox.ts";
 
 // ── Generic registry (adapter lookup by `type`) ─────────────────────────
 
@@ -353,6 +353,21 @@ export interface CommandRunner {
 /** Commits the workspace's changes and pushes its branch. Idempotent (no-op commit if nothing changed). */
 export interface BranchPublisher {
   publish(ws: Workspace, repo: Repository, message: string): Promise<{ branch: string; commit: string; pushed: boolean }>;
+}
+
+/**
+ * ADR-0092: produces the publication commit of a workspace as an untrusted bundle, made where the repository's code may
+ * run (the sandbox), never in the factory process. `outDir` is factory-owned scratch the caller removes.
+ */
+export interface CandidateCommitter {
+  commit(ws: Workspace, repo: Repository, input: { message: string; outDir: string }): Promise<CandidateCommit>;
+}
+
+/** ADR-0092: a registered commit message format (`Repository.spec.git.commit.convention`). */
+export interface CommitMessageConvention {
+  readonly type: string;
+  /** `classification`: the work item's classified type (e.g. `bug`, `feature`), when known. */
+  format(input: { title: string; workItem: string; classification?: string }): string;
 }
 
 // ── Base-branch conflicts (ADR-0053) ────────────────────────────────────

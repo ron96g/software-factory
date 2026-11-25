@@ -119,7 +119,7 @@ an injection can bypass it); **✗** not enforced.
 | Commands: `run`, checks, `CommandRunner` | not run | ✗ runs as your user | ✓ namespaces (pid/ipc/uts/cgroup), `--new-session`, `--cap-drop ALL`, read-only system binds, ephemeral `HOME`, narrowed `.git`/ref binds (ADR-0081); no seccomp filter yet | ✓ pod (network policy not designed yet) |
 | File tools: `read_file`, `write_file`, `list_files` | n/a | ~ realpath containment guard (P0-1/SEC-1); still factory-process code | ~ the same host-side code, now realpath-guarded | to design: must run inside the sandbox |
 | OpenCode built-ins: `read`, `glob`, `grep`, `edit`, `write`, `patch` | n/a | ~ OpenCode policy only (`external_directory: deny`, `PROTECTED`), with the `.git` rule unverified for symlinks (**SEC-10**) | ~ the same; `shell` is wrapped by the confiner and refused when unattributable (P0-4) (**SEC-10**) | ✗ unusable with a workspace that lives in the pod |
-| `git` plumbing: publish, snapshot, worktree, base merge | n/a | ~ host git inside an agent-writable repository; hooks/pager/editor/fsmonitor disabled and the token scoped to fetch/push (P0-2); repo-local filters remain (**SEC-2/3**) | ~ the same | ~ the same |
+| `git` plumbing: snapshot, worktree, base merge (publish commit: in the sandbox, ADR-0092) | n/a | ~ host git inside an agent-writable repository; hooks/pager/editor/fsmonitor disabled and the token scoped to fetch/push (P0-2); repo-local filters remain (**SEC-2/3**) | ~ the same | ~ the same |
 | Workspace setup commands (`spec.setup`) | n/a | ✗ host shell, no sandbox (**SEC-4**) | ✗ the same | ✗ the same |
 | Web tools: `webfetch`, `websearch` | n/a | ~ an audited egress proxy + `fetch_url` tool exist (P0-9); OpenCode's own `webfetch`/`websearch` are still offered in-process (**SEC-5**, retire in P0-3) | ~ the same | ~ the same |
 | Outbound network from commands | n/a | ✗ unrestricted | ✗ `--share-net`; a declared `network.mode: none` is ignored (**SEC-6**) | possible with a network policy |
@@ -178,8 +178,8 @@ documentation that overstates.
 | ID | Severity | Status | What |
 |---|---|---|---|
 | SEC-1 | High | fixed (P0-1) | Sandbox file tools escape the workspace through symlinks |
-| SEC-2 | High | mitigated (P0-2) | Host `git` runs inside agent-writable repositories with repo-local config and hooks enabled |
-| SEC-3 | High | fixed (S1) | The repository token is inherited by everything git spawns |
+| SEC-2 | High | mitigated (P0-2, ADR-0092 publish) | Host `git` runs inside agent-writable repositories with repo-local config and hooks enabled |
+| SEC-3 | High | mostly fixed (S1; base-sync fetch open, ADR-0092 stage 2) | The repository token is inherited by everything git spawns |
 | SEC-4 | Medium | open | Workspace setup runs on the host, outside any sandbox |
 | SEC-5 | High | mitigated (P0-9) | `webfetch`/`websearch` are always offered and run in the factory process |
 | SEC-6 | Medium | open | Declared network policy is not enforced, and commands keep full host network reach |
@@ -263,6 +263,14 @@ sandboxed step like checks. Decide with a successor ADR to ADR-0023/ADR-0019.
 still be configured, so the finding stays **mitigated, not fixed** until the commit is built in a factory-owned clone
 (S1 landed the *push* from a factory-owned mirror; the commit still runs in the workspace).
 
+**Update (ADR-0092).** Publication no longer runs git in the workspace: the commit is made by a job **in the sandbox**
+(`bwrap`: throwaway overlay of the workspace, private git directory, no token, no network), and the factory only
+ingests the bundle and pushes. Opted-in repository hooks run in a **separate** run that can only pass or fail
+publication; they never produce what is pushed, and their verdict is a standards check, not a security control. `module-scope.ts` and `local-reader.ts` now use the hardening too. Still host-side on a workspace: the base
+sync (ADR-0053, including a **token-bearing fetch with the workspace as `cwd`** — see SEC-3), worktree preparation,
+snapshot/checkpoint plumbing and the `bwrap` sandbox's own `listFiles`/`diff`. The finding stays **mitigated** until
+those move (ADR-0092 stage 2).
+
 ### SEC-3 — The repository token is inherited by everything git spawns (High)
 
 **Evidence.** `git-auth.ts:26-28` passes the token as
@@ -284,6 +292,10 @@ factory-owned clone so no agent-writable config is ever loaded (ADR-0023 success
 (`GitBundleIngest`, validated with `fsck`/limits and never checked out), which carries no agent-writable config, hooks or
 filters. The token reaches only that push process (`gitRemote` returns a token-free `env` and a separate `authEnv`), and
 `git add`/`commit`/`diff` in the workspace never inherit it.
+
+**Correction (ADR-0092).** Not fully fixed: `GitBaseSync.detect` fetches the base **with `authEnv` and the workspace as
+`cwd`** (`git-base-sync.ts`), so repository-local `url.*.insteadOf`/`http.*` settings in the shared clone's config can
+redirect or expose the token. Moving that fetch to a factory-owned mirror is ADR-0092 stage 2.
 
 ### SEC-4 — Workspace setup runs on the host, outside any sandbox (Medium)
 
@@ -642,6 +654,11 @@ channel, because the cache is shared by every item of the store. `goInstall` (th
 work of ADR-0080 — provisioning in a factory-controlled runtime from the pinned base commit, with the tool set pinned per
 profile version. The value bought in exchange is that a repository stops scripting installs and `PATH` plumbing into every
 check (which cannot work for `scoped` checks at all), and that a cold Go/npm cache stops being re-downloaded per command.
+
+**ADR-0092.** The opt-in publication **hook run** belongs to the same class: it runs the candidate's hooks with the
+item's persistent `HOME` and full outbound network (not the profile's allowlist, SEC-6), so it can leave cache state for
+later commands of the same item. It never writes the shared toolchain cache, and it cannot influence the published
+commit, which comes from the separate, network-less commit run.
 
 ## 7. Remediation roadmap
 

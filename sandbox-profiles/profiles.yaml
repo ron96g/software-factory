@@ -34,6 +34,16 @@ spec:
     - name: gotestsum
       provides: bin/gotestsum
       via: { type: goInstall, with: { module: gotest.tools/gotestsum@v1.13.0 } }
+    # ADR-0092: controlplane's pre-commit `audit-gate` hook runs codespell during the publication commit. uv links the
+    # tool absolutely (/factory-tools/…); the relative link keeps `provides` resolvable from the factory side.
+    - name: codespell
+      provides: bin/codespell
+      via:
+        type: command
+        with:
+          command: >-
+            UV_TOOL_DIR=/factory-tools/uv-tools UV_TOOL_BIN_DIR=/factory-tools/bin uv tool install --quiet codespell==2.4.3
+            && ln -sfn ../uv-tools/codespell/bin/codespell /factory-tools/bin/codespell
   network:
     mode: allowlist
     allow: [proxy.golang.org, sum.golang.org, storage.googleapis.com, github.com]

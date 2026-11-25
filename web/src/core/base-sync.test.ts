@@ -9,8 +9,12 @@ import type { Repository, Workspace } from "./model/kinds.ts";
 import { API_VERSION } from "./model/resource.ts";
 import { GitBaseSync } from "./adapters/workspaces/git-base-sync.ts";
 import { GitBranchPublisher } from "./adapters/workspaces/git-publish.ts";
+import { HostCandidateCommitter } from "./testing/host-committer.ts";
+import { CandidateCommitRejectedError, type CommitHookSetup } from "./ports/index.ts";
 
 const secrets = { resolve: () => undefined };
+// ADR-0092: the commit job runs unsandboxed here so the git behaviour is covered without bwrap.
+const publisher = (hooks: CommitHookSetup[] = []) => new GitBranchPublisher(secrets, new HostCandidateCommitter(hooks));
 
 /** A bare `origin` with `main`, plus a workspace clone on `factory/item` forked from it. */
 async function fixture() {
@@ -98,11 +102,13 @@ test("ADR-0053: conflict is detected without touching the workspace, merged with
     await writeFile(join(f.work, "a.txt"), "one\nTWO (item and main)\nthree\n");
     assert.deepEqual((await sync.detect(repinned, f.repo, "main")).conflicts, []);
 
-    const pushed = await new GitBranchPublisher(secrets).publish(repinned, f.repo, "Item title");
+    const pushed = await publisher().publish(repinned, f.repo, "Item title");
     assert.equal(f.git(f.origin, "rev-parse", "factory/item"), pushed.commit);
     assert.equal(f.git(f.origin, "rev-list", "--parents", "-n", "1", pushed.commit).split(" ").length, 3, "a merge commit");
     f.git(f.origin, "merge-base", "--is-ancestor", "main", "factory/item");
-    assert.ok(!f.mergeHead());
+    // ADR-0092: the commit was made in a private git directory; the workspace and the shared clone are untouched.
+    assert.ok(f.mergeHead(), "the workspace's merge state is left as it was");
+    assert.throws(() => f.git(f.work, "cat-file", "-e", pushed.commit), "the shared object store never received the commit");
   } finally {
     await f.cleanup();
   }
@@ -135,7 +141,7 @@ test("ADR-0091: a moved remote head does not block publication; the factory bran
   const f = await fixture();
   try {
     await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\n");
-    const first = await new GitBranchPublisher(secrets).publish(f.ws(), f.repo, "Item title");
+    const first = await publisher().publish(f.ws(), f.repo, "Item title");
     assert.equal(f.git(f.origin, "rev-parse", "factory/item"), first.commit);
 
     // A human merges main into the pull request branch (GitHub "Update branch"): the remote head moves.
@@ -152,9 +158,71 @@ test("ADR-0091: a moved remote head does not block publication; the factory bran
 
     // The factory publishes again: it owns the branch and replaces the head, so publication is not blocked.
     await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\nagain\n");
-    const second = await new GitBranchPublisher(secrets).publish(f.ws(), f.repo, "Item title");
+    const second = await publisher().publish(f.ws(), f.repo, "Item title");
     assert.equal(f.git(f.origin, "rev-parse", "factory/item"), second.commit);
     assert.notEqual(second.commit, diverged);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("ADR-0092: an unchanged candidate is not pushed again; a changed one is", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\n");
+    const first = await publisher().publish(f.ws(), f.repo, "Item title");
+    const again = await publisher().publish(f.ws(), f.repo, "Item title");
+    assert.equal(again.commit, first.commit, "same tree and parents: the published commit is kept");
+    assert.equal(again.pushed, false);
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item, revised)\nthree\n");
+    const changed = await publisher().publish(f.ws(), f.repo, "Item title");
+    assert.notEqual(changed.commit, first.commit);
+    assert.equal(f.git(f.origin, "rev-parse", "factory/item"), changed.commit);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+/** A raw hook installed into the job's private git directory, so the test needs no hook framework. */
+const rawHook = (type: string, script: string): CommitHookSetup => ({
+  type, install: `mkdir -p "$GIT_DIR/hooks" && echo ${Buffer.from(`#!/bin/bash\nset -e\n${script}\n`).toString("base64")} | base64 -d > "$GIT_DIR/hooks/pre-commit" && chmod +x "$GIT_DIR/hooks/pre-commit"`,
+});
+const withHooks = (repo: Repository, hooks: string) => ({ ...repo, spec: { ...repo.spec, git: { ...repo.spec.git!, commit: { hooks } } } }) as Repository;
+
+test("ADR-0092: opted-in hooks run with the commit; a failing hook rejects publication and pushes nothing", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.work, "a.txt"), "one\nFORBIDDEN\nthree\n");
+    const guard = rawHook("guard", `! grep -rq FORBIDDEN "$GIT_WORK_TREE/a.txt" || { echo "forbidden content" >&2; exit 1; }`);
+    await assert.rejects(publisher([guard]).publish(f.ws(), withHooks(f.repo, "guard"), "Item title"),
+      (e: unknown) => e instanceof CandidateCommitRejectedError && /forbidden content/.test(e.output));
+    assert.throws(() => f.git(f.origin, "rev-parse", "--verify", "-q", "factory/item"), "nothing was pushed");
+
+    // Without the opt-in, the same repository's hooks stay disabled.
+    const pushed = await publisher([guard]).publish(f.ws(), f.repo, "Item title");
+    assert.equal(f.git(f.origin, "rev-parse", "factory/item"), pushed.commit);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("ADR-0092: a hook that changes the candidate fails publication; hooks may check, never change", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\n");
+    const formatter = rawHook("formatter", `echo formatted > "$OUT/extra.txt" && git update-index --add --cacheinfo 100644,$(git hash-object -w "$OUT/extra.txt"),extra.txt`);
+    await assert.rejects(publisher([formatter]).publish(f.ws(), withHooks(f.repo, "formatter"), "Item title"),
+      (e: unknown) => e instanceof CandidateCommitRejectedError && /changed the candidate/.test(e.message));
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("ADR-0092: an unknown hook setup fails visibly instead of committing without hooks", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(join(f.work, "a.txt"), "one\nTWO (item)\nthree\n");
+    await assert.rejects(publisher().publish(f.ws(), withHooks(f.repo, "husky"), "Item title"));
   } finally {
     await f.cleanup();
   }

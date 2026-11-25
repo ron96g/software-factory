@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Workspace } from "../../model/kinds.ts";
 import type { Repository } from "../../model/kinds.ts";
+import { GIT_HARDENING, gitLocalEnv } from "./git-auth.ts";
 import type { CodeHit, CodeSearch, CodeSearcher, FileReader, WorkspaceReaderFactory } from "../../ports/index.ts";
 
 const execFileP = promisify(execFile);
@@ -60,7 +61,9 @@ export class LocalWorkspaceReaders implements WorkspaceReaderFactory {
         const re = glob ? new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "§").replace(/\*/g, "[^/]*").replace(/§/g, ".*")}$`) : null;
         const out: string[] = [];
         for (const ws of ready) {
-          const { stdout } = await execFileP("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: ws.status!.path!, maxBuffer: 32 * 1024 * 1024 });
+          // The workspace is agent-writable: its git config (e.g. core.fsmonitor) must not run here (SEC-2).
+          const { stdout } = await execFileP("git", [...GIT_HARDENING, "ls-files", "--cached", "--others", "--exclude-standard"],
+            { cwd: ws.status!.path!, env: gitLocalEnv(), maxBuffer: 32 * 1024 * 1024 });
           for (const f of stdout.split("\n")) {
             const name = f && prefix(ws, f);
             if (name && (!re || re.test(name))) out.push(name);

@@ -207,7 +207,14 @@ export type Source = Resource<SourceSpec>;
 
 /** @validation rule="has(self.git) || has(self.local)" message="a repository needs a git remote or a local path" */
 export interface RepositorySpec {
-  git?: { url: string; defaultBranch?: string; secretRef?: Ref };
+  git?: {
+    url: string; defaultBranch?: string; secretRef?: Ref;
+    /**
+     * ADR-0092: how the publication commit is made in the sandbox. `hooks`: a registered hook setup (e.g. `pre-commit`)
+     * run with the commit; absent, hooks stay disabled. `convention`: a registered message format (e.g. `conventional`).
+     */
+    commit?: { hooks?: string; convention?: string };
+  };
   local?: { path: string };
   index?: { enabled?: boolean; type?: string; refreshOn?: string[]; include?: string[]; exclude?: string[] };
   context?: { docs?: string[]; owners?: { role: string; team?: string }[] };

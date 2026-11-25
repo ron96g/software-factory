@@ -1,21 +1,21 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Repository, Workspace } from "../../model/kinds.ts";
-import type { BranchPublisher, ExportIngestor, SecretResolver } from "../../ports/index.ts";
+import type { BranchPublisher, CandidateCommitter, ExportIngestor, SecretResolver } from "../../ports/index.ts";
 import { GitBundleIngest } from "./git-export.ts";
-import { FACTORY_GIT_IDENTITY, GIT_HARDENING, gitRemote } from "./git-auth.ts";
+import { GIT_HARDENING, gitRemote } from "./git-auth.ts";
 
 const execFileP = promisify(execFile);
 const MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
- * ADR-0023 / ADR-0080 §13: commits the workspace as "Software Factory" and pushes its branch **from a factory-owned
- * bare mirror**, not from the agent-writable workspace (SEC-2/SEC-3). The commit is exported as a bundle, ingested with
- * `fsck`/limits (never checked out), and only that push carries the repository token.
+ * ADR-0023 / ADR-0080 §13 / ADR-0092: publishes a workspace without running git in it. The commit is made **in the
+ * sandbox** (`CandidateCommitter`: read-only workspace, private git directory, the repository's hooks when it opts in)
+ * and handed over as a bundle; the factory ingests it into a bare mirror (`fsck`, limits, never checked out) and pushes
+ * from there. Only the push carries the repository token (SEC-2/SEC-3).
  *
  * ADR-0091: the factory owns its `factory/*` branch, so a moved remote head (e.g. a human's "Update branch" merge on
  * the pull request) must not block publication. The push replaces the branch with a **compare-and-swap lease**: it is
@@ -25,42 +25,53 @@ const MAX_BUFFER = 16 * 1024 * 1024;
  */
 export class GitBranchPublisher implements BranchPublisher {
   private readonly secrets: SecretResolver;
+  private readonly committer: CandidateCommitter;
   private readonly ingest: ExportIngestor;
-  constructor(secrets: SecretResolver, ingest: ExportIngestor = new GitBundleIngest()) {
+  constructor(secrets: SecretResolver, committer: CandidateCommitter, ingest: ExportIngestor = new GitBundleIngest()) {
     this.secrets = secrets;
+    this.committer = committer;
     this.ingest = ingest;
   }
 
   async publish(ws: Workspace, repo: Repository, message: string) {
-    const dir = ws.status?.path;
-    if (!dir) throw new Error(`workspace ${ws.metadata.name} has no path`);
-    const { url, env, authEnv } = gitRemote(repo, this.secrets);
-    const local = async (...args: string[]) => (await execFileP("git", [...GIT_HARDENING, ...args], { cwd: dir, env, maxBuffer: MAX_BUFFER })).stdout.trim();
-
-    await local("add", "-A");
-    const staged = await local("diff", "--cached", "--name-only");
-    // ADR-0053: a base merge left by the integrator is completed by this commit, even without further changes.
-    const merging = existsSync(join(await local("rev-parse", "--absolute-git-dir"), "MERGE_HEAD"));
-    if (staged || merging) await local(...FACTORY_GIT_IDENTITY, "commit", "-q", "--no-edit", "--no-verify", "-m", message);
+    if (!ws.status?.path) throw new Error(`workspace ${ws.metadata.name} has no path`);
+    const { url, authEnv } = gitRemote(repo, this.secrets);
     const branch = ws.spec.branch;
-    const commit = await local("rev-parse", "HEAD");
-
     const scratch = await mkdtemp(join(tmpdir(), "factory-publish-"));
     try {
-      const bundle = join(scratch, "candidate.bundle");
+      const out = join(scratch, "job");
+      await mkdir(out);
+      const made = await this.committer.commit(ws, repo, { message, outDir: out });
       const mirror = join(scratch, "mirror.git");
-      await local("bundle", "create", "--quiet", bundle, `refs/heads/${branch}`);
-      const exported = await this.ingest.ingest({ bundlePath: bundle, mirrorPath: mirror });
+      const exported = await this.ingest.ingest({ bundlePath: made.bundlePath, mirrorPath: mirror, ref: made.ref });
+      // The job's report is untrusted; the ingested objects are what gets pushed, and they must be what it reported.
+      if (exported.commit !== made.commit) throw new Error(`the commit job reported ${made.commit} but its bundle carries ${exported.commit}`);
       // Read the head to replace, then push with the lease. The push runs in the factory-owned mirror: no agent-writable
       // config, and the token reaches only this process.
       const remote = await this.remoteHead(mirror, url, branch, authEnv);
+      // The job commits anew on every delivery (new timestamp); an unchanged candidate keeps the published commit, so a
+      // retry or "Update pull request" does not force-push an identical tree and re-trigger CI.
+      if (remote && await this.sameCandidate(mirror, url, branch, remote, exported.commit, authEnv)) return { branch, commit: remote, pushed: false };
       await execFileP("git", [...GIT_HARDENING, "push", "--quiet", "--no-verify",
         `--force-with-lease=refs/heads/${branch}:${remote}`, url, `${exported.ref}:refs/heads/${branch}`],
         { cwd: mirror, env: authEnv, maxBuffer: MAX_BUFFER });
+      return { branch, commit: exported.commit, pushed: true };
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
-    return { branch, commit, pushed: true };
+  }
+
+  /** True when the published head has the candidate's tree and parents (only its timestamp differs). */
+  private async sameCandidate(mirror: string, url: string, branch: string, remote: string, candidate: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+    const git = async (...args: string[]) => (await execFileP("git", [...GIT_HARDENING, ...args], { cwd: mirror, env, maxBuffer: MAX_BUFFER })).stdout.trim();
+    try {
+      await git("fetch", "--quiet", "--no-tags", url, `+refs/heads/${branch}:refs/factory/published`);
+      if (await git("rev-parse", "refs/factory/published") !== remote) return false;
+      const shape = async (c: string) => `${await git("rev-parse", `${c}^{tree}`)} ${await git("rev-parse", `${c}^@`)}`;
+      return await shape(remote) === await shape(candidate);
+    } catch {
+      return false; // unknown: push, as before
+    }
   }
 
   /** The remote head of `branch`, or "" when it does not exist yet (the lease then requires it to still not exist). */

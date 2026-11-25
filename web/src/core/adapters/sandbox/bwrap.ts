@@ -1,10 +1,16 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { cp, lstat, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
+  CandidateCommit,
+  CandidateCommitInput,
+  CommitHookSetup,
+  Lookup,
+  SandboxCommitter,
   ExecOptions,
   ExecResult,
   ExecutionEnvironment,
@@ -15,7 +21,8 @@ import type {
   ShellConfiner,
   Toolchain,
 } from "../../ports/index.ts";
-import { SandboxUnavailableError, TOOLCHAIN_MOUNT, declaredTools } from "../../ports/index.ts";
+import { CandidateCommitRejectedError, SandboxUnavailableError, TOOLCHAIN_MOUNT, declaredTools } from "../../ports/index.ts";
+import { runCommitJobs } from "./candidate-commit.ts";
 import { scrubbedEnv } from "./process.ts";
 import { resolveReadInWorkspace, resolveWriteInWorkspace, writeInsideWorkspace } from "./workspace-paths.ts";
 
@@ -116,6 +123,15 @@ export interface BwrapArgsOptions {
   writableToolchain?: boolean;
   /** ADR-0088: a writable per-workspace `HOME` (caches live there). Absent: an ephemeral tmpfs (isolated snapshots). */
   homeDir?: string;
+  /**
+   * ADR-0092: the commit job sees the workspace through an overlay whose writes go to an invisible tmpfs: hooks may write
+   * caches, but nothing reaches the candidate (`--tmp-overlay`, bwrap ≥ 0.8).
+   */
+  workspaceOverlay?: boolean;
+  /** ADR-0092: factory-owned scratch directories the job may write (bound at the same path). */
+  writableBinds?: readonly string[];
+  /** Outbound network (default true, ADR-0079); the commit job without hooks needs none. */
+  network?: boolean;
   exists?: (path: string) => boolean;
 }
 
@@ -154,7 +170,9 @@ export function buildBwrapArgs(o: BwrapArgsOptions): string[] {
   } else {
     args.push("--tmpfs", SANDBOX_HOME);
   }
-  args.push("--bind", workspace, workspace);
+  if (o.workspaceOverlay) args.push("--overlay-src", workspace, "--tmp-overlay", workspace);
+  else args.push("--bind", workspace, workspace);
+  for (const dir of o.writableBinds ?? []) args.push("--bind", resolve(dir), resolve(dir));
   for (const dir of SYSTEM_RO_BINDS) addRo(dir);
   // A symlinked `/etc/resolv.conf` needs its target bound too, or the sandbox silently has no DNS.
   for (const file of resolverBinds(exists)) addRo(file);
@@ -174,7 +192,7 @@ export function buildBwrapArgs(o: BwrapArgsOptions): string[] {
     "--new-session",
     "--die-with-parent",
     "--cap-drop", "ALL",
-    "--share-net",
+    o.network === false ? "--unshare-net" : "--share-net",
     "--",
     "bash", "-lc", o.command,
   );
@@ -221,10 +239,12 @@ function runBwrap(
   extraRoBinds: readonly string[] = [],
   outputCap = DEFAULT_OUTPUT_CAP,
   toolchain?: { dir: string; writable?: boolean; home?: string },
+  extra: Pick<BwrapArgsOptions, "workspaceOverlay" | "writableBinds" | "network"> = {},
+  jobEnv: Record<string, string> = {},
 ): Promise<ExecResult> {
   const started = Date.now();
-  const args = buildBwrapArgs({ workspace, cwd, command, extraRoBinds, toolchainDir: toolchain?.dir, writableToolchain: toolchain?.writable, homeDir: toolchain?.home });
-  const childEnv = sandboxEnv(env, toolchain?.dir);
+  const args = buildBwrapArgs({ workspace, cwd, command, extraRoBinds, toolchainDir: toolchain?.dir, writableToolchain: toolchain?.writable, homeDir: toolchain?.home, ...extra });
+  const childEnv = { ...sandboxEnv(env, toolchain?.dir), ...jobEnv };
   return new Promise((done) => {
     const child = spawn("bwrap", args, { cwd, env: childEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout: Buffer = Buffer.alloc(0);
@@ -264,6 +284,22 @@ function runBwrap(
   });
 }
 
+/**
+ * ADR-0092: the publication commit needs `--tmp-overlay` (bwrap ≥ 0.8, overlayfs in user namespaces). Probed on a
+ * workspace-like directory — overlaying a tmpfs such as `/tmp` is unsupported and would report a false negative.
+ */
+async function overlaySupported(): Promise<string> {
+  const dir = await mkdtemp(join(homedir(), ".factory-bwrap-probe-")).catch(() => mkdtemp(join(tmpdir(), "factory-bwrap-probe-")));
+  try {
+    await execFileP("bwrap", ["--ro-bind", "/", "/", "--overlay-src", dir, "--tmp-overlay", dir, "--", "true"]);
+    return "";
+  } catch (e) {
+    return ` Publication commits are unavailable: --tmp-overlay failed (bwrap ≥ 0.8 with overlayfs required): ${e instanceof Error ? e.message.split("\n").slice(-2).join(" ") : String(e)}`;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export interface BwrapEnvironmentOptions {
   /** Additional host directories to bind read-only (e.g. from `FACTORY_BWRAP_RO_BINDS`). */
   extraRoBinds?: readonly string[];
@@ -271,7 +307,12 @@ export interface BwrapEnvironmentOptions {
   toolchainDir?: string;
   /** ADR-0088: provides the tools a profile declares before a sandbox is handed out. */
   toolchain?: Toolchain;
+  /** ADR-0092: registered commit hook setups (`Repository.spec.git.commit.hooks`). */
+  commitHooks?: Lookup<CommitHookSetup>;
 }
+
+const COMMIT_JOB_TIMEOUT_MS = 15 * 60_000;
+const COMMIT_JOB_OUTPUT_BYTES = 1024 * 1024;
 
 /**
  * ADR-0079/ADR-0081: Linux bubblewrap (`bwrap`) runtime. It confines **command execution** (`SandboxExec`, and
@@ -280,15 +321,17 @@ export interface BwrapEnvironmentOptions {
  * `diff`), OpenCode's file tools, the factory's git plumbing and workspace setup run in the factory process and
  * are **not** confined by this adapter (SEC-1/SEC-10; ADR-0081 §1).
  */
-export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotEnvironment, ShellConfiner {
+export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotEnvironment, ShellConfiner, SandboxCommitter {
   readonly runtime = "bwrap";
   readonly isolatesCandidate = true;
   private readonly extraRoBinds: readonly string[];
   private readonly toolchainDir?: string;
   private readonly toolchain?: Toolchain;
+  private readonly commitHooks?: Lookup<CommitHookSetup>;
 
   constructor(options: BwrapEnvironmentOptions = {}) {
     this.extraRoBinds = options.extraRoBinds ?? [];
+    this.commitHooks = options.commitHooks;
     this.toolchainDir = options.toolchainDir;
     this.toolchain = options.toolchain;
     // The cache itself is bound into the sandbox, so it must exist (the per-workspace homes are created on demand).
@@ -302,13 +345,15 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
     try {
       const [{ stdout: bwrapOut }] = await Promise.all([execFileP("bwrap", ["--version"]), execFileP("git", ["--version"])]);
       await execFileP("bwrap", ["--ro-bind", "/", "/", "--unshare-pid", "--share-net", "--", "true"]);
+      // ADR-0092: the publication commit needs `--tmp-overlay` (bwrap ≥ 0.8); say so here rather than at publication.
+      const overlay = await overlaySupported();
       return {
         runtime: this.runtime,
         available: true,
         isolation: "process",
         confinesShell: true,
         version: bwrapOut.trim(),
-        message: "Confines command execution (SandboxExec, OpenCode shell) via bubblewrap: workspace-only rw, factory-owned HOME + toolchain cache, PID/IPC/UTS/cgroup namespaces, --cap-drop ALL, network allowed (ADR-0079/0081). File tools, OpenCode file tools, git plumbing and setup run in the factory process.",
+        message: `Confines command execution (SandboxExec, OpenCode shell, publication commits) via bubblewrap: workspace-only rw, factory-owned HOME + toolchain cache, PID/IPC/UTS/cgroup namespaces, --cap-drop ALL, network allowed (ADR-0079/0081/0092). File tools, OpenCode file tools, base-sync/snapshot git plumbing and setup run in the factory process.${overlay}`,
       };
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -375,6 +420,24 @@ export class BwrapEnvironment implements ExecutionEnvironment, IsolatedSnapshotE
     await this.ensureTools(spec, ws.status!.path!, ws.status!.baseCommit!);
     return new BwrapSandbox(`bwrap-${ws.metadata.name}`, ws.status!.path!, ws.status!.baseCommit!, spec.profile.spec?.env ?? {}, this.extraRoBinds,
       this.toolchainDir ? { dir: this.toolchainDir, home: this.homeOf(ws.status!.path!) } : undefined);
+  }
+
+  /**
+   * ADR-0092: the publication commit, made in `bwrap` over a throwaway overlay of the workspace, with no token. The
+   * commit run has no network and writes only its own directory; the hook run (opt-in) keeps the item's `HOME`, network
+   * (hook environments install from their repositories) and the declared toolchain, and can only pass or fail.
+   */
+  async commitCandidate(spec: SandboxSpec, input: CandidateCommitInput): Promise<CandidateCommit> {
+    const ws = spec.workspaces.find((w) => w.status?.phase === "Ready" && w.status.path);
+    if (!ws?.status?.path || !ws.status.baseCommit) throw new SandboxUnavailableError(this.runtime, "the work item has no Ready workspace (ADR-0021)");
+    const hooks = input.hooks ? this.commitHooks?.get(input.hooks) : undefined;
+    if (input.hooks && !hooks) throw new CandidateCommitRejectedError(`publication commit rejected: unknown commit hook setup "${input.hooks}"`, "");
+    const path = ws.status.path;
+    if (hooks) await this.ensureTools(spec, path, ws.status.baseCommit);
+    return runCommitJobs(path, input, hooks, (job, withHooks) => runBwrap(path, path, `bash ${shellQuote(job.script)}`, COMMIT_JOB_TIMEOUT_MS,
+      spec.profile.spec?.env ?? {}, this.extraRoBinds, COMMIT_JOB_OUTPUT_BYTES,
+      this.toolchainDir ? { dir: this.toolchainDir, ...(withHooks ? { home: this.homeOf(path) } : {}) } : undefined,
+      { workspaceOverlay: true, writableBinds: [job.dir], network: withHooks }, job.env));
   }
 
   async prepareIsolated(spec: SandboxSpec, input: { commit: string; mode: "baseline" | "candidate" }): Promise<Sandbox> {

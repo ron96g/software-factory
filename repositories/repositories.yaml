@@ -108,6 +108,11 @@ spec:
     url: https://github.com/telekom/controlplane.git
     defaultBranch: main
     secretRef: { name: github-token }
+    # ADR-0092: the publication commit runs the repository's pre-commit hooks (conventional-pre-commit, reuse-lint-file,
+    # gitleaks) inside the sandbox, with a Conventional Commits message.
+    commit:
+      hooks: pre-commit
+      convention: conventional
   index:
     enabled: true
     type: ripgrep
