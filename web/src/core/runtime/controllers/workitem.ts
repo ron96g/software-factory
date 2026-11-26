@@ -177,6 +177,8 @@ export function createWorkItemController(d: WorkItemControllerDeps): Controller 
           repositoryRef: { name: repo.metadata.name },
           baseRef: repo.spec.workspace?.baseRef,
           branch: `factory/${wi.metadata.name}`,
+          // ADR-0094: review the pull request exactly at the head that was synced when the item started.
+          ...(wi.spec.pullRequest ? { checkout: { ref: `refs/pull/${wi.spec.pullRequest.number}/head`, commit: wi.spec.pullRequest.headSha, baseBranch: wi.spec.pullRequest.baseRef } } : {}),
           setup: repo.spec.workspace?.setup,
         },
       });

@@ -1,3 +1,4 @@
+import { proxyDispatcherActive } from "./adapters/http/proxy.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -31,7 +32,6 @@ let script: (req: ModelRequest) => Reply = () => ({ text: "done" });
 let server: http.Server;
 let url = "";
 let host: OpenCodeHost;
-let processDispatcher: unknown;
 
 const textOf = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content));
 
@@ -75,8 +75,6 @@ before(async () => {
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
-  await fetch(`${url}/models`).catch(() => {}); // Node creates its global dispatcher (with NODE_USE_ENV_PROXY: the env proxy)
-  processDispatcher = (globalThis as Record<symbol, unknown>)[Symbol.for("undici.globalDispatcher.1")];
   host = new OpenCodeHost({ dataDir: join(root, "state"), log: () => {} });
 });
 
@@ -265,9 +263,8 @@ test("ADR-0060: a provider retry of the same request does not use up a step", as
   assert.ok(s.transcript.some((m) => m.role === "note" && m.content.startsWith("provider retry scheduled")));
 });
 
-test("ADR-0060: loading OpenCode keeps the process's fetch dispatcher (proxy settings keep working)", () => {
-  assert.ok(processDispatcher);
-  assert.equal((globalThis as Record<symbol, unknown>)[Symbol.for("undici.globalDispatcher.1")], processDispatcher);
+test("ADR-0060: loading OpenCode keeps the factory's proxy dispatcher (proxy settings keep working)", () => {
+  assert.equal(proxyDispatcherActive({ HTTPS_PROXY: "http://proxy.invalid:8080" }), true);
 });
 
 test("ADR-0060: unsupported providers and isolated sandboxes fall back to other executors", () => {

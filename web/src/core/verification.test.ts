@@ -198,6 +198,34 @@ test("preparation precedes review, records generated code and never substitutes 
   } finally { f.db.close(); }
 });
 
+test("exhausted preparation explains every attempt: the files a check rewrote, that the cause repeats, and what to do", async () => {
+  const f = await fixture(true);
+  try {
+    await f.approve("spec-review");
+    await f.seedPass("preflight", "preflight", "preflight");
+    const wi = await f.current();
+    await f.store.updateStatus({ ...wi, status: { ...wi.status!, stage: "code-review" } });
+    const stage = (await f.context("code-review")).stage;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      assert.equal((await f.service.beforeStage(await f.current(), stage)).action, "wait");
+      const job = (await f.store.list<CheckRun>("CheckRun")).at(-1)!;
+      // The check regenerated a file and was restored: the candidate is unchanged, the result is not evidence.
+      await f.store.updateStatus({ ...job, status: { phase: "Completed", outcome: "NotVerified", executionOutcome: "Passed", exitCode: 0,
+        logsIncomplete: false, finalSnapshot: "regenerated", finishedAt: "2026-11-13T11:00:00Z", durationMs: 70_000,
+        message: "build: Passed (exit 0 in 70000 ms); check modified the workspace: 1 file: modified svc/server.gen.go (+239/−219) (restored)",
+        workspaceChanges: { total: 1, files: [{ path: "svc/server.gen.go", change: "modified", added: 239, deleted: 219 }] } } });
+    }
+    const decision = await f.service.beforeStage(await f.current(), stage);
+    assert.equal(decision.action, "block");
+    const question = decision.action === "block" ? decision.questions[0] : "";
+    assert.match(question, /produced no usable result in 2 attempt\(s\)/);
+    assert.match(question, /modified svc\/server\.gen\.go \(\+239\/−219\)/);
+    assert.match(question, /Every attempt ended the same way/);
+    assert.match(question, /What to do:.*Commit the regenerated files/);
+    assert.match(question, /restart the code-review stage/);
+  } finally { f.db.close(); }
+});
+
 test("run_check normalizes repository/workspace and canonical/bare check identities before deduplication", async () => {
   const f = await fixture();
   try {

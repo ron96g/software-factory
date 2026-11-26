@@ -4,7 +4,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, matchesGlob, relative } from "node:path";
 import { promisify } from "node:util";
 import type { ModuleCheckScope, ModuleScopeMode, Repository, Workspace } from "../../model/kinds.ts";
-import { StoreError, type CandidateChanges, type ModuleScopePlanner } from "../../ports/index.ts";
+import { StoreError, type CandidateChanges, type CandidateDiffReader, type ModuleScopePlanner } from "../../ports/index.ts";
 import { GIT_HARDENING, gitLocalEnv } from "./git-auth.ts";
 
 const exec = promisify(execFile);
@@ -75,6 +75,21 @@ export class GitCandidateChanges implements CandidateChanges {
     const baseCommit = workspace.status?.baseCommit;
     if (!cwd || !baseCommit || !/^[a-f0-9]{40,64}$/.test(baseCommit)) throw new StoreError("changed files require a workspace path and pinned baseCommit", "Invalid");
     return changedSince(cwd, baseCommit);
+  }
+}
+
+/** ADR-0094: the committed diff against the pinned base; diff drivers and textconv stay disabled (SEC-2). */
+export class GitCandidateDiff implements CandidateDiffReader {
+  async diff(workspace: Workspace, maxBytes: number) {
+    const cwd = workspace.status?.path;
+    const baseCommit = workspace.status?.baseCommit;
+    if (!cwd || !baseCommit || !/^[a-f0-9]{40,64}$/.test(baseCommit)) throw new StoreError("a diff requires a workspace path and pinned baseCommit", "Invalid");
+    const git = async (args: string[]) => (await exec("git", [...GIT_HARDENING, ...args], { cwd, env: gitLocalEnv(), maxBuffer: 64 * 1024 * 1024 })).stdout;
+    const args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", baseCommit, "HEAD", "--"];
+    const stat = await git([...args.slice(0, 4), "--stat=200", ...args.slice(4)]);
+    const full = await git(args);
+    const truncated = Buffer.byteLength(full) > maxBytes;
+    return { stat, patch: truncated ? Buffer.from(full).subarray(0, maxBytes).toString("utf8") : full, truncated };
   }
 }
 

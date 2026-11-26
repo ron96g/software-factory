@@ -45,6 +45,35 @@ test("AC-5: Start implementation is explicit, idempotent and carries origin + sn
   } finally { await f.stop(); }
 });
 
+test("Start implementation uses the origin item's repositories, not the ticket Source defaults", async () => {
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
+  try {
+    const item = await f.app.createWorkItem(p, { title: "Cleanup", description: "Notifications pile up.", repositoryRefs: ["controlplane"] });
+    const preview = await f.app.previewWorkItemFollowUp(p, item.metadata.name, "");
+    const prop = await f.app.createFollowUpTicket(p, item.metadata.name, { requestId: "r1", expectedRevision: preview.revision, title: "Cleanup", targetSource: "jira-main" });
+    await markCreated(f, prop.metadata.name);
+    const wi = await f.app.startImplementation(p, prop.metadata.name);
+    assert.deepEqual(wi.spec.repositoryRefs, [{ name: "controlplane" }]);
+    assert.equal(wi.spec.workflowRef?.name, "factory-plan");
+  } finally { await f.stop(); }
+});
+
+test("a ticket imported by sync before Start implementation gets the origin's repositories", async () => {
+  const f = await createFactory({ definitionsRoot: ROOT, databasePath: ":memory:", env: { FACTORY_SANDBOX_RUNTIME: "none", FACTORY_SIMULATION: "wait" }, fetch: async () => new Response("no", { status: 503 }) });
+  try {
+    const item = await f.app.createWorkItem(p, { title: "Cleanup", description: "Notifications pile up.", repositoryRefs: ["controlplane"] });
+    const preview = await f.app.previewWorkItemFollowUp(p, item.metadata.name, "");
+    const prop = await f.app.createFollowUpTicket(p, item.metadata.name, { requestId: "r1", expectedRevision: preview.revision, title: "Cleanup", targetSource: "jira-main" });
+    const created: any = await markCreated(f, prop.metadata.name);
+    const connector: any = { type: "jira", fetchItems: async () => [{ externalId: "DHEI-7", title: "Cleanup", description: `x\n\n[software-factory:issue-${created.metadata.uid}]`, url: "u", updatedAt: "1" }] };
+    const syncer = new DefaultSourceSyncer({ reader: (f.app as any).d.reader, writer: (f.app as any).d.writer, connectors: { get: () => connector, keys: () => ["jira"] }, events: { normal: async () => {}, warning: async () => {} },
+      origins: followUpOriginResolver({ reader: (f.app as any).d.reader, records: (f.app as any).d.records, redactor: { redact: (s: string) => s } as any, clock: { now: () => new Date() } }) } as any);
+    await syncer.sync("jira-main");
+    const wi: any = await (f.app as any).d.reader.get("WorkItem", "default", "jira-main-dhei-7");
+    assert.deepEqual(wi.spec.repositoryRefs, [{ name: "controlplane" }]);
+  } finally { await f.stop(); }
+});
+
 test("AC-5: sync first attaches origin and snapshot, then Start implementation returns that item", async () => {
   const { f, name, prop } = await setup();
   try {

@@ -1,4 +1,4 @@
-import type { CheckRun, ModuleCheckScope, ModuleScopeMode, Repository, WorkItem, Workspace } from "../model/kinds.ts";
+import type { CheckRun, ModuleCheckScope, ModuleScopeMode, Repository, WorkItem, Workspace, WorkspaceFileChange } from "../model/kinds.ts";
 import type { ExecutionContext } from "./agents.ts";
 import type { Principal } from "./app.ts";
 import type { ExecResult } from "./sandbox.ts";
@@ -21,9 +21,19 @@ export interface WorkspaceCheckpoint {
   restore(workspace: Workspace, checkpoint: string): Promise<boolean>;
 }
 
+/** The files that differ between two checkpoints of the same workspace (`from` → `to`). */
+export interface WorkspaceCheckpointDiff {
+  diff(workspace: Workspace, from: string, to: string): Promise<WorkspaceFileChange[]>;
+}
+
 /** ADR-0086: workspace-relative files the candidate changed or added since the workspace's pinned base commit. */
 export interface CandidateChanges {
   changedFiles(workspace: Workspace): Promise<string[]>;
+}
+
+/** ADR-0094: the unified diff of a workspace against its pinned base commit, clipped to `maxBytes`. Read-only. */
+export interface CandidateDiffReader {
+  diff(workspace: Workspace, maxBytes: number): Promise<{ stat: string; patch: string; truncated: boolean }>;
 }
 
 export interface ModuleScopePlanner {

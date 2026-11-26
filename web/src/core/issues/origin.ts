@@ -1,4 +1,4 @@
-import type { IssueProposal } from "../model/kinds.ts";
+import type { IssueProposal, WorkItem } from "../model/kinds.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import type { FollowUpOrigin, FollowUpOriginResolver, Redactor, ResourceReader, WorkItemRecordReader } from "../ports/index.ts";
 import { followUpPreview } from "../app/work-item-followups.ts";
@@ -13,9 +13,11 @@ export async function originOf(d: OriginDeps, p: IssueProposal): Promise<FollowU
   const name = p.spec.provenance?.workItem;
   const ns = p.metadata.namespace ?? DEFAULT_NAMESPACE;
   if ((p.spec.purpose !== "follow-up" && p.spec.purpose !== "story") || !name) return null;
-  if (!(await d.reader.get("WorkItem", ns, name))) return null;
+  const item = await d.reader.get<WorkItem>("WorkItem", ns, name);
+  if (!item) return null;
   const preview = followUpPreview(await d.records.read(ns, name), "", d.redactor, d.clock.now().toISOString(), MAX_CONTEXT);
-  return { originWorkItemRef: { name }, originSnapshot: preview.snapshot };
+  const repos = item.spec.repositoryRefs?.map((r) => ({ name: r.name }));
+  return { originWorkItemRef: { name }, originSnapshot: preview.snapshot, ...(repos?.length ? { repositoryRefs: repos } : {}) };
 }
 
 export function followUpOriginResolver(d: OriginDeps): FollowUpOriginResolver {

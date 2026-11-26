@@ -1,6 +1,6 @@
 # ADR-0068: Tracker follow-ups start from work items
 
-- **Status:** Accepted
+- **Status:** Accepted (§4 defaults amended by ADR-0093)
 - **Date:** 2026-11-18
 - **Deciders:** project owner
 - **Extends:** ADR-0039 (work-item follow-ups), ADR-0066 (create issues in trackers)

@@ -18,7 +18,7 @@ import type {
   Workspace,
   OutboxMessage,
 } from "../model/kinds.ts";
-import { isPublishable } from "../model/kinds.ts";
+import { isPublishable, REVIEW_VERDICTS, type ReviewVerdict } from "../model/kinds.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { API_VERSION, DEFAULT_NAMESPACE, SYSTEM_NAMESPACE, type Resource } from "../model/resource.ts";
 import { ownerRef } from "../model/meta.ts";
@@ -576,7 +576,10 @@ export class FactoryApp
     const origin = await originOf({ reader: this.d.reader, records: this.d.records, redactor: this.d.redactor, clock: this.d.clock }, prop);
     if (!origin) throw new StoreError("the origin work item is no longer available", "Conflict");
     const wf = input.workflowRef ? { name: input.workflowRef } : source?.spec.defaults?.workflowRef;
-    const repos = input.repositories?.length ? input.repositories.map((n) => ({ name: n })) : source?.spec.defaults?.repositoryRefs;
+    // The ticket's Source defaults describe items synced from that tracker; the code the ticket was researched against is the origin's.
+    const { repositoryRefs: originRepos, ...originRefs } = origin;
+    const repos = input.repositories?.length ? input.repositories.map((n) => ({ name: n })) : originRepos ?? source?.spec.defaults?.repositoryRefs;
+    if (!repos?.length) throw new StoreError("choose the repositories to implement in", "Conflict");
     try {
       return await this.d.writer.create<WorkItem>({
         apiVersion: API_VERSION, kind: "WorkItem",
@@ -585,7 +588,7 @@ export class FactoryApp
           title: this.d.redactor.redact(prop.spec.title), description: prop.spec.body,
           sourceRef: { name: sourceName }, externalRef: { id: ext.externalId, url: ext.url },
           ...(wf ? { workflowRef: wf } : {}), ...(repos?.length ? { repositoryRefs: repos } : {}),
-          ...origin,
+          ...originRefs,
         },
       });
     } catch (e) {
@@ -989,7 +992,7 @@ export class FactoryApp
     return this.d.writer.update({ ...c, spec: { ...c.spec, answers: cleaned, answeredBy: p.id } });
   }
 
-  async decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean): Promise<Approval> {
+  async decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean, verdict?: ReviewVerdict): Promise<Approval> {
     const a = await this.d.reader.get<Approval>("Approval", this.ns, name);
     if (!a) throw new Error(`approval ${name} not found`);
     if (a.spec.recoveryAllowance) throw new Error("Use the operator recovery allowance decision endpoint.");
@@ -1022,8 +1025,14 @@ export class FactoryApp
         if (wi) await this.d.events.warning(wi, "ApprovedDespiteFailures", `${a.spec.stage} approved by ${p.id} despite: ${reasons}. Reason: ${comment.trim()}`);
       }
     }
+    if (verdict !== undefined) {
+      if (decision !== "approve") throw new Error("a review verdict can only be set when approving");
+      if (!REVIEW_VERDICTS.includes(verdict)) throw new Error(`verdict must be one of ${REVIEW_VERDICTS.join(", ")}`);
+      const item = await this.d.reader.get<WorkItem>("WorkItem", this.ns, a.spec.workItemRef.name);
+      if (!item?.spec.pullRequest) throw new Error("a review verdict applies only to pull request review items");
+    }
     const overridden = decision === "approve" && override === true ? true : undefined;
-    const updated = await this.d.writer.update({ ...a, spec: { ...a.spec, decision, decidedBy: p.id, comment, ...(overridden ? { overridden } : {}) } });
+    const updated = await this.d.writer.update({ ...a, spec: { ...a.spec, decision, decidedBy: p.id, comment, ...(overridden ? { overridden } : {}), ...(verdict ? { prReview: { verdict } } : {}) } });
     if (decision === "approve" && a.spec.verification?.kind === "waiver") {
       const item = await this.d.reader.get<WorkItem>("WorkItem", this.ns, a.spec.workItemRef.name);
       if (item) await this.d.events.warning(item, "VerificationWaived", `Waived, not Passed: ${a.spec.verification.requirements?.join(", ")}. By ${p.id}: ${comment}`);

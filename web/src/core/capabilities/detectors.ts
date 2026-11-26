@@ -1,6 +1,7 @@
 import type { CapabilityDetector, CapabilityFacts } from "../ports/index.ts";
 
 const PULL_REQUEST_ACTIONS = new Set(["open-pull-request"]);
+const PR_REVIEW_ACTIONS = new Set(["pr-review"]);
 const TICKET_ACTIONS = new Set(["service-desk-reply", "ticket-transition"]);
 const usedOutbox = (f: CapabilityFacts, actions: Set<string>) => f.outbox.some((m) => actions.has(m.spec.action));
 const detector = (detect: (f: CapabilityFacts) => boolean): CapabilityDetector => ({ detect });
@@ -18,5 +19,6 @@ export const BUILTIN_CAPABILITY_DETECTORS: Record<string, CapabilityDetector> = 
     return declared || usedOutbox(f, TICKET_ACTIONS);
   }),
   retrospective: detector((f) => !!f.workItem.spec.retrospective),
+  "pr-review": detector((f) => !!f.workItem.spec.pullRequest || !!f.workflow?.stages.some((s) => s.publish?.prReview) || usedOutbox(f, PR_REVIEW_ACTIONS)),
 };
 

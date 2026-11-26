@@ -30,6 +30,7 @@ import { SqliteTranscriptStore } from "./transcripts/sqlite-transcripts.ts";
 import { DefaultRecorderFactory, RedactingSecretResolver, SecretRedactor } from "./transcripts/recorder.ts";
 import { EnvSecretResolver } from "./adapters/secrets/env.ts";
 import { NamespacedSecretResolver } from "./adapters/secrets/namespaced.ts";
+import { describeProxy, ensureProxyDispatcher } from "./adapters/http/proxy.ts";
 import { KubeClusterApi } from "./adapters/kubernetes/cluster-api.ts";
 import { KubeSecretReader, KubeSecretWatcher } from "./adapters/kubernetes/secret-reader.ts";
 import { ControllerManager } from "./runtime/controller-manager.ts";
@@ -85,7 +86,9 @@ import { fetchUrlTool } from "./agents/egress-tool.ts";
 import { ExplainResponder } from "./agents/explain-responder.ts";
 import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
 import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
-import { GithubConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
+import { GithubConnector, GithubPullRequestConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
+import { PR_REVIEW_ACTION, prReviewArtifactCheck, prReviewHandler, prReviewPolicy, prReviewPublisher } from "./reviews/pr-review.ts";
+import { pullRequestContext } from "./agents/pull-request-context.ts";
 import { followUpOriginResolver } from "./issues/origin.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
@@ -117,7 +120,7 @@ import { checkRunValidator } from "./checks/admission.ts";
 import { issueProposalValidator } from "./issues/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceCheckpoint, GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
-import { GitCandidateChanges, GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
+import { GitCandidateChanges, GitCandidateDiff, GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
 import { DEFAULT_CHECK_OUTPUT_BYTES, SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
@@ -215,6 +218,8 @@ export interface FactoryOptions {
 }
 
 export async function createFactory(o: FactoryOptions) {
+  // Before anything can make a request: otherwise outbound fetch may bypass HTTPS_PROXY (see adapters/http/proxy.ts).
+  if (!o.fetch) ensureProxyDispatcher();
   const clock = o.clock ?? { now: () => new Date() };
   if (o.databasePath !== ":memory:") mkdirSync(dirname(o.databasePath), { recursive: true });
   const db = new DatabaseSync(o.databasePath);
@@ -453,7 +458,8 @@ export async function createFactory(o: FactoryOptions) {
   // ADR-0055/0057: one check per artifact type, applied when the agent calls `finish` and again after the run.
   const proposedChecks = new Registry<ProposedArtifactCheck>();
   const artifactChecks = new Registry<ArtifactCheck>();
-  const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck].map((check) => [check.artifactType, check]));
+  const candidateDiffs = new GitCandidateDiff();
+  const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck, prReviewArtifactCheck({ reader: store, diffs: candidateDiffs })].map((check) => [check.artifactType, check]));
   const registerArtifactChecks = async () => {
     const artifactTypes = await store.list<ArtifactType>("ArtifactType");
     for (const type of new Set([...artifactTypes.filter((type) => type.spec.schema).map((type) => type.metadata.name), ...domainChecks.keys()])) {
@@ -472,7 +478,8 @@ export async function createFactory(o: FactoryOptions) {
       verificationContext({ reader: store, logs: transcripts, compiler, redactor }),
       unitContext({ ledger: units, compiler, redactor, attempts: new CompletedUnitAttempts(store) }),
       recoveryContext({ reader: store, redactor }),
-      outputFeedbackContext({ reader: store, redactor }), baseConflictProvider(), citedCodeContext(workspaceReaders)],
+      outputFeedbackContext({ reader: store, redactor }), baseConflictProvider(), citedCodeContext(workspaceReaders),
+      pullRequestContext(candidateDiffs)],
     models,
     recorders,
     environments,
@@ -489,7 +496,7 @@ export async function createFactory(o: FactoryOptions) {
   const agentRuntimeDir = o.agentRuntimeDir ?? env.FACTORY_AGENT_RUNTIME_DIR ??
     (o.databasePath === ":memory:" ? join(tmpdir(), `factory-opencode-${process.pid}`) : join(dirname(o.databasePath), "opencode"));
   const opencode = agentRuntime === "opencode"
-    ? new OpenCodeHost({ dataDir: agentRuntimeDir, fetch: o.fetch, log: (msg) => (o.log ?? console.error)(msg) })
+    ? new OpenCodeHost({ dataDir: agentRuntimeDir, fetch: o.fetch, route: o.fetch ? undefined : describeProxy(o.env ?? process.env), log: (msg) => (o.log ?? console.error)(msg) })
     : undefined;
   const finishValidator: FinishValidator = { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] };
   // ADR-0080 §2 (S2-a/b): the `AgentRuntime` path. Off unless a backend is selected; when on, the runtime hosts the
@@ -600,6 +607,7 @@ export async function createFactory(o: FactoryOptions) {
   connectors.register("manual", manualConnector);
   connectors.register("internal", internalConnector);
   connectors.register("github", new GithubConnector(secrets, o.fetch));
+  connectors.register("github-pr", new GithubPullRequestConnector(secrets, o.fetch));
   connectors.register("jira", new JiraConnector(secrets, o.fetch));
   const outbox = new StoreOutbox(store);
   const outboxHandlers = new Registry<OutboxHandler>();
@@ -623,11 +631,13 @@ export async function createFactory(o: FactoryOptions) {
   for (const handler of ticketHandlers({ reader: store, connectors, redactor })) outboxHandlers.register(handler.action, handler);
   outboxHandlers.register("create-issue", createIssueHandler({ reader: store, connectors, redactor }));
   outboxHandlers.register("link-issue", createIssueLinkHandler({ reader: store, connectors }));
+  outboxHandlers.register(PR_REVIEW_ACTION, prReviewHandler(connectors));
   const sourcePolicies = new Registry<SourceWritePolicy>();
   sourcePolicies.register("comment", { check: (s) => s.spec.sync?.bidirectional ? undefined : "read-only (sync.bidirectional is not true)" });
   sourcePolicies.register("service-desk-reply", { check: (s) => Array.isArray(s.spec.writeBack?.replyVisibilities) && s.spec.writeBack.replyVisibilities.length ? undefined : "reviewed replies are not permitted" });
   sourcePolicies.register("ticket-transition", { check: (s) => s.spec.writeBack?.transitions === true ? undefined : "ticket transitions are not permitted" });
   sourcePolicies.register(CREATE_ISSUE_ACTION, createIssuePolicy);
+  sourcePolicies.register(PR_REVIEW_ACTION, prReviewPolicy);
   const publicationGate = ticketPublicationGate({ reader: store, outbox, redactor });
   gates.register(publicationGate.type, publicationGate);
 
@@ -646,10 +656,11 @@ export async function createFactory(o: FactoryOptions) {
   }
   const classifiers = new Registry<CheckResultClassifier>();
   registerCheckResultClassifiers(classifiers);
+  const checkpoints = new GitWorkspaceCheckpoint();
   const checkRuns = new CheckActions({ namespace: DEFAULT_NAMESPACE, reader: store, writer: store,
     transcripts, snapshots, environments, redactor, scopes });
   const checkRunController = createCheckRunController({ reader: store, status: store, logs: transcripts,
-    runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, checkpoints: new GitWorkspaceCheckpoint(), clock, events, redactor, classifiers, scopes,
+    runner: new SandboxCheckRunner(store, environments, Number(env.FACTORY_CHECK_OUTPUT_BYTES ?? DEFAULT_CHECK_OUTPUT_BYTES)), snapshots, checkpoints, checkpointDiff: checkpoints, clock, events, redactor, classifiers, scopes,
     claims: workspaceLock, fenced: new SqliteFencedStatusWriter(store, workspaceLock), holder: incarnation,
     maxPerWorkspace: Number(env.FACTORY_CHECKS_PER_WORKSPACE ?? 1), maxTotal: Number(env.FACTORY_CHECKS_TOTAL ?? 2),
     definitionsLoadedAt,
@@ -659,6 +670,7 @@ export async function createFactory(o: FactoryOptions) {
   // ADR-0084: stage publication blocks beyond the built-in pull request.
   const publishers = new Registry<StagePublisher>();
   publishers.register("issue", storyPublisher({ reader: store, writer: store, redactor, clock, factoryUrl: env.FACTORY_PUBLIC_URL }));
+  publishers.register("prReview", prReviewPublisher({ reader: store, outbox, redactor, diffs: candidateDiffs }));
   const agentRunController = createAgentRunController({
     reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
     feedback: feedbackCapture,

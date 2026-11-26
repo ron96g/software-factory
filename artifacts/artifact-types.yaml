@@ -77,3 +77,12 @@ apiVersion: factory.ai-dlc.io/v1alpha1
 kind: ArtifactType
 metadata: { name: customer-response }
 spec: { format: markdown, description: "Reply to the requester, ready to post on the service desk ticket after human approval. No internal details." }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: pr-explanation }
+spec:
+  format: markdown
+  description: >
+    Plain-language explanation of a pull request for a reviewer without its context (ADR-0094): summary, background,
+    before/after Mermaid diagram, worked example, file walkthrough and where to look.

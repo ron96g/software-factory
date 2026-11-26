@@ -1,14 +1,15 @@
-import type { AgentRun, CheckFinding, CheckOutcome, CheckRun, CheckTestResults, CheckWorkflowOrigin, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
+import type { AgentRun, CheckFinding, CheckOutcome, CheckRun, CheckTestResults, CheckWorkflowOrigin, CheckRunStatus, Repository, WorkItem, Workflow, Workspace } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
 import { keyOf, nsOf, parseKey, setCondition } from "../model/meta.ts";
 import { DEFAULT_NAMESPACE } from "../model/resource.ts";
 import { exitCodeClassifier } from "./classifiers.ts";
-import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type CandidateChanges, type TestResultExtractor, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceCheckpoint, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
+import { SandboxUnavailableError, isStoreError, type CheckResultClassifier, type FindingExtractor, type CheckExecutionRunner, type Clock, type Controller, type EventRecorder, type ExecResult, type FencedStatusWriter, type InitialKeys, type CandidateChanges, type TestResultExtractor, type LeaseRef, type Lookup, type ModuleScopePlanner, type RecoveryCheckAuthorization, type Redactor, type ResourceReader, type StatusWriter, type TranscriptWriter, type VerificationContracts, type WorkspaceCheckpoint, type WorkspaceCheckpointDiff, type WorkspaceLock, type WorkspaceSnapshotter } from "../ports/index.ts";
 import { resolveRef } from "../refs/refs.ts";
 import { rerunCheckConfig, rerunOriginal, resolveCheckConfig } from "./config.ts";
 import { ORIGIN_KEYS, ORIGIN_PURPOSES, gateBaseline, originAuthorized, originChecks, validCallerName, validUnitFields } from "./origin.ts";
 import { checkDefinitionVersion } from "./definition-version.ts";
 import { testId } from "../model/tests.ts";
+import { describeWorkspaceChanges } from "./explain.ts";
 import { isAbsolute, relative } from "node:path";
 
 export interface CheckControllerDeps {
@@ -19,6 +20,8 @@ export interface CheckControllerDeps {
   snapshots: WorkspaceSnapshotter;
   /** ADR-0061 §2: restores the candidate when a check wrote to it. Without it, mutation is only detected, never undone. */
   checkpoints?: WorkspaceCheckpoint;
+  /** Names the files a check wrote before they are restored. Without it, only the fact of a mutation is recorded. */
+  checkpointDiff?: WorkspaceCheckpointDiff;
   clock: Clock;
   events: EventRecorder;
   redactor: Redactor;
@@ -43,6 +46,7 @@ export interface CheckControllerDeps {
 
 const MAX_FAILED_TESTS = 200;
 const OUTPUT_TAIL = 2000;
+const MAX_CHANGED_FILES = 20;
 
 type CheckContext = { item: WorkItem; workspace: Workspace; repository: Repository };
 
@@ -337,6 +341,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
     let failureEvidence: { tests: string[] } | undefined;
     let findings: CheckFinding[] | undefined;
     let tests: CheckTestResults | undefined;
+    let workspaceChanges: CheckRunStatus["workspaceChanges"];
     // ADR-0062 §2: keep the execution lease alive while a long check runs; a lost lease stops the result from being written.
     const ttlMs = claimTtlMs(run);
     const renew = setInterval(() => {
@@ -392,6 +397,18 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
       if (finalSnapshot && finalSnapshot !== run.spec.snapshot) {
         outcome = "NotVerified";
         message += "; check modified the workspace";
+        if (d.checkpoints && d.checkpointDiff && checkpoint) {
+          try {
+            const files = (await d.checkpointDiff.diff(workspace, checkpoint, await d.checkpoints.capture(workspace)))
+              .map((f) => ({ ...f, path: d.redactor.redact(f.path) }));
+            if (files.length) {
+              workspaceChanges = { files: files.slice(0, MAX_CHANGED_FILES), total: files.length };
+              message += `: ${describeWorkspaceChanges(workspaceChanges, 3)}`;
+            }
+          } catch (error) {
+            d.onError(`check ${namespace}/${run.metadata.name}: could not list the files it modified: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
         if (d.checkpoints && checkpoint) {
           try {
             if (await d.checkpoints.restore(workspace, checkpoint)) message += " (restored)";
@@ -446,6 +463,7 @@ export function createCheckRunController(d: CheckControllerDeps): Controller & I
           result.termination?.kind === "timeout" || result.termination?.kind === "signal" ||
           result.termination?.kind === "spawn-error",
         finalSnapshot,
+        workspaceChanges,
         // ADR-0086: a targeted re-run covers only some tests, so it never verifies the check, even when it passes.
         conditions: setCondition(current.status?.conditions, "Verified", outcome === "Passed" && run.spec.workflow?.purpose !== "rerun-failed" ? "True" : "False",
           run.spec.workflow?.purpose === "rerun-failed" ? `Rerun${outcome}` : outcome, d.redactor.redact(message), now),

@@ -79,3 +79,22 @@ test("SEC-1: restore never writes through a symlinked directory a check created"
       "restore either refused or rebuilt the real directory");
   } finally { await rm(r.root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
+
+test("ADR-0061 §2: the checkpoint diff names the files a check added, modified and deleted, with line counts", async () => {
+  const r = await repo();
+  try {
+    const checkpoint = new GitWorkspaceCheckpoint();
+    const before = await checkpoint.capture(r.workspace);
+    await r.put("tracked.txt", "one\ntwo\n");
+    await rm(join(r.root, "deleted.txt"));
+    await r.put("gen/created.go", "package gen\n");
+    const after = await checkpoint.capture(r.workspace);
+    const changes = await checkpoint.diff(r.workspace, before, after);
+    assert.deepEqual(changes.sort((a, b) => a.path.localeCompare(b.path)), [
+      { path: "deleted.txt", change: "deleted", added: 0, deleted: 1 },
+      { path: "gen/created.go", change: "added", added: 1, deleted: 0 },
+      { path: "tracked.txt", change: "modified", added: 2, deleted: 1 },
+    ]);
+    await assert.rejects(checkpoint.diff(r.workspace, "--output=x", after), /tree hash/);
+  } finally { await rm(r.root, { recursive: true, force: true }); }
+});

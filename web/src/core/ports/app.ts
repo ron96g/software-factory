@@ -166,7 +166,8 @@ export interface HumanActions {
   /**
    * ADR-0027: approving while the item's evidence is `blocking` requires `override: true` and a reason (comment ≥ 10 chars).
    */
-  decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean): Promise<Approval>;
+  /** `verdict` (ADR-0094): human override of a pull request review verdict, only when approving a PR review item. */
+  decideApproval(p: Principal, name: string, decision: "approve" | "reject", comment?: string, override?: boolean, verdict?: import("../model/kinds.ts").ReviewVerdict): Promise<Approval>;
 }
 
 export interface SourceActions {

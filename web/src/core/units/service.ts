@@ -1,3 +1,4 @@
+import { explainCheckRun } from "../checks/explain.ts";
 import { createHash } from "node:crypto";
 import { countsAsPassed } from "../verification/evidence.ts";
 import { scopeSatisfies } from "../model/check-scope.ts";
@@ -463,11 +464,4 @@ export class UnitExecutionService implements StepAssignmentPolicy, RunFailurePol
 
 
 /** ADR-0086 §5: what a human needs to decide on an opaque failure, without opening the CheckRun. */
-function checkEvidence(run: CheckRun): string {
-  const failed = run.status?.tests?.failed.map((t) => `- \`${t.name}\`${t.file ? ` (${t.file})` : ""}`) ?? [];
-  return [
-    `**CheckRun \`${run.metadata.name}\`:** ${run.status?.message ?? run.status?.outcome ?? "no result"}`,
-    failed.length ? `**Failed tests**\n${failed.join("\n")}` : undefined,
-    run.status?.outputTail ? `**End of the output**\n\n\`\`\`text\n${run.status.outputTail}\n\`\`\`` : undefined,
-  ].filter(Boolean).join("\n\n");
-}
+const checkEvidence = (run: CheckRun) => explainCheckRun(run, { lines: 40 });

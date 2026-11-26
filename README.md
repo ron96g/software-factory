@@ -78,10 +78,11 @@ the factory's own tool loop instead. OpenCode keeps its session cache in `web/da
 Use **Restart** on an item to run it again (e.g. after adding a key). Earlier output stays as superseded history.
 Data lives in `web/data/factory.db`. Delete the file to reset.
 
-Behind an HTTP proxy, Node's `fetch` ignores `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set when Node starts.
-`npm run dev` and `npm start` set it for you (it has no effect without proxy variables). Putting it in `.env.local` doesn't
-work: Next.js loads that file after Node has started. Otherwise source sync and LLM calls fail with
-`fetch failed: Connect Timeout Error`.
+Behind an HTTP proxy, set `HTTPS_PROXY`/`HTTP_PROXY` (and `NO_PROXY`). The factory installs an env-proxy dispatcher for
+all outbound `fetch` at startup and logs `outbound HTTP via proxy …`. It does not rely on `NODE_USE_ENV_PROXY`: importing
+the npm `undici` package before the first `fetch` silently replaced Node's proxy dispatcher, so model calls connected
+directly and failed with `UND_ERR_CONNECT_TIMEOUT` (see `web/src/core/adapters/http/proxy.ts`). Provider errors in a
+transcript name the route they took (`direct` or `via proxy …`).
 
 The UI/API binds to loopback (`FACTORY_HOST`, default `127.0.0.1`), rejects cross-origin state-changing API requests,
 and sets a CSP plus standard hardening headers (S0, `docs/security.md` §7). Authentication is still not implemented

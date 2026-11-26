@@ -105,3 +105,53 @@ spec:
   type: internal             # signals emitted by the monitor stage (closes the loop)
   defaults:
     workflowRef: { name: factory-plan }
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: github-pull-requests
+spec:
+  type: github-pr                # ADR-0094: open pull requests, pinned at their head
+  connection:
+    repo: ron96g/software-factory
+    secretRef: { name: github-token }
+  sync:
+    mode: poll
+    pollInterval: 5m
+    filter: { labels: [factory-review] }
+    bidirectional: false         # no automatic comments; only the human-approved review is posted
+  writeBack:
+    pullRequestReviews: [comment, approve, request-changes]
+  mapping:
+    title: title
+    description: body
+    externalId: number
+  defaults:
+    workflowRef: { name: pr-review }
+    repositoryRefs:
+      - name: software-factory   # exactly the pull request's repository
+---
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Source
+metadata:
+  name: controlplane-pull-requests
+spec:
+  type: github-pr                # ADR-0094: open pull requests of telekom/controlplane, pinned at their head
+  connection:
+    repo: telekom/controlplane
+    secretRef: { name: github-token }
+  sync:
+    mode: poll
+    pollInterval: 5m
+    filter: { labels: [factory-review] }
+    bidirectional: false         # no automatic comments; only the human-approved review is posted
+  writeBack:
+    pullRequestReviews: [comment] # public repository: start with comments only; add approve/request-changes deliberately
+  mapping:
+    title: title
+    description: body
+    externalId: number
+  defaults:
+    workflowRef: { name: pr-review }
+    repositoryRefs:
+      - name: controlplane

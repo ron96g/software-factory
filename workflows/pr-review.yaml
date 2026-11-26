@@ -1,0 +1,50 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: Workflow
+metadata:
+  name: pr-review
+  annotations:
+    description: >
+      Reviews a pull request read-only at its pinned head: code research → plain-language explanation (Mermaid diagrams, examples) → reviewer verdict (accepted /
+      partially-accepted / rejected) → review-verdict [human, may override] → the approved review is posted to the pull request
+      (ADR-0094).
+spec:
+  phases:
+    - name: construction
+      stages:
+        - name: analyze
+          steps:
+            - name: research-change
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: codebase-research }, { name: knowledge-base }]
+              inputs: [{ artifactRef: { name: signal } }]
+              outputs: [{ artifactRef: { name: research-notes } }]
+            - name: explain-change
+              agentRef: { name: code-researcher }
+              skillRefs: [{ name: change-explanation }, { name: codebase-research }]
+              inputs: [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }]
+              outputs: [{ artifactRef: { name: pr-explanation } }]
+            - name: review-change
+              agentRef: { name: reviewer }
+              skillRefs: [{ name: code-review }, { name: pull-request-review }]
+              outcomes: [accepted, partially-accepted, rejected]
+              inputs: [{ artifactRef: { name: signal } }, { artifactRef: { name: research-notes } }, { artifactRef: { name: pr-explanation } }]
+              outputs: [{ artifactRef: { name: pr-review-report } }]
+
+        - name: review-verdict
+          steps: []
+          gate:
+            type: human-approval
+            approvers: [{ role: tech-lead }]
+            criteria:
+              - The explanation (diagrams, example) lets you follow the change without prior context
+              - Findings are correct, cited and about this pull request's diff
+              - The verdict fits the findings (override it if not)
+              - Ready to post as written (the exact review is published)
+            onReject: { next: analyze }   # the reason and inline notes reach the reviewer
+
+        - name: publish-review
+          steps: []
+          publish:
+            prReview:
+              artifactRef: { name: pr-review-report }
+              reviewStage: review-verdict

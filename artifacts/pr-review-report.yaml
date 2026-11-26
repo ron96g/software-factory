@@ -1,0 +1,70 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: pr-review-report }
+spec:
+  format: json
+  description: >
+    The review of one pull request (ADR-0094): a clear verdict (accepted, partially accepted, rejected) with its
+    rationale, what is accepted, what must change, and cited findings. Posted to the pull request after a human
+    approves (and may override) the verdict.
+  schema:
+    version: "3"
+    jsonSchema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      additionalProperties: false
+      required: [verdict, summary, rationale, accepted, requiredChanges, findings]
+      properties:
+        verdict: { enum: [accepted, partially-accepted, rejected] }
+        summary: { type: string, minLength: 20, maxLength: 4000, pattern: '\S', description: 'What the change does, in one or two sentences.' }
+        rationale: { type: string, minLength: 20, maxLength: 2000, pattern: '\S', description: 'Why this verdict.' }
+        accepted:
+          description: Parts of the change that are fine as they are.
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 3, maxLength: 500 }
+        requiredChanges:
+          description: What must change before the pull request can be accepted (empty when accepted).
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 5, maxLength: 1000 }
+        findings:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [severity, path, message]
+            properties:
+              severity: { enum: [blocking, non-blocking] }
+              path: { type: string, minLength: 1, maxLength: 400 }
+              line:
+                type: integer
+                minimum: 1
+                description: >
+                  Line in the diff (head version, or base version with side LEFT); becomes an inline comment. It must be
+                  an added, deleted or context line of a changed hunk. Omit it for file-level findings or untouched code.
+              startLine: { type: integer, minimum: 1, description: 'First line of a multi-line comment; needs line.' }
+              side: { enum: [RIGHT, LEFT], description: 'RIGHT (default) comments the head version, LEFT a deleted line.' }
+              message: { type: string, minLength: 5, maxLength: 2000 }
+              suggestion:
+                type: string
+                maxLength: 4000
+                description: Replacement code for exactly the commented lines (head version); shown as an applicable suggestion.
+            dependentRequired: { startLine: [line], suggestion: [line] }
+      allOf:
+        # The verdict must agree with the findings and the required changes.
+        - if: { properties: { verdict: { const: accepted } } }
+          then:
+            properties:
+              requiredChanges: { type: array, maxItems: 0 }
+              findings: { type: array, not: { type: array, contains: { type: object, properties: { severity: { const: blocking } } } } }
+        - if: { properties: { verdict: { const: partially-accepted } } }
+          then:
+            properties:
+              accepted: { type: array, minItems: 1 }
+              requiredChanges: { type: array, minItems: 1 }
+        - if: { properties: { verdict: { const: rejected } } }
+          then:
+            properties:
+              requiredChanges: { type: array, minItems: 1 }

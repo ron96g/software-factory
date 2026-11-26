@@ -1,3 +1,4 @@
+import { explainAttempts, explainCheckRun } from "../checks/explain.ts";
 import { createHash } from "node:crypto";
 import { countsAsPassed } from "./evidence.ts";
 import type { Agent, AgentRun, Approval, Artifact, CheckRun, CheckWorkflowOrigin, Repository, SandboxProfile, WorkItem, Workspace } from "../model/kinds.ts";
@@ -36,19 +37,8 @@ const invalid = (message: string): never => { throw new StoreError(message, "Inv
 const active = (run: CheckRun) => !run.status || run.status.phase === "Running";
 const owned = (wi: WorkItem) => ({ namespace: nsOf(wi), ownedBy: { kind: "WorkItem", name: wi.metadata.name, namespace: nsOf(wi) } });
 
-/**
- * ADR-0042 §X23b: what a human needs to act on a check that did not pass. The outcome alone ("SetupFailed") says
- * nothing about *what* is missing, and a preflight is usually an `&&` chain that stops at the first unmet prerequisite
- * without printing anything — so the check's own message and the end of its output travel with the question.
- */
-function checkEvidence(run: CheckRun, lines = 8): string {
-  const status = run.status;
-  const parts = [status?.message ?? `${run.spec.check}: ${status?.outcome ?? "Interrupted"}`];
-  const tail = status?.outputTail?.trim();
-  if (tail) parts.push(`output (last ${lines} lines):\n\`\`\`\n${tail.split("\n").slice(-lines).join("\n")}\n\`\`\``);
-  if (status?.logsIncomplete) parts.push("the log is incomplete, so this is all the factory captured");
-  return parts.join("\n\n");
-}
+/** ADR-0042 §X23b: what a human needs to act on a check that did not pass (shared with every check question). */
+const checkEvidence = (run: CheckRun, lines = 8) => explainCheckRun(run, { lines });
 
 const eligible = (r: { metadata: { labels?: Record<string, string> } }) =>
   !r.metadata.labels?.[LABEL_SUPERSEDED] && !r.metadata.labels?.["factory.ai-dlc.io/replay"];
@@ -450,7 +440,8 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
             (last.status.outcome === "Passed" || last.status.outcome === "NotVerified")) continue;
         const currentAttempts = attempts.filter((run) => run.spec.workflow?.round === item.status?.round);
         if (currentAttempts.length >= contract.policy.maxExecutionAttempts) return { action: "block", questions: [
-          `Preparation ${repo.metadata.name}/${check} exhausted its execution budget. Inspect CheckRun ${last?.metadata.name}; restore prerequisites or generation stability before explicitly retrying review.`] };
+          `Preparation ${repo.metadata.name}/${check} produced no usable result in ${currentAttempts.length} attempt(s) this round.\n\n` +
+          `${explainAttempts(currentAttempts)}\n\nAfter fixing the cause, restart the ${stage.name} stage. An answer here does not approve the candidate.`] };
         const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
         if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };
         const attempt = currentAttempts.length + 1;
@@ -768,7 +759,7 @@ export class VerificationService implements CandidateSnapshots, VerificationCont
           const recovery = await this.stageRecovery(item, stage, contract, last, "opaque failure");
           if (recovery) return recovery;
         }
-        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts; no code-fix retry was charged.\n\n${checkEvidence(last)}\n\nCheckRun ${last.metadata.name} cannot be waived. Act on the evidence above (install the missing prerequisite, or narrow the scope), then restart the stage.`] };
+        return { action: "block", questions: [`${id}: ${last.status?.outcome ?? "Interrupted"} after ${attempts.length} execution attempts; no code-fix retry was charged.\n\n${checkEvidence(last)}\n\nCheckRun ${last.metadata.name} cannot be waived. Act on the evidence above, then restart the stage.`] };
       }
       const retryAt = last?.status?.finishedAt ? Date.parse(last.status.finishedAt) + contract.policy.retryDelayMs : 0;
       if (retryAt > this.d.clock.now().getTime()) return { action: "wait", retryAfterMs: retryAt - this.d.clock.now().getTime() };

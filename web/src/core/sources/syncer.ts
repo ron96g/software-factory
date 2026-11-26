@@ -86,6 +86,7 @@ export class DefaultSourceSyncer implements SourceSyncer {
             description: item.description,
             sourceRef: { name: sourceName },
             externalRef: { id: item.externalId, url: item.url },
+            ...(item.pullRequest ? { pullRequest: item.pullRequest } : {}),
             ...(sourceHistory ? { sourceHistory } : {}),
             ...(origin ?? {}),
           },
@@ -99,8 +100,11 @@ export class DefaultSourceSyncer implements SourceSyncer {
             ...existing.spec,
             title: item.title,
             description: item.description,
+            // ADR-0094: a new head is recorded, never acted on; the pinned workspace keeps the reviewed commit.
+            ...(item.pullRequest ? { pullRequest: item.pullRequest } : {}),
             ...(sourceHistory ? { sourceHistory } : {}),
-            ...(origin && !existing.spec.originWorkItemRef ? origin : {}),
+            // Repositories are not changed on an existing item: its workspace is already pinned.
+            ...(origin && !existing.spec.originWorkItemRef ? { originWorkItemRef: origin.originWorkItemRef, originSnapshot: origin.originSnapshot } : {}),
           },
         });
         updated++;

@@ -13,24 +13,19 @@ import type { BoundTool, ModelEndpoint, NewTranscriptMessage, ShellConfiner, Too
 import { ModelUnavailableError } from "../../ports/index.ts";
 import { FINISH, WRAP_UP_WARNING, lastStepNotice, wrapUpWarning } from "../../agents/run-harness.ts";
 import { PROVIDER_PACKAGES, SAFE_ENV, UNAVAILABLE_STATUS, type PermissionRule } from "./mapping.ts";
+import { ensureProxyDispatcher } from "../http/proxy.ts";
 import { discoverSkills, type DiscoveredSkill } from "./skills.ts";
 
 type Host = Awaited<ReturnType<typeof OpenCode.create>>;
 type PluginContext = Plugin.Context;
 type Modules = [typeof import("@opencode/sdk"), typeof import("@opencode/plugin")];
 
-const UNDICI_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
 let modules: Promise<Modules> | undefined;
 let sdkVersion: string | undefined;
 
-/**
- * Loading OpenCode replaces undici's global dispatcher, which silently drops Node's env proxy
- * (`NODE_USE_ENV_PROXY`) for every `fetch` in the process. Load it lazily and put the process's dispatcher back.
- */
+/** Loading OpenCode can replace undici's global dispatcher (dropping the proxy); re-assert the factory's afterwards. */
 function loadModules(): Promise<Modules> {
   modules ??= (async () => {
-    const global = globalThis as Record<symbol, unknown>;
-    const saved = global[UNDICI_DISPATCHER];
     const loaded = await Promise.all([import("@opencode/sdk"), import("@opencode/plugin")]);
     try {
       const manifest = join(dirname(fileURLToPath(import.meta.resolve("@opencode/sdk"))), "..", "package.json");
@@ -38,7 +33,7 @@ function loadModules(): Promise<Modules> {
     } catch {
       // provenance then says "opencode" without a version
     }
-    if (saved !== undefined && global[UNDICI_DISPATCHER] !== saved) global[UNDICI_DISPATCHER] = saved;
+    ensureProxyDispatcher();
     return loaded;
   })();
   return modules;
@@ -97,6 +92,8 @@ export interface OpenCodeHostOptions {
   dataDir: string;
   /** Replaces fetch for model requests (tests, proxies). */
   fetch?: typeof fetch;
+  /** How model requests leave the process (e.g. "via proxy http://host:8080"), appended to provider errors. */
+  route?: string;
   /** Receives OpenCode's warnings and errors. */
   log?: (message: string) => void;
 }
@@ -548,6 +545,10 @@ export class OpenCodeHost {
     }
   }
 
+  private routeSuffix(): string {
+    return this.o.route ? ` (${this.o.route})` : "";
+  }
+
   private readonly handlers: Record<string, (st: RunState, sessionID: string, data: Record<string, unknown>) => void> = {
     "session.created": (st, id, d) => st.record({ role: "note", author: SYSTEM, content: `sub-agent started (${String(d.agent ?? "agent")})`, meta: { step: st.steps, ...st.origin(id) } }),
     "session.text.ended": (st, id, d) => {
@@ -558,9 +559,9 @@ export class OpenCodeHost {
       st.record({ role: "note", author: SYSTEM, content: `model step ended (${String(d.finish)})`,
         meta: { step: st.steps, tokens: { prompt: usage?.input, completion: usage?.output }, usage: d.tokens, cost: d.cost, ...st.origin(id) } });
     },
-    "session.retry.scheduled": (st, id, d) => st.record({ role: "note", author: SYSTEM, content: `provider retry scheduled: ${(d.error as ProviderError | undefined)?.message ?? "unknown error"}`,
+    "session.retry.scheduled": (st, id, d) => st.record({ role: "note", author: SYSTEM, content: `provider retry scheduled: ${(d.error as ProviderError | undefined)?.message ?? "unknown error"}${this.routeSuffix()}`,
       meta: { step: st.steps, attempt: d.attempt, ...st.origin(id) } }),
-    "session.step.failed": (st, id, d) => st.record({ role: "note", author: SYSTEM, content: `model step failed: ${(d.error as ProviderError | undefined)?.message ?? "unknown error"}`,
+    "session.step.failed": (st, id, d) => st.record({ role: "note", author: SYSTEM, content: `model step failed: ${(d.error as ProviderError | undefined)?.message ?? "unknown error"}${this.routeSuffix()}`,
       meta: { step: st.steps, ...st.origin(id) } }),
     "session.execution.failed": (st, id, d) => {
       if (id === st.sessionID) st.error = d.error as ProviderError;

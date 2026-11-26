@@ -116,6 +116,8 @@ export interface StageSpec {
       /** ADR-0053: a conflict with the current base goes back to `next` (bounded); without it, a human resolves. */
       onConflict?: { next: string; /** @minimum 1 */ maxAttempts?: number };
     };
+    /** ADR-0094: post the `artifactRef` review the `reviewStage` human approval approved to the item's pull request. */
+    prReview?: { artifactRef: Ref; reviewStage: string };
     /** ADR-0084: create one tracker ticket from the draft the `reviewStage` human approval approved. */
     issue?: {
       artifactRef: Ref;
@@ -201,7 +203,9 @@ export interface SourceSpec {
       /** @preserveUnknownFields tracker-specific issue fields */
       fields?: Record<string, unknown>;
       /** ADR-0068: link a created follow-up ticket to its origin ticket (Jira, same instance). Off by default. */
-      linkOrigin?: boolean } };
+      linkOrigin?: boolean };
+    /** ADR-0094: review events the factory may post on pull requests of this source. */
+    pullRequestReviews?: ("approve" | "comment" | "request-changes")[] };
 }
 export type Source = Resource<SourceSpec>;
 
@@ -356,6 +360,18 @@ export interface SourceHistory {
   omitted?: { comments?: number; changes?: number };
 }
 
+/** ADR-0094: a pull request pinned at its head commit. */
+export interface PullRequestRef {
+  number: number;
+  headSha: string;
+  /** Target branch of the pull request. */
+  baseRef: string;
+}
+
+/** ADR-0094: the verdict of a `pr-review-report`; published as the GitHub review event the source permits. */
+export type ReviewVerdict = "accepted" | "partially-accepted" | "rejected";
+export const REVIEW_VERDICTS: readonly ReviewVerdict[] = ["accepted", "partially-accepted", "rejected"];
+
 export interface WorkItemSpec {
   title: string;
   description?: string;
@@ -372,6 +388,8 @@ export interface WorkItemSpec {
   repositoryRefs?: Ref[];
   /** ADR-0084: Source a `publish.issue` block creates the ticket in (human-written; default from the block). */
   ticketTarget?: Ref;
+  /** ADR-0094: the pull request this item reviews; sync-only. A new `headSha` never restarts the item. */
+  pullRequest?: PullRequestRef;
   /** Human-created handoff from a direct agent conversation (ADR-0036). */
   conversationRef?: Ref;
   /** Historical provenance, validated at creation; not a live dependency or cascade owner. */
@@ -645,6 +663,18 @@ export interface CheckRunStatus {
   logRef?: { namespace: string; id: string };
   logsIncomplete?: boolean;
   finalSnapshot?: string;
+  /**
+   * ADR-0061 §2: the files a check wrote to the candidate before they were restored, so a human sees *what* the check
+   * regenerated instead of only "modified the workspace". `files` is bounded; `total` counts all of them.
+   */
+  workspaceChanges?: { files: WorkspaceFileChange[]; total: number };
+}
+export interface WorkspaceFileChange {
+  path: string;
+  change: "added" | "modified" | "deleted";
+  /** Line counts; absent for binary files. */
+  added?: number;
+  deleted?: number;
 }
 export type CheckRun = Resource<CheckRunSpec, CheckRunStatus>;
 
@@ -841,6 +871,8 @@ export interface ApprovalSpec {
   overridden?: boolean;
   ticketPublication?: TicketPublication;
   retrospective?: { fingerprint: string };
+  /** ADR-0094: human override of the reviewer's verdict; the published review uses it. */
+  prReview?: { verdict: ReviewVerdict };
   verification?: {
     kind: "plan" | "candidate" | "waiver";
     fingerprint: string;
@@ -890,6 +922,11 @@ export interface WorkspaceSpec {
   /** Git ref to fork from; default: the repository checkout's HEAD. */
   baseRef?: string;
   branch: string;
+  /**
+   * ADR-0094: check out a pull request instead of forking from `baseRef`. `ref` is fetched from the remote and must
+   * resolve to `commit`; `baseCommit` is pinned to the merge-base with `baseBranch`.
+   */
+  checkout?: { ref: string; commit: string; baseBranch: string };
   setup?: string[];
   /** ADR-0053: merge this base commit into the workspace (requested by the WorkItem controller on a conflict). */
   /** `round`: the WorkItem round that asked; a new round retries a failed merge of the same commit. */

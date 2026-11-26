@@ -1,6 +1,6 @@
 # ADR-0084: Story refinement: a workflow that ends in a tracker ticket
 
-- **Status:** Accepted
+- **Status:** Accepted (implementation repositories amended by ADR-0093)
 - **Date:** 2026-11-20
 - **Deciders:** project owner
 - **Extends:** ADR-0023 (stage `publish` blocks), ADR-0066 (create issues in trackers), ADR-0068 (tracker follow-ups),

@@ -54,6 +54,7 @@ async function fixture(database = ":memory:") {
   let fingerprint = "tree-a";
   const snapshots = { fingerprint: async () => fingerprint };
   let restores = 0;
+  const checkpointDiff = { diff: async () => fingerprint === "tree-b" ? [{ path: "gen/server.gen.go", change: "modified" as const, added: 239, deleted: 219 }] : [] };
   const checkpoints = { capture: async () => fingerprint, restore: async (_workspace: Workspace, tree: string) => { restores++; fingerprint = tree; return true; } };
   const actions = new CheckActions({ namespace: "default", reader: store, writer: store, transcripts: logs,
     snapshots, environments: selector, redactor });
@@ -63,7 +64,7 @@ async function fixture(database = ":memory:") {
   const errors: string[] = [];
   const lock = new SqliteWorkspaceLock(db, clock);
   const controller = (execution = runner) => createCheckRunController({ reader: store, status: store, logs, runner: execution,
-    snapshots, checkpoints, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message),
+    snapshots, checkpoints, checkpointDiff, clock, events: new StoreEventRecorder(store), redactor, onError: (message) => errors.push(message),
     claims: lock, fenced: new SqliteFencedStatusWriter(store, lock), holder: "test" });
   const controllerFor = (holder: string, options: { definitionsLoadedAt?: string; maxPerWorkspace?: number; maxTotal?: number } = {}) =>
     createCheckRunController({ reader: store, status: store, logs, runner, snapshots, checkpoints, clock, events: new StoreEventRecorder(store), redactor,
@@ -153,6 +154,8 @@ test("ADR-0061 §2: a check that rewrites the candidate is restored and NotVerif
     assert.equal(done.status?.outcome, "NotVerified");
     assert.match(done.status?.message ?? "", /modified the workspace/);
     assert.match(done.status?.message ?? "", /restored/);
+    assert.match(done.status?.message ?? "", /1 file: modified gen\/server\.gen\.go \(\+239\/−219\)/);
+    assert.deepEqual(done.status?.workspaceChanges, { total: 1, files: [{ path: "gen/server.gen.go", change: "modified", added: 239, deleted: 219 }] });
     assert.equal(f.restores(), 1);
     assert.equal(f.errors.length, 0);
   } finally { f.db.close(); }

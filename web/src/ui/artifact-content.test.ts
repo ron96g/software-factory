@@ -50,3 +50,40 @@ test("a ticket-draft still renders as the publishable ticket (unchanged)", () =>
   assert.match(ticketDraftMarkdown(draft)!, /^# T\n\nB/);
   assert.equal(artifactMarkdown(draft), ticketDraftMarkdown(draft));
 });
+
+test("a pr-review-report renders as the review to be posted, not raw JSON", () => {
+  const md = artifactMarkdown(artifact("pr-review-report", JSON.stringify({
+    verdict: "partially-accepted", summary: "Changes the exported constant without a test.", rationale: "The value is right but untested.",
+    accepted: ["The new value"], requiredChanges: ["Add a test for answer"],
+    findings: [{ severity: "blocking", path: "app.ts", line: 1, message: "No test covers the new value." }, { severity: "non-blocking", path: "README.md", message: "Mention the new value." }],
+  }), "json"));
+  assert.ok(md);
+  assert.match(md, /^## Verdict: Partially accepted\n[\s\S]*### Accepted\n- The new value\n\n### Required changes\n- Add a test for answer/);
+  assert.match(md, /### Blocking findings\n- `app\.ts:1` _\(inline comment\)_ No test covers/);
+  assert.match(md, /### Non-blocking findings\n- `README\.md` _\(in the review\)_ Mention/);
+  assert.doesNotMatch(md, /"verdict"/);
+  assert.equal(artifactMarkdown(artifact("pr-review-report", "{not json", "json")), null);
+});
+
+test("a pr-review-report from the earlier format still renders, with a hint to restart", () => {
+  const md = artifactMarkdown(artifact("pr-review-report", JSON.stringify({
+    verdict: "request-changes", summary: "Changes the exported constant without a test.",
+    findings: [{ severity: "blocking", path: "app.ts", line: 1, message: "No test covers the new value." }],
+  }), "json"));
+  assert.ok(md, "not raw JSON");
+  assert.match(md, /^## Verdict: Request changes\n/);
+  assert.match(md, /### Blocking findings\n- `app\.ts:1` No test covers/);
+  assert.match(md, /earlier report format: restart from analyze/);
+  assert.doesNotMatch(md, /\*\*Why:\*\*/);
+});
+
+test("the gate preview shows where each finding will appear and its suggestion", () => {
+  const md = artifactMarkdown(artifact("pr-review-report", JSON.stringify({
+    verdict: "partially-accepted", summary: "Changes the exported constant without a test.", rationale: "The value is right but untested.",
+    accepted: ["The new value"], requiredChanges: ["Add a test for answer"],
+    findings: [{ severity: "blocking", path: "app.ts", startLine: 1, line: 2, message: "No test covers it.", suggestion: "const x = 1;" },
+      { severity: "non-blocking", path: "README.md", message: "Mention the new value." }],
+  }), "json"))!;
+  assert.match(md, /- `app\.ts:1-2` _\(inline comment\)_ No test covers it\.\n\n  ```suggestion\n  const x = 1;\n  ```/);
+  assert.match(md, /- `README\.md` _\(in the review\)_ Mention/);
+});

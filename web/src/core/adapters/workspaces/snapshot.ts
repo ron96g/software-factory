@@ -3,8 +3,8 @@ import { copyFile, mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Workspace } from "../../model/kinds.ts";
-import type { WorkspaceCheckpoint, WorkspaceSnapshotter } from "../../ports/index.ts";
+import type { Workspace, WorkspaceFileChange } from "../../model/kinds.ts";
+import type { WorkspaceCheckpoint, WorkspaceCheckpointDiff, WorkspaceSnapshotter } from "../../ports/index.ts";
 import { GIT_HARDENING } from "./git-auth.ts";
 
 const exec = promisify(execFile);
@@ -68,7 +68,27 @@ export class GitWorkspaceSnapshotter implements WorkspaceSnapshotter {
  * the files a check added. Only the paths a check changed are touched, so a restore never rewrites the whole repository.
  * The index is always a throwaway, so the workspace's own index and staging state stay untouched.
  */
-export class GitWorkspaceCheckpoint implements WorkspaceCheckpoint {
+export class GitWorkspaceCheckpoint implements WorkspaceCheckpoint, WorkspaceCheckpointDiff {
+  async diff(workspace: Workspace, from: string, to: string): Promise<WorkspaceFileChange[]> {
+    for (const tree of [from, to]) if (!/^[a-f0-9]{40,64}$/.test(tree)) throw new Error("checkpoint must be a Git tree hash");
+    const cwd = this.path(workspace);
+    const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_ATTR_NOSYSTEM: "1" };
+    const base = ["diff-tree", "-r", "--no-commit-id", "--no-renames", "-z", from, to];
+    const kinds = new Map<string, WorkspaceFileChange["change"]>();
+    const status = (await this.git(cwd, [...base.slice(0, -2), "--name-status", from, to], env)).split("\0");
+    for (let i = 0; i + 1 < status.length; i += 2) {
+      if (!status[i]) break;
+      kinds.set(status[i + 1], status[i] === "A" ? "added" : status[i] === "D" ? "deleted" : "modified");
+    }
+    // `--numstat -z`: "added\tdeleted\tpath\0"; binary files report "-".
+    return (await this.git(cwd, [...base.slice(0, -2), "--numstat", from, to], env)).split("\0").filter(Boolean).map((entry) => {
+      const [added, deleted, ...rest] = entry.split("\t");
+      const path = rest.join("\t");
+      return { path, change: kinds.get(path) ?? "modified",
+        ...(added === "-" ? {} : { added: Number(added), deleted: Number(deleted) }) };
+    });
+  }
+
   async capture(workspace: Workspace): Promise<string> {
     const cwd = this.path(workspace);
     const scratch = await mkdtemp(join(tmpdir(), "factory-checkpoint-"));

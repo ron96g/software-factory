@@ -1,8 +1,8 @@
 "use client";
-import { Anchor, Badge, Button, Card, Checkbox, Group, Select, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
+import { Anchor, Badge, Button, Card, Checkbox, Group, MultiSelect, Select, Stack, Text, Textarea, TextInput, Title } from "@mantine/core";
 import { useState } from "react";
 import type { IssueProposal } from "@/core/model/kinds.ts";
-import type { NewItemOptions } from "@/core/ports/app.ts";
+import type { NewItemOptions, WorkItemDetail } from "@/core/ports/app.ts";
 import { act, useLive } from "@/ui/api.ts";
 import { PhaseBadge } from "@/ui/badges.tsx";
 
@@ -26,14 +26,14 @@ export function IssueProposalsPanel({ issues, onUse }: { issues: IssueProposal[]
       </Text>
       <Stack gap="md">
         {issues.map((i) => (
-          <IssueRow key={i.metadata.name} issue={i} targets={options?.issueTargets ?? []} onUse={onUse} />
+          <IssueRow key={i.metadata.name} issue={i} targets={options?.issueTargets ?? []} options={options} onUse={onUse} />
         ))}
       </Stack>
     </Card>
   );
 }
 
-function IssueRow({ issue: i, targets, onUse }: { issue: IssueProposal; targets: { source: string; type: string; project?: string }[]; onUse?: (i: IssueProposal) => void }) {
+function IssueRow({ issue: i, targets, options, onUse }: { issue: IssueProposal; targets: { source: string; type: string; project?: string }[]; options: NewItemOptions | null; onUse?: (i: IssueProposal) => void }) {
   const phase = i.status?.phase ?? "Proposed";
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(i.spec.title);
@@ -70,7 +70,7 @@ function IssueRow({ issue: i, targets, onUse }: { issue: IssueProposal; targets:
       </Group>
       {tracked && <Text size="xs" c="dimmed">Tracker: {tracked.state}{tracked.assignee ? `, ${tracked.assignee}` : ""}{tracked.updatedAt ? `, updated ${new Date(tracked.updatedAt).toLocaleString()}` : ""}</Text>}
       {i.spec.provenance?.workItem && <Anchor href={`/items/${i.spec.provenance.workItem}`} size="xs">Work item {i.spec.provenance.workItem}</Anchor>}
-      {phase === "Created" && (i.spec.purpose === "follow-up" || i.spec.purpose === "story") && <Group><Button size="compact-xs" loading={busy} onClick={() => run(`${base}/start`, {}, "Implementation started")}>Start implementation</Button></Group>}
+      {phase === "Created" && (i.spec.purpose === "follow-up" || i.spec.purpose === "story") && <StartImplementation issue={i} options={options} />}
       {linked?.reason === "Conflict" && <Text size="xs" c="red">{linked.message}</Text>}
       {(phase === "Uncertain" || phase === "Failed") && (
         <Text size="xs" c="dimmed">
@@ -111,6 +111,35 @@ function IssueRow({ issue: i, targets, onUse }: { issue: IssueProposal; targets:
           )}
         </Group>
       )}
+    </Stack>
+  );
+}
+
+/** ADR-0068: the human confirms where implementation runs; repositories default to the origin item's, never silently to the ticket Source's. */
+function StartImplementation({ issue: i, options }: { issue: IssueProposal; options: NewItemOptions | null }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [workflow, setWorkflow] = useState<string | null>(null);
+  const [repos, setRepos] = useState<string[] | null>(null);
+  const origin = i.spec.provenance?.workItem;
+  const { data: detail } = useLive<WorkItemDetail>(open && origin ? `/api/workitems/${origin}` : null, () => false);
+  const selected = repos ?? detail?.workItem.spec.repositoryRefs?.map((r) => r.name) ?? [];
+  if (!open) return <Group><Button size="compact-xs" onClick={() => setOpen(true)}>Start implementation</Button></Group>;
+  return (
+    <Stack gap={6}>
+      <Select size="xs" label="Workflow" placeholder="Ticket source default" clearable value={workflow} onChange={setWorkflow}
+        data={(options?.workflows ?? []).map((w) => ({ value: w.name, label: w.name }))} />
+      <MultiSelect size="xs" label="Repositories" description={origin ? `Default: the repositories of ${origin}` : undefined} value={selected} onChange={setRepos}
+        data={(options?.repositories ?? []).map((r) => ({ value: r.name, label: r.name }))} error={selected.length ? undefined : "Choose at least one repository"} />
+      <Group gap="xs">
+        <Button size="compact-xs" loading={busy} disabled={!selected.length} onClick={async () => {
+          setBusy(true);
+          await act(`/api/issues/${i.metadata.name}/start`, { ...(workflow ? { workflowRef: workflow } : {}), repositories: selected }, "Implementation started");
+          setBusy(false);
+          setOpen(false);
+        }}>Start</Button>
+        <Button size="compact-xs" variant="subtle" onClick={() => setOpen(false)}>Cancel</Button>
+      </Group>
     </Stack>
   );
 }

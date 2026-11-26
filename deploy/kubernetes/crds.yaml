@@ -440,6 +440,28 @@ spec:
                                           minimum: 1
                                       required:
                                         - next
+                                prReview:
+                                  type: object
+                                  properties:
+                                    artifactRef:
+                                      type: object
+                                      properties:
+                                        name:
+                                          type: string
+                                          minLength: 1
+                                        namespace:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                      required:
+                                        - name
+                                    reviewStage:
+                                      type: string
+                                      minLength: 1
+                                  required:
+                                    - artifactRef
+                                    - reviewStage
                                 issue:
                                   type: object
                                   properties:
@@ -885,6 +907,14 @@ spec:
                           x-kubernetes-preserve-unknown-fields: true
                         linkOrigin:
                           type: boolean
+                    pullRequestReviews:
+                      type: array
+                      items:
+                        type: string
+                        enum:
+                          - approve
+                          - comment
+                          - request-changes
               required:
                 - type
               x-kubernetes-validations:

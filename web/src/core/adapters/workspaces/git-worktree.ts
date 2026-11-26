@@ -102,7 +102,7 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
       await mkdir(join(this.dir, ws.spec.workItemRef.name), { recursive: true });
       await git(source, "worktree", "prune");
       const exists = await git(source, "branch", "--list", ws.spec.branch);
-      const base = ws.spec.baseRef ?? "HEAD";
+      const base = ws.spec.checkout && !exists ? await this.fetchCheckout(ws, repo, source) : ws.spec.baseRef ?? "HEAD";
       await git(source, "worktree", "add", ...(exists ? [path, ws.spec.branch] : ["-b", ws.spec.branch, path, base]));
     }
     // Setup re-runs until it completed once (a crash mid-setup must not yield a Ready workspace without deps).
@@ -116,8 +116,27 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
       setupLog = logs.join("\n\n") || undefined;
     }
     // Pinned once: an existing status.baseCommit wins over recomputation.
-    const baseCommit = ws.status?.baseCommit ?? (await git(path, "merge-base", "HEAD", ws.spec.baseRef ?? (await git(source, "rev-parse", "HEAD"))));
+    const baseCommit = ws.status?.baseCommit ?? (await git(path, "merge-base", "HEAD",
+      ws.spec.checkout ? checkoutRefs(ws).base : ws.spec.baseRef ?? (await git(source, "rev-parse", "HEAD"))));
     return { path, baseCommit, headCommit: await git(path, "rev-parse", "HEAD"), preparedBy: "host-git-worktree", setupLog, setupCompleted: true };
+  }
+
+  /**
+   * ADR-0094: fetch the pull request head and its base branch into factory-private refs of the source checkout and
+   * return the pinned head commit. The token is only in the fetch's environment (SEC-3). A moved head fails loudly.
+   */
+  private async fetchCheckout(ws: Workspace, repo: Repository, source: string): Promise<string> {
+    const c = ws.spec.checkout!;
+    if (!/^refs\/pull\/\d+\/head$/.test(c.ref)) throw new Error(`workspace ${ws.metadata.name}: unsupported checkout ref ${c.ref}`);
+    if (!/^[0-9a-f]{40}$/.test(c.commit)) throw new Error(`workspace ${ws.metadata.name}: checkout commit must be a full SHA`);
+    if (!/^[A-Za-z0-9._][A-Za-z0-9._\/-]*$/.test(c.baseBranch) || c.baseBranch.includes("..")) throw new Error(`workspace ${ws.metadata.name}: invalid base branch ${c.baseBranch}`);
+    const { url, authEnv } = gitRemote(repo, this.secrets);
+    const refs = checkoutRefs(ws);
+    await execFileP("git", [...GIT_HARDENING, "fetch", "--quiet", "--no-tags", "--", url, `+${c.ref}:${refs.head}`, `+refs/heads/${c.baseBranch}:${refs.base}`],
+      { cwd: source, env: authEnv, maxBuffer: 16 * 1024 * 1024 });
+    const head = await git(source, "rev-parse", "--verify", `${refs.head}^{commit}`);
+    if (head !== c.commit) throw new Error(`pull request head moved: expected ${c.commit}, the remote has ${head}; sync the source and restart the item`);
+    return head;
   }
 
   async sweep(live: { workItem: string; repository: string }[]): Promise<string[]> {
@@ -142,6 +161,12 @@ export class GitWorktreeWorkspaces implements WorkspacePreparer, WorkspaceCleane
     });
   }
 }
+
+/** Factory-private refs a pull request checkout is fetched into; never pushed. */
+export const checkoutRefs = (ws: Workspace) => {
+  const id = `${ws.spec.workItemRef.name}/${ws.spec.repositoryRef.name}`;
+  return { head: `refs/factory/review/${id}/head`, base: `refs/factory/review/${id}/base` };
+};
 
 export async function sweepWorktrees(dir: string, live: Set<string>, guard: (p: string) => string): Promise<string[]> {
   const { readdir, rm } = await import("node:fs/promises");

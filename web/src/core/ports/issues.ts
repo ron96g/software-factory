@@ -61,6 +61,8 @@ export interface MirrorLinkChecker {
 export interface FollowUpOrigin {
   originWorkItemRef: { name: string };
   originSnapshot: NonNullable<import("../model/kinds.ts").WorkItem["spec"]["originSnapshot"]>;
+  /** The origin's repositories: the code the ticket was researched against, preferred over the ticket Source's defaults. */
+  repositoryRefs?: { name: string }[];
 }
 
 /** ADR-0068 §5: lets the syncer attach the origin to a ticket the factory created from a follow-up. */

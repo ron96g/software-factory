@@ -35,6 +35,8 @@ export interface ExternalItem {
   labels?: string[];
   priority?: string;
   updatedAt?: string;
+  /** ADR-0094: set by pull request connectors; sync copies it into `WorkItem.spec.pullRequest`. */
+  pullRequest?: import("../model/kinds.ts").PullRequestRef;
 }
 
 /** Capability: pull items from the external system. */
@@ -63,6 +65,23 @@ export interface CommentReader {
   listComments(source: Source, externalId: string, since?: string): Promise<{ author: string; body: string; createdAt: string }[]>;
 }
 
+/** ADR-0094: one review on a pull request. `marker` is a hidden idempotency marker kept in the body. */
+export interface PullRequestReviewInput {
+  commitSha: string;
+  event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES";
+  body: string;
+  marker: string;
+  /** Inline comments posted with the review (GitHub `comments[]`); every one must be on a line of the diff. */
+  comments?: { path: string; line: number; side: "RIGHT" | "LEFT"; start_line?: number; start_side?: "RIGHT" | "LEFT"; body: string }[];
+  /** Body to post without `comments` when GitHub refuses them (all findings in the body). */
+  fallbackBody?: string;
+}
+
+/** Capability (ADR-0094): post a pull request review, or return the existing one carrying the same marker. */
+export interface PullRequestReviewPublisher {
+  publishReview(source: Source, externalId: string, review: PullRequestReviewInput): Promise<{ id: string; url?: string; event: string; existing: boolean; inlineComments?: number }>;
+}
+
 /** A connector is identified by type and exposes any subset of capabilities. */
 export interface SourceConnector {
   readonly type: string;
@@ -76,6 +95,9 @@ export const canComment = (c: SourceConnector): c is SourceConnector & CommentPu
   typeof (c as Partial<CommentPublisher>).postComment === "function";
 export const canReadComments = (c: SourceConnector): c is SourceConnector & CommentReader =>
   typeof (c as Partial<CommentReader>).listComments === "function";
+
+export const canPublishReview = (c: SourceConnector): c is SourceConnector & PullRequestReviewPublisher =>
+  typeof (c as Partial<PullRequestReviewPublisher>).publishReview === "function";
 
 /** Imports external items as WorkItems (used by sync controller and "Sync now"). */
 export interface SourceSyncer {
