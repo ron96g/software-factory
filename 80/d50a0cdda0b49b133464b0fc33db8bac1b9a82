@@ -1,0 +1,232 @@
+web/src/core/opencode-runtime.test.ts
+  s_e44a30a78d5ee3::t_12aa35fa853818 1,266-267
+web/src/core/model/kinds.ts
+  s_bd3f6c4a14c515::t_827598c7f52698 119-120,206-208,363-370,374,391-392,874-875,925-929
+  s_e3b93090821b84::t_b3c9be629a785c 666-677
+  s_bd3f6c4a14c515::t_73561d25df308f 371-373
+web/src/app/api/approvals/[name]/decide/route.ts
+  s_bd3f6c4a14c515::t_d62c04f98ac9fa 1,5,7
+web/src/core/app/factory-app.ts
+  s_3fa46b539b9cb9::t_bb2f76237c0f7a 580-582,591
+  s_bd3f6c4a14c515::t_d62c04f98ac9fa 21
+  s_bd3f6c4a14c515::t_bc6d1bcc825e11 995,1028-1033,1035
+  s_3fa46b539b9cb9::t_4959fea86f6b9a 579
+web/src/core/reviews/pr-review.ts
+  s_bd3f6c4a14c515::t_b2a0ef3047c97a 2,5
+  s_bd3f6c4a14c515::t_408afde8917024 1,3-4,10,12,27-29,31-73,98,140-142,148-150,169,172,174
+  s_bd3f6c4a14c515::t_8da4f598d749de 74-76,78-82,84-85,96,136-137,146-147
+  s_bd3f6c4a14c515::t_f7f2dd06cea7cb 6-9,11,13-26,30,77,83,86-95,97,99-135,138-139,143-145,151-168,170-171,173,175-181
+web/src/core/adapters/sources/connectors.ts
+  s_bd3f6c4a14c515::t_bc040cfb001b62 155-176,178
+  s_bd3f6c4a14c515::t_e9d07a514b4bce 2,14,24,30,109-154,177,179-200
+workflows/pr-review.yaml
+  s_bd3f6c4a14c515::t_24a35c161aa0e5 1-6,9-20,26-27,31-38,40-50
+  s_bd3f6c4a14c515::t_73561d25df308f 7-8,29
+  s_bd3f6c4a14c515::t_fc5246f4963fd5 21-25,28,30,39
+web/src/core/sources/syncer.ts
+  s_bd3f6c4a14c515::t_56a2dda26a69e9 89,103-104
+  s_3fa46b539b9cb9::t_bb2f76237c0f7a 106-107
+web/src/core/ports/issues.ts
+  s_3fa46b539b9cb9::t_bb2f76237c0f7a 64-65
+web/src/core/adapters/http/proxy.test.ts
+  s_e44a30a78d5ee3::t_9f232d5956361b 15-17
+  s_e44a30a78d5ee3::t_3311c8058e40ab 1-14,18-32
+web/src/acceptance/pr-review.acceptance.test.ts
+  s_bd3f6c4a14c515::t_340a1a5210f19f 1-63,65,67-89,104,109-137,154-155,157-159,161-162,164,177-187
+  s_bd3f6c4a14c515::t_479f20cce9e544 165
+  s_bd3f6c4a14c515::t_8925f66c92164c 64,93-95,98-100,102,139-140,167-176
+  s_bd3f6c4a14c515::t_180fd63738e97c 66,90-92,96-97,101,103,138,141-145,156,160,163
+  s_bd3f6c4a14c515::t_6fd75a34da1a86 105-108,146-153,166
+skills/change-explanation.md
+  s_bd3f6c4a14c515::t_fc5246f4963fd5 1-27
+web/src/ui/artifact-content.test.ts
+  s_bd3f6c4a14c515::t_ec470a158e618a 53-55,58-60,64-66
+  s_bd3f6c4a14c515::t_a419d58fabae3b 62-63,78-88
+  s_bd3f6c4a14c515::t_a088f872097cec 75
+  s_bd3f6c4a14c515::t_180fd63738e97c 56-57,61
+  s_bd3f6c4a14c515::t_0c3b1b846d58de 67-74,76-77,89
+docs/ai-dlc-glossary.md
+  s_bd3f6c4a14c515::t_ccae3b610abd03 231
+  s_bd3f6c4a14c515::t_673f5fb94f6e80 229
+  s_bd3f6c4a14c515::t_6fd75a34da1a86 230
+web/src/core/checks/controller.ts
+  s_e3b93090821b84::t_45bc08f77389dd 1,6,12,23-24,49,344,400-411,466
+artifacts/artifact-types.yaml
+  s_bd3f6c4a14c515::t_fc5246f4963fd5 80-88
+skills/pull-request-review.md
+  s_bd3f6c4a14c515::t_8925f66c92164c 15-20
+  s_bd3f6c4a14c515::t_73561d25df308f 7,21-30
+  s_bd3f6c4a14c515::t_fc5246f4963fd5 1-6,8-14
+web/src/core/runtime/controllers/workitem.ts
+  s_bd3f6c4a14c515::t_56a2dda26a69e9 180-181
+web/package.json
+  s_e44a30a78d5ee3::t_9c838dcfe41cc1 37
+artifacts/pr-review-report.yaml
+  s_bd3f6c4a14c515::t_81b1a4145e1da3 60,65-66,70
+  s_bd3f6c4a14c515::t_eb4dbb44c1aee6 61
+  s_bd3f6c4a14c515::t_73561d25df308f 7-9,16,18,21-30,55-59,62-64,67-69
+  s_bd3f6c4a14c515::t_24a35c161aa0e5 1-6,10,12-15,17,31-40,49
+  s_bd3f6c4a14c515::t_19bcbbc7d546d1 11,41-48,50-54
+  s_bd3f6c4a14c515::t_fbad6baa8391e1 19-20
+web/src/instrumentation.ts
+  s_e44a30a78d5ee3::t_9c838dcfe41cc1 3-5
+docs/adr/0094-pull-request-review-workflow.md
+  s_bd3f6c4a14c515::t_5f9f80655981f4 1-23,25-29,31,42-56,63-68,71-73,75,91,95-101,104-111
+  s_bd3f6c4a14c515::t_47046edaae96d8 59,74,76-90,103
+  s_bd3f6c4a14c515::t_ccae3b610abd03 38,57-58,60-62,69-70,92-94
+  s_bd3f6c4a14c515::t_6fd75a34da1a86 24,30,32-37,39-41,102
+web/src/core/factory.ts
+  s_bd3f6c4a14c515::t_3c195f320aea35 123
+  s_e44a30a78d5ee3::t_9c838dcfe41cc1 221-222
+  s_bd3f6c4a14c515::t_408afde8917024 90,461-462,482,673
+  s_bd3f6c4a14c515::t_090c0f133aa800 89,91,481,610,634,640
+  s_e3b93090821b84::t_c8cfc557bb112a 659
+  s_e3b93090821b84::t_c6785921f8cd3c 663
+  s_e44a30a78d5ee3::t_0221f7d0cda24a 33,499
+web/src/core/startimpl.test.ts
+  s_3fa46b539b9cb9::t_01585235ec105b 48-60
+  s_3fa46b539b9cb9::t_4d5cce24a4f0df 61-76
+web/src/core/reviews/diff-lines.ts
+  s_bd3f6c4a14c515::t_a088f872097cec 33
+  s_bd3f6c4a14c515::t_a3252b2344d7d3 1-32,34-59
+web/src/core/capabilities/detectors.ts
+  s_bd3f6c4a14c515::t_090c0f133aa800 4,22
+web/src/core/ports/checks.ts
+  s_e3b93090821b84::t_1e605ee45f784a 24-28
+  s_bd3f6c4a14c515::t_338bb7923cf522 34-38
+  s_e3b93090821b84::t_4563a662048996 1
+web/src/core/reviews/report.test.ts
+  s_bd3f6c4a14c515::t_180fd63738e97c 1-34
+web/src/ui/issue-proposals.tsx
+  s_3fa46b539b9cb9::t_b51ff85f802225 2,5,29,36,73,117-142
+  s_3fa46b539b9cb9::t_2a8c402e298604 143-145
+web/src/core/ports/integration.ts
+  s_bd3f6c4a14c515::t_827598c7f52698 38-39,68-73,78-81,83-84,99-100
+  s_bd3f6c4a14c515::t_bc040cfb001b62 74-77,82
+  s_bd3f6c4a14c515::t_04c98c5a3adf38 101
+web/src/core/adapters/http/proxy.ts
+  s_e44a30a78d5ee3::t_01dcbbe630ef46 1-47
+web/src/core/adapters/workspaces/module-scope.ts
+  s_bd3f6c4a14c515::t_338bb7923cf522 7,81-92
+  s_bd3f6c4a14c515::t_7f0e63b457400f 93-95
+web/src/core/reviews/report.ts
+  s_bd3f6c4a14c515::t_b2a0ef3047c97a 1-8,11,13,24-26,30-32,37-39,46-51,106,109,116-118
+  s_bd3f6c4a14c515::t_5550ce540d846b 9-10,12,14-23,73-90,93-98,100-105,113-115
+  s_bd3f6c4a14c515::t_0c3b1b846d58de 52-66,68-72,91-92,110
+  s_bd3f6c4a14c515::t_bc040cfb001b62 67
+  s_bd3f6c4a14c515::t_8da4f598d749de 27-29,33-36,40-45,99,107-108,111-112
+sources/sources.yaml
+  s_bd3f6c4a14c515::t_24a35c161aa0e5 108-132
+  s_bd3f6c4a14c515::t_6eff36c80f162f 133-157
+deploy/kubernetes/crds.yaml
+  s_bd3f6c4a14c515::t_e5bc17ef983c38 443-464,910-917
+web/src/core/verification/service.ts
+  s_e3b93090821b84::t_a4af187b80979e 1,40-41,443-444
+  s_e3b93090821b84::t_c6785921f8cd3c 762
+web/src/core/ports/app.ts
+  s_bd3f6c4a14c515::t_bc6d1bcc825e11 169-170
+web/src/core/adapters/opencode/host.ts
+  s_e44a30a78d5ee3::t_0221f7d0cda24a 548-551,562,564
+  s_e44a30a78d5ee3::t_24330e0df7a288 16,26,36,95-96
+web/src/core/adapters/workspaces/snapshot.ts
+  s_e3b93090821b84::t_b99a5e67e896ab 71-91
+  s_e3b93090821b84::t_d215e4690746ae 6-7
+web/src/core/reviews/diff-lines.test.ts
+  s_bd3f6c4a14c515::t_a419d58fabae3b 1-55
+docs/adr/0096-ci-status-as-pull-request-review-evidence.md
+  s_bd3f6c4a14c515::t_7d87fef807b3b1 1-129
+web/src/core/units/service.ts
+  s_e3b93090821b84::t_a4af187b80979e 1,467
+web/src/core/checks/explain.test.ts
+  s_e3b93090821b84::t_446f0075c98636 1-45
+web/src/core/adapters/workspaces/snapshot.test.ts
+  s_e3b93090821b84::t_446f0075c98636 82-100
+web/src/core/verification.test.ts
+  s_e3b93090821b84::t_78f7274d18112d 201-228
+web/src/core/adapters/workspaces/git-worktree.ts
+  s_bd3f6c4a14c515::t_96a7dde79b3469 105,119-120,124-141,165-169
+  s_bd3f6c4a14c515::t_01b2feb96f4950 170
+web/src/core/reviews/connector-review.test.ts
+  s_bd3f6c4a14c515::t_a419d58fabae3b 1-44
+web/src/core/checks/explain.ts
+  s_e3b93090821b84::t_ce3fa27844a240 1-104
+README.md
+  s_e44a30a78d5ee3::t_2b978287fe16c2 81-85
+web/src/core/checks.test.ts
+  s_e3b93090821b84::t_446f0075c98636 57,67,157-158
+web/src/core/issues/origin.ts
+  s_3fa46b539b9cb9::t_bb2f76237c0f7a 16-17,19-20
+  s_3fa46b539b9cb9::t_c18fe657c3ef10 1
+AGENTS.md
+  s_bd3f6c4a14c515::t_47046edaae96d8 252
+  s_32db5e500bffbf::t_e33f7e3f0ac266 253
+web/src/ui/artifact-content.ts
+  s_bd3f6c4a14c515::t_0c3b1b846d58de 3,26-28
+  s_bd3f6c4a14c515::t_ec470a158e618a 23-25,29-30,33
+docs/adr/0093-start-implementation-uses-the-origin-repositories.md
+  s_3fa46b539b9cb9::t_22e6bcdb898b4a 1-36
+web/src/core/agents/pull-request-context.ts
+  s_bd3f6c4a14c515::t_a18aa882693376 1-19,21-32
+  s_bd3f6c4a14c515::t_8925f66c92164c 20
+docs/adr/0095-context-index-and-on-demand-artifacts.md
+  s_32db5e500bffbf::t_f69cf7e0b25389 1-109
+docs/adr/0068-tracker-follow-ups-from-work-items.md
+  s_3fa46b539b9cb9::t_a2cc09f5f8af68 3
+docs/adr/0084-story-refinement-workflow.md
+  s_3fa46b539b9cb9::t_046125045ec122 3
+web/package-lock.json
+  s_e44a30a78d5ee3::t_b44d67b320d381 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "80d50a0cdda0b49b133464b0fc33db8bac1b9a82",
+  "prompts": {},
+  "humans": {
+    "h_0f030e7424553c": {
+      "author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  },
+  "sessions": {
+    "s_32db5e500bffbf": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de70805b9ffeXqn8QYzb24jTZC",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_3fa46b539b9cb9": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de83eed39ffeRMpZpbxwgCRuT5",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_bd3f6c4a14c515": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de73050cbffef7UimYw7YAIuzd",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_e3b93090821b84": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de73eb1e3ffexTRDxA581YzVgj",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_e44a30a78d5ee3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de8834fd0ffeWmNQj5LvoNtTeN",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
