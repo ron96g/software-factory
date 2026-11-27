@@ -1,100 +1,64 @@
-web/src/core/adapters/sandbox/bwrap.test.ts
-  s_cceac037056b6c::t_eb37f7804c0f17 305
-  s_cceac037056b6c::t_75cd5393ba73d6 300-301,304,350,352
-  s_cceac037056b6c::t_ea3f84642e734b 307-312,354-362
-  s_cceac037056b6c::t_f1c48862dbe161 8,299,302-303,306,313-349,351,353,363-365
-  s_cceac037056b6c::t_e161b64331e815 366
-web/src/core/runtime/commit-message.test.ts
-  s_cceac037056b6c::t_f1c48862dbe161 1-9,11-15
-  s_cceac037056b6c::t_0fd40984403e40 10
-web/src/core/runtime/publish.test.ts
-  s_cceac037056b6c::t_d11fc0c4bf0b59 4,10,12-13,23-24,27-28,51-62
-  s_cceac037056b6c::t_ea273ece8142f6 63
-web/src/core/ports/integration.ts
-  s_cceac037056b6c::t_e2b7b59d23cbf5 8
-  s_cceac037056b6c::t_91b664bc94eaf8 358-365
-  s_cceac037056b6c::t_6a678aa943b08b 366-372
-deploy/kubernetes/crds.yaml
-  s_cceac037056b6c::t_d7655eb1e418d8 941-949
-sandbox-profiles/profiles.yaml
-  s_cceac037056b6c::t_3d190bd706695a 37-46
-web/src/core/adapters/workspaces/local-reader.ts
-  s_cceac037056b6c::t_64507356204e50 7
-  s_cceac037056b6c::t_c72c6b0e01fb8c 64-66
-web/src/core/runtime/publish.ts
-  s_cceac037056b6c::t_5c212c7d9acfff 3-4,16-18,42-46
-web/src/core/adapters/workspaces/module-scope.ts
-  s_cceac037056b6c::t_4f6c22b301618c 8,11,50,62
-docs/ai-dlc-glossary.md
-  s_cceac037056b6c::t_a8728b6688e1f1 110
-web/src/core/adapters/sandbox/candidate-committer.ts
-  s_cceac037056b6c::t_66eacb19abe3d8 1-36
-web/src/core/adapters/sandbox/bwrap.ts
-  s_cceac037056b6c::t_74d037c8f23496 126-130,173-174,242
-  s_cceac037056b6c::t_d1d10c3c42366f 9-13,24,131-134,175,195,243,246-247,310-311,314-316,324,330,334,425,429-431,433-434
-  s_cceac037056b6c::t_33a02b2aba4998 4-5,287-302,349,441
-  s_cceac037056b6c::t_0fd40984403e40 25,348,356,426-428,432,435-440
-  s_cceac037056b6c::t_6def78fcc327af 442
-docs/security.md
-  s_cceac037056b6c::t_2e14f6e628a159 122,182
-  s_cceac037056b6c::t_452aebe92f4a8f 658-662
-  s_cceac037056b6c::t_6172620135cff4 181,266,270-273,296-298
-  s_cceac037056b6c::t_a8728b6688e1f1 267-269
-  s_cceac037056b6c::t_6b9a3f7458630f 299
-docs/adr/0092-candidate-commit-in-the-sandbox.md
-  s_cceac037056b6c::t_7c2b7c4d212c72 28-30,73-78
-  s_cceac037056b6c::t_3e793c2a8f3e3c 1-27,31-37,55-56,58-64,67-72,84-93
-  s_cceac037056b6c::t_a8728b6688e1f1 38-54,57,65-66,79-83,94-95
-web/src/core/factory.ts
-  s_cceac037056b6c::t_a621ca5e45c900 12
-  s_cceac037056b6c::t_6ef484b1612f6f 42-44,349-351,359,612-613,616-617,620
-web/src/core/testing/host-committer.ts
-  s_cceac037056b6c::t_0fd40984403e40 5,23-32
-  s_cceac037056b6c::t_395dca26a1ad1a 22
-  s_cceac037056b6c::t_046fed30d1756b 4
-  s_cceac037056b6c::t_3cfc19875f908d 1-3,6-21,33-34
-web/src/core/model/kinds.ts
-  s_cceac037056b6c::t_63fc1ad42a0e0a 210-217
-web/src/core/base-sync.test.ts
-  s_cceac037056b6c::t_fa7a82b035d411 188
-  s_cceac037056b6c::t_f268939de31993 12-13,16-17,105,109-111,144,161,168-187,189-229
 AGENTS.md
-  s_cceac037056b6c::t_e009cea8b754e1 88-89
-  s_cceac037056b6c::t_a8728b6688e1f1 251
-repositories/repositories.yaml
-  s_cceac037056b6c::t_4deb9c5c6fdadd 111-115
-web/src/core/ports/sandbox.ts
-  s_cceac037056b6c::t_da76b2230e5bc3 114-162
+  s_de470e810ba21a::t_fb43653304e10c 88-89,251
+deploy/kubernetes/crds.yaml
+  s_bd3f6c4a14c515::t_c54bc6d47bd3c4 941-949
+docs/adr/0092-candidate-commit-in-the-sandbox.md
+  s_cceac037056b6c::t_c1a7c396f25231 1-95
+docs/ai-dlc-glossary.md
+  s_de470e810ba21a::t_eb307eb7df8970 110
+docs/security.md
+  s_cceac037056b6c::t_baf5ca6b3db365 122,181-182,266-273,296-299,658-662
+web/src/core/adapters/sandbox/bwrap.test.ts
+  s_cceac037056b6c::t_3ae47ab5168af5 8,299-366
+web/src/core/adapters/sandbox/bwrap.ts
+  s_cceac037056b6c::t_6c835cebccb318 4-5,9-13,24-25,126-134,173-175,195,242-243,246-247,287-302,310-311,314-316,324,330,334,348-349,356,425-442
 web/src/core/adapters/sandbox/candidate-commit.ts
-  s_cceac037056b6c::t_e58a6aa50a02a2 34,40,42,50,53
-  s_cceac037056b6c::t_f297378981b8e1 2-8,17,19-33,38-39,41,49,51-52,54-66,80,82,86,99-100,110,112,125
-  s_cceac037056b6c::t_332283f2a1de7d 1,9-16,35-37,43-48,67-79,81,83-85,87-98,101-109,111,113-124
-  s_cceac037056b6c::t_86724d00b5558c 18
-web/src/core/adapters/workspaces/git-publish.ts
-  s_cceac037056b6c::t_d472c1df0e015c 38
-  s_cceac037056b6c::t_d97bafe77b937d 52-54
-  s_cceac037056b6c::t_c02b20920463a7 2,7,9,15-18,28,30,32,37,42-44,46-48,58
-  s_cceac037056b6c::t_85e2a9c1104c66 64-74
-  s_cceac037056b6c::t_14e1f3b1b030f6 62-63
+  s_cceac037056b6c::t_2ffd80fc6f013b 1-125
+web/src/core/adapters/workspaces/module-scope.ts
+  s_bd3f6c4a14c515::t_bb887e3781d967 8,11,50,62
+web/src/core/factory.ts
+  s_de470e810ba21a::t_ff835b4bfd5a34 12,42-44,349-351,359,612-613,616-617,620
+web/src/core/model/kinds.ts
+  s_bd3f6c4a14c515::t_b2e1a7ba6350a6 210-217
+web/src/core/ports/integration.ts
+  s_de470e810ba21a::t_50a3ce1f403aa4 8,358-372
+web/src/core/runtime/commit-message.test.ts
+  s_cceac037056b6c::t_8a427d8d5763c2 1-15
 web/src/core/runtime/commit-message.ts
-  s_cceac037056b6c::t_e232c8d652037d 1-10,14-20,22-24
-  s_cceac037056b6c::t_0fd40984403e40 11-13,21
+  s_cceac037056b6c::t_fa70f56ba7e629 1-24
+web/src/core/runtime/publish.test.ts
+  s_cceac037056b6c::t_4f779d78c491c5 4,10,12-13,23-24,27-28,51-63
+web/src/core/runtime/publish.ts
+  s_cceac037056b6c::t_d5034447f7f7e0 3-4,16-18,42-46
+web/src/core/testing/host-committer.ts
+  s_cceac037056b6c::t_61dd8660697014 1-34
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.14",
   "base_commit_sha": "87ef8caa8d91d7abd93dc686042c3a2dbe65181a",
   "prompts": {},
-  "humans": {
-    "h_0f030e7424553c": {
-      "author": "Ron Gummich <ron.gummich@telekom.de>"
-    }
-  },
   "sessions": {
+    "s_bd3f6c4a14c515": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de73050cbffef7UimYw7YAIuzd",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
     "s_cceac037056b6c": {
       "agent_id": {
         "tool": "opencode",
         "id": "ses_decf20d64ffepVQNpGeWWhwxIb",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_de470e810ba21a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de391538bffeIFTK2Qa5Yqq9w0",
         "model": "claude-opus-5.5"
       },
       "human_author": "Ron Gummich <ron.gummich@telekom.de>"
