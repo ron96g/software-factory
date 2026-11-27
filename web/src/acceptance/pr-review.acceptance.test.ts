@@ -87,6 +87,12 @@ test("X72 pull request review (ADR-0094)", async (t) => {
     prompts.push(body.messages.map((m: { content?: string }) => m.content ?? "").join("\n"));
     const finish = (args: unknown) => Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "f", type: "function", function: { name: "finish", arguments: JSON.stringify(args) } }] } }] });
     if (system.includes("## Skill: code-review")) {
+      const called = (tool: string) => body.messages.some((m: { tool_calls?: { function: { name: string } }[] }) => m.tool_calls?.some((c) => c.function.name === tool));
+      const call = (tool: string, args: unknown) => Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: tool, type: "function", function: { name: tool, arguments: JSON.stringify(args) } }] } }] });
+      // ADR-0095 §7: the first answer is sent back unread (and contradicts itself); then the reviewer reads and acknowledges.
+      const firstTry = !called("finish");
+      if (!firstTry && !called("read_change")) return call("read_change", { paths: ["app.ts"] });
+      if (!firstTry && !called("acknowledge_change")) return call("acknowledge_change", { files: [{ path: "app.ts", outcome: "reviewed" }] });
       reviewerCalls++;
       const finding = { severity: "blocking", path: "app.ts", line: 1, message: "No test covers the new value." };
       // The first answer contradicts itself (accepted despite a blocking finding); the schema rejects it in the run.
@@ -129,14 +135,18 @@ test("X72 pull request review (ADR-0094)", async (t) => {
     await t.test("AC-2: the reviewer sees exactly the pull request's diff against its merge-base", async () => {
       d = await waitFor(async () => { const x = await detail(f, name); return x.workItem.status?.stage === "review-verdict" && x.workItem.status.phase === "AwaitingApproval" && x; }, "review-verdict");
       const reviewerPrompt = prompts.find((x) => x.includes("## Skill: code-review"))!;
-      assert.match(reviewerPrompt, /Pull request #7 in software-factory/);
-      assert.match(reviewerPrompt, /\+export const answer = 42; \/\/ fixed/);
-      assert.match(reviewerPrompt, /-export const answer = 41;/);
+      assert.match(reviewerPrompt, /Pull request #7 \(head [0-9a-f]{12}, base main\) — change manifest/);
+      assert.match(reviewerPrompt, /#### \(root\) \(1 files, \+1 −1\)\n\| file \| status \| lines \| segments \|\n\|---\|---\|---\|---\|\n\| app\.ts \| modified \| \+1 −1 \| 1 \|/);
+      const firstReviewerPrompt = prompts.find((x) => x.includes("## Skill: code-review"))!.split("\n## Tools for this run")[1];
+      assert.doesNotMatch(firstReviewerPrompt, /\+export const answer = 42;/, "the patch is not in the prompt; the reviewer reads it");
+      assert.match(prompts.filter((x) => x.includes("## Skill: code-review")).at(-1)!, /\+export const answer = 42; \/\/ fixed[\s\S]*-export const answer = 41;|-export const answer = 41;[\s\S]*\+export const answer = 42; \/\/ fixed/);
       assert.ok(d.artifacts.some((a) => a.spec.artifactTypeRef.name === "pr-review-report"));
     });
 
     await t.test("AC-2c: the verdict is accepted, partially accepted or rejected, and must agree with the findings", async () => {
-      assert.equal(reviewerCalls, 3, "a contradictory verdict, then a line outside the diff, were sent back in the same run");
+      assert.equal(reviewerCalls, 3, "an unread change with a contradictory verdict, then a line outside the diff, were sent back in the same run");
+      assert.ok(prompts.some((x) => /1 in-scope file\(s\) are not acknowledged[^\n]*app\.ts/.test(x)), "finishing without reading is rejected");
+      assert.ok(prompts.some((x) => /Findings name changed files you did not review: app\.ts/.test(x)), "a finding on an unread file is rejected");
       assert.match(prompts.at(-1)!, /findings\[1\] \(app\.ts:30\): app\.ts:30 is outside the changed hunks/);
       const report = JSON.parse(d.artifacts.find((a) => a.spec.artifactTypeRef.name === "pr-review-report")!.spec.content);
       assert.equal(report.verdict, "rejected");
@@ -145,10 +155,18 @@ test("X72 pull request review (ADR-0094)", async (t) => {
 
     await t.test("AC-2b: a plain-language explanation with a diagram and an example is ready at the gate, grounded in the diff", async () => {
       const explainerPrompt = prompts.find((x) => x.includes("## Skill: change-explanation"))!;
-      assert.match(explainerPrompt, /\+export const answer = 42;/, "the explainer sees the diff");
+      assert.match(explainerPrompt, /\| app\.ts \| modified \| \+1 −1 \| 1 \|/, "the explainer sees the change manifest");
+      assert.match(explainerPrompt, /`read_change`/, "and can read the change");
+      assert.doesNotMatch(explainerPrompt, /acknowledge_change/, "only the reviewer must acknowledge");
       const explanation = d.artifacts.find((a) => a.spec.artifactTypeRef.name === "pr-explanation");
       assert.match(explanation?.spec.content ?? "", /```mermaid[\s\S]*Worked example/);
       assert.match(prompts.find((x) => x.includes("## Skill: code-review"))!, /Worked example/, "the reviewer gets the explanation as input");
+    });
+
+    await t.test("AC-7: review coverage is computed from recorded reads and shown at the gate", async () => {
+      const item = d.evidence.items.find((i) => i.label.startsWith("Review coverage"));
+      assert.equal(item?.label, "Review coverage · review-change: 1 of 1 in-scope files reviewed");
+      assert.equal(item?.severity, "ok");
     });
 
     await t.test("AC-3: nothing is posted before approval; a verdict override outside the item or the permission is refused", async () => {
@@ -164,6 +182,7 @@ test("X72 pull request review (ADR-0094)", async (t) => {
       assert.equal(reviews[0].commit_id, repo.head);
       assert.match(reviews[0].body, /^## Verdict: Partially accepted\n\n_Set by [^;]+; the agent proposed Rejected\._[\s\S]*### Required changes\n- Add a test for answer/);
       assert.doesNotMatch(reviews[0].body, /mermaid/, "the explanation is for the human reviewer, not posted");
+      assert.match(reviews[0].body, /_Review coverage: 1 of 1 in-scope files reviewed\._/, "the PR author sees the coverage");
     });
 
     await t.test("AC-6: line findings are inline comments of the same review; file-level findings stay in its body", async () => {

@@ -1,3 +1,4 @@
+import type { ChangeReviewSessions } from "../../ports/index.ts";
 /**
  * ADR-0060: runs any model-backed AgentRun in the embedded OpenCode host, with the same factory semantics as the
  * tool loop (shared via run-harness): tool selection, guarded mutations, ToolServers, in-loop `finish` validation,
@@ -59,6 +60,8 @@ export interface OpenCodeExecutorDeps {
   egress?: EgressProxy;
   checks?: AgentCheckRequests;
   checkLogs?: AgentCheckLogReader;
+  /** ADR-0095 §7: `read_change` / `acknowledge_change` for review runs. */
+  changes?: ChangeReviewSessions;
   baseline?: AgentBaselineRequests;
   finish?: FinishValidator;
   offerings?: AgentToolOffering[];
@@ -148,6 +151,7 @@ export class OpenCodeExecutor implements AgentExecutor {
         ...(this.d.checks ? { checks: { run: (input) => this.d.checks!.run(ctx, input) } } : {}),
         ...(this.d.checkLogs ? { checkLogs: { read: (input) => this.d.checkLogs!.read(ctx, input) } } : {}),
         ...(this.d.baseline ? { baseline: { run: (input) => this.d.baseline!.runBaseline(ctx, input) } } : {}),
+        changes: this.d.changes?.session(ctx, { maxSteps: this.d.maxSteps ?? DEFAULT_MAX_STEPS }),
       };
       const selected = await selectTools(ctx, this.d.tools, this.d.offerings, all);
       if (selected.unavailable.length) {

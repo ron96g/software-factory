@@ -16,6 +16,7 @@ import {
   type PublicationProgress,
   type PullRequestReviewInput,
   type Redactor,
+  type ReviewCoverageReader,
   type ResourceReader,
   type SourceConnector,
   type SourceWritePolicy,
@@ -25,6 +26,11 @@ import { LABEL_REPLAY } from "../agents/replayer.ts";
 
 export const PR_REVIEW_ACTION = "pr-review";
 export const PR_REVIEW_REPORT = "pr-review-report";
+/** ADR-0095 §7: the verdict and finding paths the coverage rules check. */
+export const prReviewReportReader = (content: string) => {
+  const r = parsePrReviewReport(content);
+  return r ? { verdict: r.verdict, findingPaths: r.findings.map((f) => f.path) } : undefined;
+};
 /** Large enough for any reviewable pull request; findings in a truncated tail stay in the review body. */
 const DIFF_BYTES = 8 * 1024 * 1024;
 
@@ -95,7 +101,7 @@ const newest = <T extends { metadata: { creationTimestamp?: string } }>(list: T[
  * ADR-0094 `publish.prReview`: one review per approval of `reviewStage`, from the newest current report that existed
  * when the human approved it. The verdict is the human's override, else the agent's; the source's permission limits only the GitHub event.
  */
-export function prReviewPublisher(d: { reader: ResourceReader; outbox: Outbox; redactor: Redactor; diffs: CandidateDiffReader }): StagePublisher {
+export function prReviewPublisher(d: { reader: ResourceReader; outbox: Outbox; redactor: Redactor; diffs: CandidateDiffReader; coverage?: ReviewCoverageReader }): StagePublisher {
   return {
     async publish(wi: WorkItem, stage: CompiledStage): Promise<PublicationProgress> {
       const cfg = stage.publish?.prReview;
@@ -140,14 +146,20 @@ export function prReviewPublisher(d: { reader: ResourceReader; outbox: Outbox; r
       // Placed once, when the message is enqueued: the payload is what is posted on every retry.
       const inline = placeFindings(report, await reviewDiff(d.reader, d.diffs, wi));
       const by = override && override !== report.verdict ? approval.spec.decidedBy ?? "a human" : undefined;
+      // ADR-0095 §7: the PR author sees which files the factory did not review.
+      const producer = runs.find((r) => r.metadata.name === artifact.spec.producedBy?.agentRunRef.name);
+      const coverage = producer && await d.coverage?.coverage(producer);
+      const unreviewed = coverage?.files.filter((f) => f.state !== "reviewed") ?? [];
+      const coverageNote = coverage ? `\n\n---\n_Review coverage: ${coverage.summary}.${unreviewed.length
+        ? ` Not reviewed: ${unreviewed.slice(0, 30).map((f) => `\`${f.path}\`${f.reason ? ` (${f.reason})` : ""}`).join(", ")}${unreviewed.length > 30 ? `, … ${unreviewed.length - 30} more` : ""}.` : ""}_` : "";
       await d.outbox.enqueue({
         key, namespace: ns, source: sourceName, externalId: wi.spec.externalRef.id, action: PR_REVIEW_ACTION, owner: ownerRef(wi),
         payload: {
           commitSha: pr.headSha, event: GITHUB_EVENT[event], verdict: requested, marker,
           ...(event !== EVENT_FOR[requested] ? { downgradedFrom: EVENT_FOR[requested] } : {}),
-          body: d.redactor.redact(renderReviewBody(report, requested, by, inline)),
+          body: d.redactor.redact(renderReviewBody(report, requested, by, inline) + coverageNote),
           comments: [...inline].map((f) => { const c = toComment(f); return { ...c, body: d.redactor.redact(c.body) }; }),
-          fallbackBody: d.redactor.redact(renderReviewBody(report, requested, by, new Set())),
+          fallbackBody: d.redactor.redact(renderReviewBody(report, requested, by, new Set()) + coverageNote),
           artifact: { name: artifact.metadata.name, resourceVersion: artifact.metadata.resourceVersion },
         },
       });

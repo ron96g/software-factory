@@ -268,6 +268,8 @@ export interface ToolCapabilities {
   artifacts?: SandboxArtifacts;
   /** ADR-0080 §7: agent-initiated HTTP through the factory's allowlisted, audited egress proxy. */
   egress?: { fetch(req: import("./egress.ts").EgressRequest): Promise<import("./egress.ts").EgressResponse> };
+  /** ADR-0095 §7: read and acknowledge the reviewed change, recorded in the run's transcript. */
+  changes?: import("./change-review.ts").ChangeReviewSession;
 }
 
 /** Capabilities that require a sandbox runtime (ADR-0019). */

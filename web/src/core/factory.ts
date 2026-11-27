@@ -87,8 +87,8 @@ import { ExplainResponder } from "./agents/explain-responder.ts";
 import { ItemExplainResponder } from "./agents/item-explain-responder.ts";
 import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
 import { GithubConnector, GithubPullRequestConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
-import { PR_REVIEW_ACTION, prReviewArtifactCheck, prReviewHandler, prReviewPolicy, prReviewPublisher } from "./reviews/pr-review.ts";
-import { pullRequestContext } from "./agents/pull-request-context.ts";
+import { PR_REVIEW_ACTION, PR_REVIEW_REPORT, prReviewReportReader, prReviewArtifactCheck, prReviewHandler, prReviewPolicy, prReviewPublisher } from "./reviews/pr-review.ts";
+import { ChangeReviewService } from "./reviews/change-review.ts";
 import { followUpOriginResolver } from "./issues/origin.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
@@ -459,6 +459,8 @@ export async function createFactory(o: FactoryOptions) {
   const proposedChecks = new Registry<ProposedArtifactCheck>();
   const artifactChecks = new Registry<ArtifactCheck>();
   const candidateDiffs = new GitCandidateDiff();
+  // ADR-0095 §7: reviews get a change manifest and read/acknowledge each file; coverage is checked at finish.
+  const changeReview = new ChangeReviewService({ diffs: candidateDiffs, transcripts, readers: workspaceReaders, reports: { [PR_REVIEW_REPORT]: prReviewReportReader } });
   const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck, prReviewArtifactCheck({ reader: store, diffs: candidateDiffs })].map((check) => [check.artifactType, check]));
   const registerArtifactChecks = async () => {
     const artifactTypes = await store.list<ArtifactType>("ArtifactType");
@@ -479,7 +481,7 @@ export async function createFactory(o: FactoryOptions) {
       unitContext({ ledger: units, compiler, redactor, attempts: new CompletedUnitAttempts(store) }),
       recoveryContext({ reader: store, redactor }),
       outputFeedbackContext({ reader: store, redactor }), baseConflictProvider(), citedCodeContext(workspaceReaders),
-      pullRequestContext(candidateDiffs)],
+      changeReview],
     models,
     recorders,
     environments,
@@ -498,7 +500,7 @@ export async function createFactory(o: FactoryOptions) {
   const opencode = agentRuntime === "opencode"
     ? new OpenCodeHost({ dataDir: agentRuntimeDir, fetch: o.fetch, route: o.fetch ? undefined : describeProxy(o.env ?? process.env), log: (msg) => (o.log ?? console.error)(msg) })
     : undefined;
-  const finishValidator: FinishValidator = { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx)] };
+  const finishValidator: FinishValidator = { validate: async (ctx, result) => [...await outputFinish.validate(ctx, result), ...await checkFinish.validate(ctx), ...await changeReview.validate(ctx, result)] };
   // ADR-0080 §2 (S2-a/b): the `AgentRuntime` path. Off unless a backend is selected; when on, the runtime hosts the
   // loop and the workspace (the tool loop first — S4 moves OpenCode in). `bwrap` is a real backend.
   const agentRuntimes = new Registry<AgentRuntime>();
@@ -529,6 +531,7 @@ export async function createFactory(o: FactoryOptions) {
         checks: { run: (input) => verification.run(ctx, input) },
         checkLogs: { read: (input) => verification.read(ctx, input) },
         baseline: { run: (input) => verification.runBaseline(ctx, input) },
+        changes: changeReview.session(ctx),
       };
     };
     runtimeExecutor = new AgentRuntimeExecutor({
@@ -539,7 +542,7 @@ export async function createFactory(o: FactoryOptions) {
       mirrorsDir: join(agentRuntimeDir, "mirrors"),
       capabilities: runtimeCapabilities,
       toolProvider,
-      offerings: [verification],
+      offerings: [verification, changeReview],
       controlServer: createRunControlServerFactory({ proxy: modelProxy }),
       finish: finishValidator,
     });
@@ -558,8 +561,9 @@ export async function createFactory(o: FactoryOptions) {
       toolProvider,
       checks: verification,
       baseline: verification,
-      offerings: [verification],
+      offerings: [verification, changeReview],
       checkLogs: verification,
+      changes: changeReview,
       jobs,
       egress,
       finish: finishValidator,
@@ -575,8 +579,9 @@ export async function createFactory(o: FactoryOptions) {
       turns: recordedTurns,
       checks: verification,
       baseline: verification,
-      offerings: [verification],
+      offerings: [verification, changeReview],
       checkLogs: verification,
+      changes: changeReview,
       jobs,
       egress,
       finish: finishValidator,
@@ -670,7 +675,7 @@ export async function createFactory(o: FactoryOptions) {
   // ADR-0084: stage publication blocks beyond the built-in pull request.
   const publishers = new Registry<StagePublisher>();
   publishers.register("issue", storyPublisher({ reader: store, writer: store, redactor, clock, factoryUrl: env.FACTORY_PUBLIC_URL }));
-  publishers.register("prReview", prReviewPublisher({ reader: store, outbox, redactor, diffs: candidateDiffs }));
+  publishers.register("prReview", prReviewPublisher({ reader: store, outbox, redactor, diffs: candidateDiffs, coverage: changeReview }));
   const agentRunController = createAgentRunController({
     reader: store, writer: store, status: store, events, clock, contexts, executor, recorders, redactor,
     feedback: feedbackCapture,
@@ -718,6 +723,7 @@ export async function createFactory(o: FactoryOptions) {
   for (const [name, detector] of Object.entries(BUILTIN_CAPABILITY_DETECTORS)) capabilities.register(name, detector);
   const app = new FactoryApp({
     capabilities,
+    coverage: changeReview,
     approvalGuards: [retrospectiveReview],
     verificationGuard: verification,
     role,

@@ -93,6 +93,7 @@ import type {
 } from "../ports/index.ts";
 import { isStoreError, StoreError } from "../ports/index.ts";
 import { LABEL_WORKITEM } from "../runtime/event-recorder.ts";
+import type { ReviewCoverage, ReviewCoverageReader } from "../ports/index.ts";
 import { deriveGateEvidence } from "./gate-evidence.ts";
 import { renderFollowUpTicketBody, templateFollowUpTicketBody } from "../issues/followup-body.ts";
 import { originOf } from "../issues/origin.ts";
@@ -102,6 +103,8 @@ import { fingerprint, followUpPreview, FOLLOW_UP_INPUT, LABEL_ORIGIN_UID } from 
 import { feedbackViews, planFeedbackSubmission } from "./feedback.ts";
 
 export interface FactoryAppDeps {
+  /** ADR-0095 §7: review coverage shown as gate evidence. */
+  coverage?: ReviewCoverageReader;
   approvalGuards?: ApprovalDecisionGuard[];
   verificationGuard?: VerificationApprovalGuard;
   reader: ResourceReader;
@@ -220,7 +223,14 @@ export class FactoryApp
         // a broken workflow is surfaced through the item's status
       }
     }
-    const evidence = deriveGateEvidence({ runs, events, clarifications, artifacts, verified });
+    const coverage = new Map<string, ReviewCoverage>();
+    if (this.d.coverage) {
+      for (const r of runs.filter((r) => !r.spec.replayOf && r.status?.phase === "Succeeded")) {
+        const c = await this.d.coverage.coverage(r);
+        if (c) coverage.set(r.metadata.name, c);
+      }
+    }
+    const evidence = deriveGateEvidence({ runs, events, clarifications, artifacts, verified, coverage });
     const knowledge = await this.d.reader.list<KnowledgeEntry>("KnowledgeEntry", { namespace: this.ns, labelSelector: { [LABEL_WORKITEM]: name } });
     const repositories = await Promise.all([...new Set(workspaces.map((w) => w.spec.repositoryRef.name))].map(async (repo) => {
       const resolved = await resolveRef<Repository>(this.d.reader, "Repository", { name: repo }, this.ns);

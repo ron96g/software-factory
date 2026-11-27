@@ -12,9 +12,12 @@ import type { Plugin } from "@opencode/plugin";
 import type { BoundTool, ModelEndpoint, NewTranscriptMessage, ShellConfiner, ToolSchema, TranscriptRecorder } from "../../ports/index.ts";
 import { ModelUnavailableError } from "../../ports/index.ts";
 import { FINISH, WRAP_UP_WARNING, lastStepNotice, wrapUpWarning } from "../../agents/run-harness.ts";
+import { CHANGE_TOOLS } from "../../reviews/change-review.ts";
 import { PROVIDER_PACKAGES, SAFE_ENV, UNAVAILABLE_STATUS, type PermissionRule } from "./mapping.ts";
 import { ensureProxyDispatcher } from "../http/proxy.ts";
 import { discoverSkills, type DiscoveredSkill } from "./skills.ts";
+
+const DIRECT_TOOLS = new Set<string>([FINISH.name, ...CHANGE_TOOLS]);
 
 type Host = Awaited<ReturnType<typeof OpenCode.create>>;
 type PluginContext = Plugin.Context;
@@ -304,8 +307,9 @@ export class OpenCodeHost {
               name: schema.name,
               description: schema.description,
               input: schema.parameters as never,
-              // ADR-0078 §3: factory and MCP tools run in Code Mode; `finish` stays direct for last-step enforcement.
-              options: { codemode: schema.name !== FINISH.name },
+              // ADR-0078 §3: factory and MCP tools run in Code Mode; `finish` stays direct for last-step enforcement, and the
+              // review tools stay direct so a diff reaches the model instead of a program that filters it (ADR-0095 §7).
+              options: { codemode: !DIRECT_TOOLS.has(schema.name) },
               execute: async (input: unknown, tc: { sessionID: string }) => ({ content: await host.invoke(schema.name, (input ?? {}) as Record<string, unknown>, tc.sessionID) }) as never,
             });
           }

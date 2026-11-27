@@ -1083,6 +1083,14 @@ spec:
                   required:
                     - graph
                     - sharedPaths
+                review:
+                  type: object
+                  properties:
+                    generatedPaths:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
                 verification:
                   type: object
                   properties:

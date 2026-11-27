@@ -1,6 +1,6 @@
 import type { AgentRun, Artifact, Clarification, FactoryEvent } from "../model/kinds.ts";
 import { LABEL_SUPERSEDED } from "../model/kinds.ts";
-import type { EvidenceItem, EvidenceSeverity, GateEvidence } from "../ports/index.ts";
+import type { EvidenceItem, EvidenceSeverity, GateEvidence, ReviewCoverage } from "../ports/index.ts";
 
 /** Outcome → severity. Unknown outcomes are informational (ok). */
 const OUTCOME_SEVERITY: Record<string, EvidenceSeverity> = {
@@ -28,7 +28,7 @@ export function parseVerdict(text: string | undefined): "pass" | "partial" | "fa
   return v.startsWith("pass") ? "pass" : v.startsWith("fail") ? "fail" : "partial";
 }
 
-export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[]; artifacts?: Artifact[]; verified?: boolean }): GateEvidence {
+export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEvent[]; clarifications: Clarification[]; artifacts?: Artifact[]; verified?: boolean; coverage?: Map<string, ReviewCoverage> }): GateEvidence {
   const items: EvidenceItem[] = [];
   const restart = input.verified && input.events.filter((event) => event.spec.reason === "Restarted").at(-1)?.metadata.creationTimestamp;
   const events = restart ? input.events.filter((event) => !event.metadata.creationTimestamp || event.metadata.creationTimestamp >= restart) : input.events;
@@ -80,6 +80,23 @@ export function deriveGateEvidence(input: { runs: AgentRun[]; events: FactoryEve
         ...(input.artifacts ?? []).filter((a) => a.spec.producedBy?.agentRunRef.name === r.metadata.name)
           .map((a) => ({ name: a.metadata.name, type: a.spec.artifactTypeRef.name, role: "output" as const })),
       ],
+    });
+  }
+
+  // ADR-0095 §7: what the reviewer actually read. Skipped or unacknowledged in-scope files are a warning.
+  for (const r of latest.values()) {
+    const c = input.coverage?.get(r.metadata.name);
+    if (!c) continue;
+    const gaps = c.files.filter((f) => f.state !== "reviewed");
+    items.push({
+      severity: gaps.length ? "warning" : "ok",
+      label: `Review coverage · ${r.spec.step}: ${c.summary}`,
+      detail: [
+        gaps.length ? `Not reviewed: ${gaps.slice(0, 40).map((f) => `${f.path} (${f.reason ?? f.state})`).join(", ")}${gaps.length > 40 ? `, … ${gaps.length - 40} more` : ""}` : "Every in-scope changed file was read and acknowledged.",
+        c.generated?.length ? `Excluded as generated: ${c.generated.slice(0, 80).join(", ")}${c.generated.length > 80 ? `, … ${c.generated.length - 80} more` : ""}` : "",
+      ].filter(Boolean).join("\n"),
+      stage: r.spec.stage,
+      runName: r.metadata.name,
     });
   }
 

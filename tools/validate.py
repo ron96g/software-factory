@@ -164,6 +164,13 @@ def main():
                 else:
                     errors.append(message)
 
+        review = spec.get("review")
+        if review is not None:
+            paths = review.get("generatedPaths") if isinstance(review, dict) else None
+            if not isinstance(review, dict) or set(review) - {"generatedPaths"} or (
+                    paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths))):
+                errors.append(f"{path}: {name}: review must be {{generatedPaths: [glob, ...]}} (ADR-0095 §7)")
+
         for entry in policy.get("autoWaive") or []:
             if entry.get("check") not in (policy.get("waivableChecks") or []):
                 errors.append(f"{path}: {name}: autoWaive check '{entry.get('check')}' must be in waivableChecks")

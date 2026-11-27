@@ -238,6 +238,11 @@ export interface RepositorySpec {
   checks?: Record<string, string | { command: string; timeoutMs?: number; maxOutputBytes?: number; resultFormat?: string; scoped?: boolean; moduleScoped?: boolean; rerunFailed?: string }>;
   /** Repository-maintained dependency graph: module name → {path, depends_on}. Shared paths are repository-relative globs. */
   moduleScope?: { graph: string; sharedPaths: string[]; nonBuildPaths?: string[] };
+  /**
+   * ADR-0095 §7: review scope. `generatedPaths`: repository-relative globs of generated files that carry no
+   * `Code generated … DO NOT EDIT` header (e.g. a generated GraphQL schema); they are outside review scope.
+   */
+  review?: { generatedPaths?: string[] };
   verification?: { requiredChecks: string[]; preflightChecks: string[]; preparationChecks?: string[]; waivableChecks?: string[];
     /** ADR-0067: Git-declared policy waivers; each check must also be in `waivableChecks`. Verify stage only. */
     autoWaive?: AutoWaive[];

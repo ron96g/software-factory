@@ -45,6 +45,13 @@ const str = (v: unknown, name: string): string => {
   if (typeof v !== "string" || !v) throw new Error(`argument "${name}" (string) is required`);
   return v;
 };
+/** `paths` (array), tolerating a single `path` string from models that ignore the schema. */
+const pathList = (a: Record<string, unknown>): string[] => {
+  const v = a.paths ?? a.path;
+  const list = Array.isArray(v) ? v : typeof v === "string" ? [v] : [];
+  if (!list.length || !list.every((p) => typeof p === "string" && p)) throw new Error('argument "paths" (array of strings) is required');
+  return list as string[];
+};
 const need = <T>(cap: T | undefined, what: string): T => {
   if (!cap) throw new Error(`tool needs sandbox capability "${what}"`);
   return cap;
@@ -92,6 +99,33 @@ export const SANDBOX_TOOLS: AgentTool[] = [
           check: { type: "string", description: "Approved bare check name or matching repository/check, e.g. focused-tests or controlplane/focused-tests" },
           requestId: { type: "string", description: "Stable identity; reuse when polling the same check" } }, required: ["workspace", "check", "requestId"] } },
       invoke: async (a) => JSON.stringify(await checks.run({ workspace: str(a.workspace, "workspace"), check: str(a.check, "check"), requestId: str(a.requestId, "requestId") })),
+    };
+  }),
+  tool({ name: "read_change", readOnly: true, capabilities: ["changes"], description: "Read changed files' diffs from the change manifest",
+    guidance: "Read several changed files at once, module by module: { \"paths\": [\"a/x.go\", \"a/y.go\"] }. It returns as many segments as fit and ends with where to continue, e.g. { \"paths\": [\"a/y.go\"], \"from\": 3 }. Every read is recorded." }, (caps) => {
+    const changes = need(caps.changes, "changes");
+    return {
+      schema: { name: "read_change", description: "Return the diffs of changed files listed in the change manifest, in order, as many segments as fit. `from` continues a single file at a segment.",
+        parameters: { type: "object", properties: {
+          paths: { type: "array", items: { type: "string" }, minItems: 1, description: "Changed file paths (repository:path when several repositories)" },
+          from: { type: "integer", minimum: 1, description: "First segment to read; only with a single path" } }, required: ["paths"] } },
+      invoke: async (a) => changes.read({ paths: pathList(a), from: lineArg(a.from, "from") }),
+    };
+  }),
+  tool({ name: "acknowledge_change", readOnly: true, capabilities: ["changes"], description: "Acknowledge changed files as reviewed or skipped",
+    guidance: "After reading all segments of in-scope files, acknowledge them together: { \"files\": [{ \"path\": \"a/x.go\", \"outcome\": \"reviewed\" }, { \"path\": \"a/y.go\", \"outcome\": \"skipped\", \"reason\": \"budget-exhausted\" }] }. Each file is applied or refused on its own. finish is rejected while an in-scope file is unacknowledged." }, (caps) => {
+    const changes = need(caps.changes, "changes");
+    return {
+      schema: { name: "acknowledge_change", description: "Record that changed files were reviewed (all their segments read with read_change) or skipped with a reason.",
+        parameters: { type: "object", properties: { files: { type: "array", minItems: 1, items: { type: "object", properties: {
+          path: { type: "string" }, outcome: { type: "string", enum: ["reviewed", "skipped"] },
+          reason: { type: "string", enum: ["mechanical-rename", "generated", "delegated", "budget-exhausted"], description: "Required when skipped" },
+          note: { type: "string" } }, required: ["path", "outcome"] } } }, required: ["files"] } },
+      invoke: async (a) => {
+        if (!Array.isArray(a.files) || !a.files.length) throw new Error('argument "files" (non-empty array) is required');
+        return changes.acknowledge({ files: a.files.map((f: Record<string, unknown>) => ({ path: str(f?.path, "files[].path"), outcome: str(f?.outcome, "files[].outcome"),
+          reason: typeof f.reason === "string" ? f.reason : undefined, note: typeof f.note === "string" ? f.note : undefined })) });
+      },
     };
   }),
   tool({ name: "search_code", readOnly: true, capabilities: ["search"], description: "Search the workspace code",

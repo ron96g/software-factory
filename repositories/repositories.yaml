@@ -121,6 +121,10 @@ spec:
   context:
     docs: [AGENTS.md, README.md]
   sandboxRef: { name: go-build }
+  # ADR-0095 §7: generated files without a `Code generated … DO NOT EDIT` header (entgql writes ent.graphql from the
+  # ent schemas, controlplane-api/ent/entc/entc.go). Headered generated files are recognised without configuration.
+  review:
+    generatedPaths: ["controlplane-api/ent.graphql"]
   moduleScope:
     graph: .github/ci/module-graph.json
     # ADR-0089: dependency manifests scope to their owning module (the graph supplies the transitive dependents), and the

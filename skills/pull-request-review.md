@@ -9,7 +9,15 @@ spec:
 
 # Pull Request Review
 
-The change is the pull request's diff (given as context); its description is the spec. There is no approved plan.
+The change is the pull request's diff; its description is the spec. There is no approved plan.
+
+0. **Read the change yourself (ADR-0095).** Your context has a *change manifest*: every changed file with its size and
+   review scope, grouped by module, but no patch. Generated files are already out of scope. Work module by module:
+   read the module's files together with `read_change({ paths: [...] })` (continue where it says), check surrounding
+   code with `read_file`/`search_code`, then acknowledge them together with `acknowledge_change({ files: [...] })`
+   (`reviewed`, or `skipped` with a reason). Only write findings about files you reviewed. Read every file you can: each
+   result tells you the steps left, and `budget-exhausted` is accepted only in the last 3 steps. Then acknowledge the
+   rest as `budget-exhausted`, say so in `rationale`, and do not choose `accepted`.
 
 1. Review only what the diff changes, plus code it breaks. Pre-existing problems are at most `non-blocking`.
 2. **Line references** become inline comments on the pull request, combined with the verdict into one review:

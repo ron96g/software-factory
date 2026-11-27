@@ -1,3 +1,4 @@
+import type { ChangeReviewSessions } from "../ports/index.ts";
 import {
   canCallTools,
   type AgentExecutor,
@@ -56,6 +57,8 @@ export interface ToolLoopDeps {
   maxSteps?: number;
   checks?: AgentCheckRequests;
   checkLogs?: AgentCheckLogReader;
+  /** ADR-0095 §7: `read_change` / `acknowledge_change` for review runs. */
+  changes?: ChangeReviewSessions;
   baseline?: AgentBaselineRequests;
   /** ADR-0057: checks the result when the agent calls `finish`, so it can correct it in the same conversation. */
   finish?: FinishValidator;
@@ -158,6 +161,8 @@ export class ToolLoopExecutor implements AgentExecutor {
     if (this.d.checks) all = { ...all, checks: { run: (input) => this.d.checks!.run(ctx, input) } };
     if (this.d.checkLogs) all = { ...all, checkLogs: { read: (input) => this.d.checkLogs!.read(ctx, input) } };
     if (this.d.baseline) all = { ...all, baseline: { run: (input) => this.d.baseline!.runBaseline(ctx, input) } };
+    const changes = this.d.changes?.session(ctx, { maxSteps: this.d.maxSteps ?? DEFAULT_MAX_STEPS });
+    if (changes) all = { ...all, changes };
     let prompt = initialPrompt;
     const model = ctx.model!;
     if (!canCallTools(model.client)) throw new Error("model does not support tool calling");

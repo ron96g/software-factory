@@ -31,3 +31,4 @@ export * from "./agent-runtime.ts";
 export * from "./run-tool-surface.ts";
 export * from "./metrics.ts";
 export * from "./toolchain.ts";
+export * from "./change-review.ts";
