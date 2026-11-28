@@ -1,0 +1,107 @@
+web/src/core/agents/prompt-builder.ts
+  s_de470e810ba21a::t_d9049a9422e035 2,42-44
+  s_de470e810ba21a::t_ef07f4e93793f7 45-52,86
+web/src/core/gate-evidence.test.ts
+  s_de470e810ba21a::t_ef141400491a51 124-126
+  s_de470e810ba21a::t_5b366145f69736 117-118
+workflows/factory-plan.yaml
+  s_de470e810ba21a::t_76bea7aeb2578c 129
+web/src/core/reviews/change-manifest.test.ts
+  s_de470e810ba21a::t_b4d27276a3e2fd 6,107
+  s_de470e810ba21a::t_d020b01354a89b 104
+  s_de470e810ba21a::t_a92238f78791c0 231-266
+docs/ai-dlc-glossary.md
+  s_de470e810ba21a::t_ad6f2504386057 231
+  s_48ae375a53b906::t_1f6a4dbe7fa00d 233-235
+  s_fb30c2878b1b29::t_69e3b5bd7d24b8 236
+skills/code-review.md
+  s_de470e810ba21a::t_2f3bb0e5acf5c5 15-17,26
+web/src/core/adapters/workspaces/working-tree-diff.test.ts
+  s_de470e810ba21a::t_bdcce3e74b5b80 1-30,32-46
+  s_de470e810ba21a::t_1a1ecce545d515 31
+artifacts/code-review-report.yaml
+  s_de470e810ba21a::t_76bea7aeb2578c 1-41
+web/src/ui/artifact-content.ts
+  s_de470e810ba21a::t_fbdf8a9fea10ce 4,32-36,39
+web/src/core/review-loop.test.ts
+  s_de470e810ba21a::t_ad9cb228b5e3fc 23-26
+AGENTS.md
+  s_fb30c2878b1b29::t_ddc08105a01aec 254
+  s_48ae375a53b906::t_4bb2a6ef3dd8af 255
+  s_de470e810ba21a::t_ad6f2504386057 253
+docs/adr/0096-ci-status-as-pull-request-review-evidence.md
+  s_fb30c2878b1b29::t_2d995cfcc5364e 130-131
+web/src/core/agents/builtin-skills.ts
+  s_de470e810ba21a::t_a52b42093aa23a 60-62,77
+web/src/core/tool-loop.test.ts
+  s_de470e810ba21a::t_5b366145f69736 35-38
+  s_de470e810ba21a::t_ef141400491a51 47-49
+web/src/core/ports/agents.ts
+  s_de470e810ba21a::t_d9049a9422e035 105-112
+web/src/core/reviews/code-review-report.ts
+  s_de470e810ba21a::t_7af3db80b50b74 42-45
+  s_de470e810ba21a::t_7637e2d1d881ce 1-41
+web/src/core/adapters/workspaces/module-scope.ts
+  s_de470e810ba21a::t_d617a3acd6e144 97-98,103-108,131-133,136
+  s_de470e810ba21a::t_1ab1aa570f25b9 3-5,99-102,109-130,134-135
+docs/adr/0097-review-discussion-as-pull-request-review-evidence.md
+  s_fb30c2878b1b29::t_7fd860a443a304 1-173
+docs/adr/0095-context-index-and-on-demand-artifacts.md
+  s_de470e810ba21a::t_ad6f2504386057 175-181,185-192
+  s_48ae375a53b906::t_49e8d0860e10a0 3
+  s_de470e810ba21a::t_ef07f4e93793f7 182-184
+web/src/core/reviews/change-review.ts
+  s_de470e810ba21a::t_ef07f4e93793f7 66-69
+  s_de470e810ba21a::t_0ab950a5c3533d 31-32
+  s_de470e810ba21a::t_3bdc6ec3b5a392 3,6,39,41-42,50-65,70-71,74,82,84,86-87,91,98,102,111,194,198-200,247,249-250,264,266,268
+  s_de470e810ba21a::t_4cfad4dcfb27c8 252-253,256,259
+docs/adr/0098-parallel-specialist-review.md
+  s_48ae375a53b906::t_a72bd8077358cc 1-26,65,72-93,105,107,113,120-135,137,139-141,150-168
+  s_48ae375a53b906::t_d78d173f0bac95 27-64,66-71
+  s_48ae375a53b906::t_d744e5fa94b303 94-104,106,108-112,114-119
+  s_48ae375a53b906::t_075d8e143476cf 136,138,142-149
+web/src/core/factory.ts
+  s_de470e810ba21a::t_d020b01354a89b 124,464-465,492
+  s_de470e810ba21a::t_7af3db80b50b74 92,594
+web/src/core/agent-runtime-workflow.test.ts
+  s_de470e810ba21a::t_ad9cb228b5e3fc 47
+docs/security.md
+  s_de470e810ba21a::t_f1a6e960d75f66 267-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "59771b3bb9100055614cda4c15f64288e8ce7bcd",
+  "prompts": {},
+  "humans": {
+    "h_0f030e7424553c": {
+      "author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  },
+  "sessions": {
+    "s_48ae375a53b906": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de3d04064ffet3ohuxDVSKQRbF",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_de470e810ba21a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de391538bffeIFTK2Qa5Yqq9w0",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    },
+    "s_fb30c2878b1b29": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_de3cf6876ffekv3jAFun2RVKjB",
+        "model": "claude-opus-5.5"
+      },
+      "human_author": "Ron Gummich <ron.gummich@telekom.de>"
+    }
+  }
+}
