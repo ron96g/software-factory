@@ -20,7 +20,10 @@ function fakeLLM(reviewOutcomes: string[]) {
         summary: outcome === "approve" ? "LGTM" : "Missing test for the empty case",
         outcome,
         questions: [],
-        artifacts: [{ type: "code-review-report", content: outcome === "approve" ? "No blocking findings." : "BLOCKING: add a test for the empty case (web/src/x.ts:12)." }],
+        artifacts: [{ type: "code-review-report", content: JSON.stringify(outcome === "approve"
+          ? { verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }
+          : { verdict: "changes-requested", summary: "The change misses a test for the empty case.",
+              findings: [{ severity: "blocking", path: "web/src/x.ts", line: 12, message: "No test covers the empty case.", fix: "Add a test for the empty input." }] }) }],
       };
     }
     return Response.json({ choices: [{ message: { content: JSON.stringify(out) } }] });

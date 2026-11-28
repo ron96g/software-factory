@@ -102,6 +102,14 @@ export interface Prompt {
   user: string;
 }
 
+/**
+ * Replaces how an input artifact appears in a prompt, e.g. a diff a review step must read on demand instead
+ * (ADR-0095 §7). Undefined keeps the artifact's content. Must be synchronous and side-effect free.
+ */
+export interface InputView {
+  view(ctx: ExecutionContext, input: import("../model/kinds.ts").Artifact): string | undefined;
+}
+
 export interface PromptBuilder {
   /** `json`: answer with one JSON object; `tools`: work with tools and finish via the `finish` tool. */
   build(ctx: ExecutionContext, mode?: "json" | "tools"): Prompt;

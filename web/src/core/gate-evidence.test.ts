@@ -114,12 +114,16 @@ test("X5: a failed verification can't be approved by accident (server-enforced o
       // tool-loop agents (developer, verifier) finish immediately; the verifier reports a failing verdict
       const args = system.includes("## Skill: verification")
         ? { summary: "Acceptance criterion 2 violated", outcome: "fail", artifacts: [{ type: "verification-report", content: "**Verdict: FAIL**" }] }
+        : system.includes("## Skill: code-review")
+        ? { summary: "No blocking findings.", outcome: "approve", artifacts: [{ type: "code-review-report", content: JSON.stringify({ verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }) }] }
         : { summary: "done" };
       return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "f", type: "function", function: { name: "finish", arguments: JSON.stringify(args) } }] } }] });
     }
     const out = system.includes("## Skill: verification")
       ? { summary: "Acceptance criterion 2 violated", outcome: "fail", artifacts: [{ type: "verification-report", content: "**Verdict: FAIL**" }], questions: [] }
-      : { summary: "ok", outcome: system.includes("## Skill: code-review") ? "approve" : "accept", artifacts: [], questions: [] };
+      : system.includes("## Skill: code-review")
+      ? { summary: "ok", outcome: "approve", artifacts: [{ type: "code-review-report", content: JSON.stringify({ verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }) }], questions: [] }
+      : { summary: "ok", outcome: "accept", artifacts: [], questions: [] };
     return Response.json({ choices: [{ message: { content: JSON.stringify(out) } }] });
   }) as typeof fetch;
   const f = await createFactory({ definitionsRoot: resolve(import.meta.dirname, "../../.."), definitionLoader: testDefinitions(), databasePath: ":memory:", env: { FACTORY_AGENT_RUNTIME: "tool-loop", OPENAI_API_KEY: "sk-test-123456", FACTORY_SANDBOX_RUNTIME: "in-memory" }, fetch: fetchImpl, sandboxes: [new InMemorySandboxEnvironment()], log: () => {} });

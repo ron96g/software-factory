@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, matchesGlob, relative } from "node:path";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, matchesGlob, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ModuleCheckScope, ModuleScopeMode, Repository, Workspace } from "../../model/kinds.ts";
 import { StoreError, type CandidateChanges, type CandidateDiffReader, type ModuleScopePlanner } from "../../ports/index.ts";
@@ -92,6 +93,46 @@ export class GitCandidateDiff implements CandidateDiffReader {
     return { stat, patch: truncated ? Buffer.from(full).subarray(0, maxBytes).toString("utf8") : full, truncated };
   }
 }
+
+/**
+ * ADR-0095 §7: a factory candidate is the working tree (committed, staged, unstaged and untracked) against the pinned
+ * base. The workspace is agent-writable, so its repository is never used as the git directory here: a scratch git
+ * directory owned by the factory (its own config, no attributes source) borrows the workspace's objects and indexes its
+ * working tree. No `filter.*`/`diff.*` driver from the workspace config or `.gitattributes` can run (SEC-2), and the
+ * workspace's index, object store and config stay untouched.
+ */
+export class GitWorkingTreeDiff implements CandidateDiffReader {
+  async diff(workspace: Workspace, maxBytes: number) {
+    const cwd = workspace.status?.path;
+    const baseCommit = workspace.status?.baseCommit;
+    if (!cwd || !baseCommit || !/^[a-f0-9]{40,64}$/.test(baseCommit)) throw new StoreError("a diff requires a workspace path and pinned baseCommit", "Invalid");
+    const root = await realpath(cwd);
+    // Locating the object store reads the workspace's git metadata but runs nothing from it.
+    const objects = resolve(root, (await exec("git", [...GIT_HARDENING, "rev-parse", "--git-path", "objects"], { cwd: root, env: gitLocalEnv() })).stdout.trim());
+    const scratch = await mkdtemp(join(tmpdir(), "factory-candidate-diff-"));
+    try {
+      const gitDir = join(scratch, "git");
+      const env = {
+        ...gitLocalEnv(),
+        GIT_DIR: gitDir, GIT_WORK_TREE: root, GIT_INDEX_FILE: join(scratch, "index"),
+        GIT_OBJECT_DIRECTORY: join(gitDir, "objects"), GIT_ALTERNATE_OBJECT_DIRECTORIES: objects,
+        // Attributes come from the empty tree, never from the candidate's .gitattributes (git ≥ 2.40).
+        GIT_ATTR_SOURCE: EMPTY_TREE, GIT_OPTIONAL_LOCKS: "0",
+      } as unknown as NodeJS.ProcessEnv;
+      const git = async (args: string[]) => (await exec("git", [...GIT_HARDENING, ...args], { cwd: root, env, maxBuffer: maxBytes + 1024 * 1024 })).stdout;
+      await exec("git", ["init", "-q", "--bare", gitDir], { env: gitLocalEnv() });
+      await git(["read-tree", baseCommit]);
+      await git(["add", "-A", "--", "."]);
+      const patch = await git(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", baseCommit, "--"]);
+      const truncated = Buffer.byteLength(patch) > maxBytes;
+      return { stat: "", patch: truncated ? Buffer.from(patch).subarray(0, maxBytes).toString("utf8") : patch, truncated };
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  }
+}
+
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /** Reuse the repository's CI graph; Git reads include the full candidate, not just its last commit. */
 export class GitModuleScopePlanner implements ModuleScopePlanner {

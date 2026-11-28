@@ -1,0 +1,41 @@
+apiVersion: factory.ai-dlc.io/v1alpha1
+kind: ArtifactType
+metadata: { name: code-review-report }
+spec:
+  format: json
+  description: >
+    The AI review of a factory candidate (ADR-0083 X63c, ADR-0095 §7): a verdict that drives the review→fix loop and
+    findings that name the changed file they are about. Coverage is not part of the report; the factory derives it from
+    the reviewer's recorded reads and acknowledgements.
+  schema:
+    version: "1"
+    jsonSchema:
+      $schema: https://json-schema.org/draft/2020-12/schema
+      type: object
+      additionalProperties: false
+      required: [verdict, summary, findings]
+      properties:
+        verdict: { enum: [approve, changes-requested], description: 'Also the step outcome.' }
+        summary: { type: string, minLength: 20, maxLength: 4000, pattern: '\S', description: 'What the candidate does and how it relates to the plan.' }
+        findings:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [severity, path, message]
+            properties:
+              severity: { enum: [blocking, non-blocking] }
+              path: { type: string, minLength: 1, maxLength: 400, description: 'Repository path of the file the finding is about.' }
+              line: { type: integer, minimum: 1, description: 'Line in the candidate version; omit for file-level findings.' }
+              message: { type: string, minLength: 5, maxLength: 2000, description: 'What is wrong and why.' }
+              fix: { type: string, maxLength: 2000, description: 'For blocking findings: what to change and how to verify it.' }
+      allOf:
+        - if: { properties: { verdict: { const: approve } } }
+          then:
+            properties:
+              findings: { type: array, not: { type: array, contains: { type: object, properties: { severity: { const: blocking } } } } }
+        - if: { properties: { verdict: { const: changes-requested } } }
+          then:
+            properties:
+              findings: { type: array, contains: { type: object, properties: { severity: { const: blocking } } } }

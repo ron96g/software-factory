@@ -1,6 +1,7 @@
 import type { Artifact } from "@/core/model/kinds.ts";
 import { renderVerificationReport } from "../core/artifacts/render.ts";
 import { renderReportForDisplay } from "../core/reviews/report.ts";
+import { renderCodeReviewReport } from "../core/reviews/code-review-report.ts";
 
 /** A `ticket-draft` as the ticket that will be published (ADR-0084); null for any other artifact. */
 export function ticketDraftMarkdown(a: Artifact): string | null {
@@ -28,7 +29,12 @@ export function prReviewReportMarkdown(a: Artifact): string | null {
   return `${md}\n\n---\n\n_Posted to the pull request as shown after approval; you can override the verdict when approving._`;
 }
 
+/** A typed `code-review-report` (X63c) as readable Markdown; null for any other artifact or the earlier Markdown format. */
+export function codeReviewReportMarkdown(a: Artifact): string | null {
+  return a.spec.artifactTypeRef.name === "code-review-report" ? renderCodeReviewReport(a.spec.content) : null;
+}
+
 /** Any structured artifact the UI can show as readable Markdown instead of raw JSON (ADR-0084 ticket drafts, ADR-0063 verification reports). */
 export function artifactMarkdown(a: Artifact): string | null {
-  return ticketDraftMarkdown(a) ?? verificationReportMarkdown(a) ?? prReviewReportMarkdown(a);
+  return ticketDraftMarkdown(a) ?? verificationReportMarkdown(a) ?? prReviewReportMarkdown(a) ?? codeReviewReportMarkdown(a);
 }

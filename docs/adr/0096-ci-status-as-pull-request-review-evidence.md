@@ -127,3 +127,5 @@ reviewer treats that like `none`.
 - **Fold CI into `ExternalItem` at sync:** stale by the time agents run, and the sync interval would decide freshness.
 - **Read full CI logs:** large, often contain secrets, and an injection surface. The summary excerpt and a link are
   enough for review. Logs stay in GitHub.
+- **Also read existing review comments here:** different endpoints, trust model and verdict rules (free text from any
+  commenter, no derived state, threads bound to older commits). Deferred to ADR-0097.

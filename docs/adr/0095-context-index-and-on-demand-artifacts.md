@@ -1,6 +1,6 @@
 # ADR-0095: Context index and on-demand artifacts
 
-- **Status:** Accepted
+- **Status:** Accepted (§7 fan-out and coverage amended by ADR-0098, proposed)
 - **Date:** 2026-11-26
 - **Deciders:** maintainers
 
@@ -172,7 +172,24 @@ Making everything optional has risks:
      rejected at `finish`.
    - Review report types are registered in the composition root (`reports`), and `ReviewCoverage.summary` carries
      the coverage line, so the app reads coverage only through `ReviewCoverageReader`.
-   - Pending: `factory-plan` code-review and verify (they need the typed `code-review-report` of X63c to apply the
+   **Stage 3 (`factory-plan` code-review).**
+   - `code-review-report` becomes a typed JSON contract (schema v1: `verdict` approve | changes-requested, equal to the
+     step outcome; `summary`; findings with `severity`, `path`, `line?`, `message`, `fix?`; approve has no blocking
+     finding, changes-requested has one). This is the X63c report shape without the review-scope digest, which follows
+     with X63b. Earlier Markdown reports stay readable as raw text.
+   - The `ai-code-review` step gets the same manifest, tools and `finish` rules. The candidate is the working tree
+     (committed, staged, unstaged, untracked) against the pinned base, read without touching the index
+     (`GitWorkingTreeDiff`), pinned per run. The workspace is agent-writable, so the diff runs in a factory-owned
+     scratch git directory that borrows the workspace's objects (`GIT_ALTERNATE_OBJECT_DIRECTORIES`) with attributes
+     from the empty tree: no `filter.*`/`diff.*` driver from the workspace config or `.gitattributes` can run (SEC-2). The `source-code` input keeps only the developer's notes in that run
+     (`InputView`); the developer and the verifier keep the inline diff.
+   - Only runs that produce a registered review report get the manifest on a factory item; a workspace without a
+     git-pinned base keeps the inline diff (test fakes, non-git backends).
+   - The simulated executor writes a valid placeholder for typed artifacts through a registry, so a factory without a
+     model still runs end to end.
+   - The verify step stays without per-file acknowledgement: it judges evidence against the spec (ADR-0063).
+   - Pending: the module graph instead of the top-level directory, ADR-0083 scope reasons, step markers on the
+     AgentRuntime path, module fan-out (not needed for controlplane#665: 22–26 steps).
      finding rule), module fan-out for very large changes, and the ADR-0083 scope reasons.
 
 ## Consequences

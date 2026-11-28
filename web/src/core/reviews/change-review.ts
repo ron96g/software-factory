@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { matchesGlob } from "node:path";
-import type { AgentRun, Workspace } from "../model/kinds.ts";
+import type { AgentRun, Artifact, Workspace } from "../model/kinds.ts";
 import type {
   AgentResult, AgentToolOffering, CandidateDiffReader, ChangedFile, ChangeManifest, ChangeReviewSession, ChangeReviewSessions,
-  ContextProvider, ContextSection, ExecutionContext, FinishValidator, ReviewCoverage, ReviewCoverageReader, TranscriptReader,
+  ContextProvider, ContextSection, ExecutionContext, FinishValidator, InputView, ReviewCoverage, ReviewCoverageReader, TranscriptReader,
   TranscriptRef, WorkspaceReaderFactory,
 } from "../ports/index.ts";
 import { SKIP_REASONS, type SkipReason } from "../ports/index.ts";
@@ -28,17 +28,18 @@ interface Note { seq: number; meta?: { changeManifest?: ChangeManifest; review?:
 interface Ledger { seq: number; manifest?: ChangeManifest; entries: LedgerEntry[]; step?: number }
 
 const seen = (l: Ledger, manifest: string) => ledgerOf(l.entries, manifest, l.step);
-const reviewed = (ctx: ExecutionContext) => ctx.workspaces.filter((w) => w.spec.checkout && w.status?.phase === "Ready" && w.status.path && w.status.baseCommit);
-const applies = (ctx: ExecutionContext) => !!ctx.workItem.spec.pullRequest && reviewed(ctx).length > 0;
+/** Only a git-pinned base can be diffed; without one the review keeps the inline diff. */
+const ready = (w: Workspace) => w.status?.phase === "Ready" && !!w.status.path && /^[a-f0-9]{40,64}$/.test(w.status.baseCommit ?? "");
 
 /**
  * ADR-0095 §7: the pull request's change as a manifest (inline), `read_change` / `acknowledge_change` (on demand,
  * recorded), and the coverage rules checked at `finish`. The ledger is the run's append-only transcript, read
  * incrementally and cached per transcript.
  */
-export class ChangeReviewService implements ContextProvider, AgentToolOffering, ChangeReviewSessions, FinishValidator, ReviewCoverageReader {
+export class ChangeReviewService implements ContextProvider, AgentToolOffering, ChangeReviewSessions, FinishValidator, ReviewCoverageReader, InputView {
   readonly name = "change-manifest";
-  private readonly d: { diffs: CandidateDiffReader; transcripts: TranscriptReader; readers: WorkspaceReaderFactory; reports: Record<string, ReviewReportReader> };
+  /** `diffs`: a pull request's committed head; `candidates`: a factory candidate's working tree. */
+  private readonly d: { diffs: CandidateDiffReader; candidates: CandidateDiffReader; transcripts: TranscriptReader; readers: WorkspaceReaderFactory; reports: Record<string, ReviewReportReader> };
   private readonly changes = new Map<string, Promise<ParsedChange>>();
   private readonly ledgers = new Map<string, Promise<Ledger>>();
   constructor(d: ChangeReviewService["d"]) { this.d = d; }
@@ -46,10 +47,31 @@ export class ChangeReviewService implements ContextProvider, AgentToolOffering, 
   /** A run that produces a review report must read and acknowledge the change; other runs may read it. */
   private enforced(outputs: { name: string }[]) { return outputs.some((o) => !!this.d.reports[o.name]); }
 
-  appliesTo(ctx: ExecutionContext): boolean { return applies(ctx); }
+  /**
+   * A pull request item: every run on it (research and explanation may read, reviews must acknowledge). A factory
+   * candidate: only runs that produce a review report; other steps keep the inline `source-code` diff for now.
+   */
+  private reviewed(ctx: ExecutionContext): Workspace[] {
+    if (ctx.workItem.spec.pullRequest) return ctx.workspaces.filter((w) => w.spec.checkout && ready(w));
+    return this.enforced(ctx.run.spec.outputs) ? ctx.workspaces.filter(ready) : [];
+  }
+
+  private applies(ctx: ExecutionContext) { return this.reviewed(ctx).length > 0; }
+
+  appliesTo(ctx: ExecutionContext): boolean { return this.applies(ctx); }
+
+  /** In a review run, the `source-code` input keeps only the developer's notes; the diff is read via the manifest. */
+  view(ctx: ExecutionContext, input: Artifact): string | undefined {
+    if (input.spec.artifactTypeRef.name !== "source-code" || !this.applies(ctx)) return undefined;
+    // The diff is appended by finishResult under "## Diff"; without that heading nothing is stripped, and the notes
+    // stay whole rather than being cut at a guess.
+    const at = input.spec.content.lastIndexOf("\n## Diff\n");
+    const notes = (at < 0 ? input.spec.content : input.spec.content.slice(0, at)).trim();
+    return `${notes}\n\n_The diff is not inlined: the change manifest below lists every changed file; read them with \`read_change\`._`;
+  }
 
   async provide(ctx: ExecutionContext): Promise<ContextSection[]> {
-    const pr = ctx.workItem.spec.pullRequest!;
+    const pr = ctx.workItem.spec.pullRequest;
     const change = await this.change(ctx);
     // Pins the manifest for this run, once: coverage is computed against exactly what the agent was shown.
     if ((await this.ledger(ctx.transcript.ref)).manifest?.version !== change.manifest.version) {
@@ -57,26 +79,27 @@ export class ChangeReviewService implements ContextProvider, AgentToolOffering, 
         meta: { changeManifest: change.manifest } });
     }
     const repos = change.manifest.repositories;
+    const range = repos.map((r) => `${r.name} ${r.base.slice(0, 12)}..${pr ? r.head.slice(0, 12) : "working tree"}`).join(", ");
     return [{
-      title: `Pull request #${pr.number} (head ${pr.headSha.slice(0, 12)}, base ${pr.baseRef}) — change manifest`,
+      title: pr ? `Pull request #${pr.number} (head ${pr.headSha.slice(0, 12)}, base ${pr.baseRef}) — change manifest` : "Candidate change — change manifest",
       content: [
-        `Review exactly this change: ${repos.map((r) => `${r.name} ${r.base.slice(0, 12)}..${r.head.slice(0, 12)}`).join(", ")}. ` +
-          "Line numbers of the head version are the `+` side of each segment header; only lines inside a segment can carry an inline comment.",
+        pr ? `Review exactly this change: ${range}. Line numbers of the head version are the \`+\` side of each segment header; only lines inside a segment can carry an inline comment.`
+          : `Review exactly this candidate: ${range} (committed and uncommitted changes against the pinned base). Line numbers are the \`+\` side of each segment header.`,
         "",
         renderManifest(change.manifest, this.enforced(ctx.run.spec.outputs)),
       ].join("\n"),
-      source: "pull-request",
+      source: pr ? "pull-request" : "candidate",
       revision: change.manifest.version,
       counts: { changedFiles: change.manifest.files.length, inScopeFiles: change.manifest.files.filter((f) => f.inScope).length },
     }];
   }
 
   async tools(ctx: ExecutionContext): Promise<string[]> {
-    return !applies(ctx) ? [] : this.enforced(ctx.run.spec.outputs) ? [...CHANGE_TOOLS] : ["read_change"];
+    return !this.applies(ctx) ? [] : this.enforced(ctx.run.spec.outputs) ? [...CHANGE_TOOLS] : ["read_change"];
   }
 
   session(ctx: ExecutionContext, budget?: { maxSteps: number }): ChangeReviewSession | undefined {
-    if (!applies(ctx)) return undefined;
+    if (!this.applies(ctx)) return undefined;
     /** Steps left after the current one; undefined when the budget or the step markers are unknown. */
     const remaining = async () => {
       const step = (await this.ledger(ctx.transcript.ref)).step;
@@ -85,7 +108,7 @@ export class ChangeReviewService implements ContextProvider, AgentToolOffering, 
     const stepsNote = async () => { const r = await remaining(); return r === undefined ? "" : `\n[${r} model step(s) left in your budget]`; };
     const resolve = (change: ParsedChange, path: string): ParsedFile => {
       const f = findFile(change.manifest, path);
-      if (!f) throw new Error(`"${path}" is not a changed file of this pull request; use a path from the change manifest`);
+      if (!f) throw new Error(`"${path}" is not a changed file of this change; use a path from the change manifest`);
       if (Array.isArray(f)) throw new Error(`"${path}" changed in several repositories (${f.map((x) => x.repository).join(", ")}); use repository:path`);
       return change.files.find((p) => p.file === f)!;
     };
@@ -168,11 +191,13 @@ export class ChangeReviewService implements ContextProvider, AgentToolOffering, 
     const reports = (result.artifacts ?? []).filter((a) => this.d.reports[a.type]);
     if (!reports.length) return [];
     const state = await this.state(ctx.transcript.ref);
-    if (!state) return applies(ctx) ? ["The change manifest of this review was not recorded; the review cannot be validated. Retry the run."] : [];
+    if (!state) return this.applies(ctx) ? ["The change manifest of this review was not recorded; the review cannot be validated. Retry the run."] : [];
     return reports.flatMap((a) => {
       const report = this.d.reports[a.type](a.content);
       if (!report) return []; // the schema check reports the shape
-      return coverageProblems(state.manifest, state.coverage, report).map((p) => `${a.type}: ${p}`);
+      const mismatch = report.verdict && result.outcome && result.outcome !== report.verdict
+        ? [`the outcome "${result.outcome}" must equal the report's verdict "${report.verdict}"`] : [];
+      return [...mismatch, ...coverageProblems(state.manifest, state.coverage, report)].map((p) => `${a.type}: ${p}`);
     });
   }
 
@@ -219,27 +244,28 @@ export class ChangeReviewService implements ContextProvider, AgentToolOffering, 
     await ctx.transcript.record({ role: "note", author: SYSTEM, content: what, meta: { review: entry } });
   }
 
-  /** Deterministic for the pinned workspaces and repository definitions; cached by both. */
+  /** Deterministic for the pinned workspaces and repository definitions; cached by both. A candidate is keyed by its diff. */
   private change(ctx: ExecutionContext): Promise<ParsedChange> {
-    const pr = ctx.workItem.spec.pullRequest!;
-    const ws = reviewed(ctx);
+    const pr = ctx.workItem.spec.pullRequest;
+    const ws = this.reviewed(ctx);
     const generated = (repo: string) => ctx.repositories.find((r) => r.metadata.name === repo)?.spec.review?.generatedPaths ?? [];
-    const key = ws.map((w) => `${w.metadata.name}@${w.status?.baseCommit}:${pr.headSha}:${generated(w.spec.repositoryRef.name).join("|")}`).join(",");
+    // A working tree can change between runs, so a candidate's change is pinned per run (the reviewer cannot write).
+    const key = !pr ? `run:${ctx.run.metadata.namespace}/${ctx.run.metadata.name}` : ws.map((w) => `${w.metadata.name}@${w.status?.baseCommit}:${pr.headSha}:${generated(w.spec.repositoryRef.name).join("|")}`).join(",");
     let hit = this.changes.get(key);
     if (!hit) {
-      hit = this.build(ws, pr.headSha, generated);
+      hit = this.build(ws, pr?.headSha, generated);
       hit.catch(() => this.changes.delete(key));
       this.changes.set(key, hit);
-      if (this.changes.size > 4) this.changes.delete(this.changes.keys().next().value!);
+      if (this.changes.size > 8) this.changes.delete(this.changes.keys().next().value!);
     }
     return hit;
   }
 
-  private async build(ws: Workspace[], head: string, generated: (repo: string) => string[]): Promise<ParsedChange> {
+  private async build(ws: Workspace[], head: string | undefined, generated: (repo: string) => string[]): Promise<ParsedChange> {
     const repos = await Promise.all(ws.map(async (w) => {
-      const d = await this.d.diffs.diff(w, DIFF_BYTES);
+      const d = await (head ? this.d.diffs : this.d.candidates).diff(w, DIFF_BYTES);
       if (d.truncated) throw new Error(`the diff of ${w.spec.repositoryRef.name} exceeds ${DIFF_BYTES} bytes; it cannot be reviewed completely`);
-      return { name: w.spec.repositoryRef.name, head, base: w.status!.baseCommit!, patch: d.patch };
+      return { name: w.spec.repositoryRef.name, head: head ?? "worktree", base: w.status!.baseCommit!, patch: d.patch };
     }));
     const change = buildChange(repos);
     const files = this.d.readers.forWorkspaces(ws);

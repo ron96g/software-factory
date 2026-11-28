@@ -32,6 +32,10 @@ function fakeOpenAI() {
   const fetchImpl = (async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body)) as { messages: Msg[]; tools?: unknown[] };
     const system = String(body.messages[0].content ?? "");
+    if (body.tools && system.includes("## Skill: code-review")) {
+      const args = { summary: "No blocking findings.", outcome: "approve", artifacts: [{ type: "code-review-report", content: JSON.stringify({ verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }) }] };
+      return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "r", type: "function", function: { name: "finish", arguments: JSON.stringify(args) } }] } }] });
+    }
     if (body.tools) {
       const agent = system.includes("Developer Agent") ? "developer" : "verifier";
       toolRequests.push({ agent, messages: body.messages });
@@ -40,7 +44,9 @@ function fakeOpenAI() {
       // one tool call per turn: index = number of tool results so far
       return Response.json({ choices: [{ message: { content: null, tool_calls: [script[done]] } }] });
     }
-    return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", artifacts: [], outcome: "accept", questions: [] }) } }] });
+    const review = system.includes("## Skill: code-review");
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: "ok", questions: [], outcome: review ? "approve" : "accept",
+      artifacts: review ? [{ type: "code-review-report", content: JSON.stringify({ verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }) }] : [] }) } }] });
   }) as typeof fetch;
   return { fetchImpl, toolRequests };
 }

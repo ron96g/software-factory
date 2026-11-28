@@ -57,6 +57,9 @@ export const codebaseResearchHandler: SkillHandler = {
  */
 export class SimulatedExecutor implements AgentExecutor {
   readonly name = "simulated";
+  /** Typed artifacts need valid placeholders (their schema rejects Markdown); registered per ArtifactType. */
+  private readonly placeholders: Record<string, (ctx: ExecutionContext) => string>;
+  constructor(placeholders: Record<string, (ctx: ExecutionContext) => string> = {}) { this.placeholders = placeholders; }
   canExecute(): boolean {
     return true;
   }
@@ -71,7 +74,7 @@ export class SimulatedExecutor implements AgentExecutor {
       summary: `Simulated ${ctx.agent.spec.role} output for ${ctx.run.spec.step}.`,
       artifacts: ctx.run.spec.outputs.map((o) => ({
         type: o.name,
-        content: `# ${o.name} (simulated)\n\nPlaceholder produced by **${ctx.agent.metadata.name}** in stage \`${ctx.run.spec.stage}\`.\n\nInputs: ${ctx.inputs.map((i) => i.spec.artifactTypeRef.name).join(", ") || "none"}.`,
+        content: this.placeholders[o.name]?.(ctx) ?? `# ${o.name} (simulated)\n\nPlaceholder produced by **${ctx.agent.metadata.name}** in stage \`${ctx.run.spec.stage}\`.\n\nInputs: ${ctx.inputs.map((i) => i.spec.artifactTypeRef.name).join(", ") || "none"}.`,
       })),
     };
     const outcomes = ctx.run.spec.outcomes;

@@ -44,7 +44,7 @@ function fakeLLM() {
           ? Response.json({ choices: [{ message: { content: null, tool_calls: [toolCall("write_file", { path: "feature.txt", content: "implemented\n" }, `d${devCalls}`)] } }] })
           : finish({ summary: "implemented the Unit", outcome: "complete", artifacts: [{ type: "source-code", content: "# Changes" }] });
       }
-      if (system.includes("## Skill: code-review")) return finish({ summary: "LGTM", outcome: "approve", artifacts: [{ type: "code-review-report", content: "No blocking findings." }] });
+      if (system.includes("## Skill: code-review")) return finish({ summary: "LGTM", outcome: "approve", artifacts: [{ type: "code-review-report", content: JSON.stringify({ verdict: "approve", summary: "The change implements the spec; no blocking findings.", findings: [] }) }] });
       return finish({ summary: "ok", outcome: "accept", artifacts: [] });
     }
     const out = { summary: "ok", outcome: "accept", questions: [], artifacts: [] };

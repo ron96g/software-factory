@@ -264,6 +264,13 @@ sandboxed step like checks. Decide with a successor ADR to ADR-0023/ADR-0019.
 still be configured, so the finding stays **mitigated, not fixed** until the commit is built in a factory-owned clone
 (S1 landed the *push* from a factory-owned mirror; the commit still runs in the workspace).
 
+**Update (ADR-0095 §7).** The review's candidate diff (`GitWorkingTreeDiff`, `module-scope.ts`) hashes the whole working
+tree, so it would run every clean filter. It uses a **factory-owned scratch git directory** instead: own config, own
+index and object directory, the workspace's objects borrowed read-only through `GIT_ALTERNATE_OBJECT_DIRECTORIES`, and
+attributes from the empty tree (`GIT_ATTR_SOURCE`). The workspace's `.git/config`, `info/attributes` and
+`.gitattributes` are never read, so no workspace-defined driver can run; `working-tree-diff.test.ts` proves it with a
+malicious filter and textconv. The same pattern would close the snapshot/checkpoint sites listed below.
+
 **Update (ADR-0092).** Publication no longer runs git in the workspace: the commit is made by a job **in the sandbox**
 (`bwrap`: throwaway overlay of the workspace, private git directory, no token, no network), and the factory only
 ingests the bundle and pushes. Opted-in repository hooks run in a **separate** run that can only pass or fail

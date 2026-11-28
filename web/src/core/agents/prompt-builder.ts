@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecutionContext, Prompt, PromptBuilder } from "../ports/index.ts";
+import type { ExecutionContext, InputView, Prompt, PromptBuilder } from "../ports/index.ts";
 import { PROMPT_HISTORY_BUDGET, renderSourceHistory } from "./source-history.ts";
 
 const proposesKnowledge = (ctx: ExecutionContext) => ctx.skills.some((s) => s.metadata.name === "knowledge-base");
@@ -39,6 +39,17 @@ All diagrams must be Mermaid. Never print secrets.`;
 
 /** Pure function: Agent body + skills → system; work item, inputs, answers, sections → user. */
 export class DefaultPromptBuilder implements PromptBuilder {
+  private readonly views: InputView[];
+  constructor(views: InputView[] = []) { this.views = views; }
+
+  private viewOf(ctx: ExecutionContext, input: ExecutionContext["inputs"][number]): string {
+    for (const v of this.views) {
+      const shown = v.view(ctx, input);
+      if (shown !== undefined) return shown;
+    }
+    return input.spec.content;
+  }
+
   build(ctx: ExecutionContext, mode: "json" | "tools" = "json"): Prompt {
     const system = [
       ctx.agent.body,
@@ -72,7 +83,7 @@ definitions. Do not report mere disagreement as proof of a defect. Keep each tex
       `Stage: ${ctx.run.spec.stage} · step: ${ctx.run.spec.step}`,
     ];
     if (wi.status?.classification) parts.push(`Current classification: ${JSON.stringify(wi.status.classification)}`);
-    for (const a of ctx.inputs) parts.push(`## Input artifact: ${a.spec.artifactTypeRef.name}\n${a.spec.content}`);
+    for (const a of ctx.inputs) parts.push(`## Input artifact: ${a.spec.artifactTypeRef.name}\n${this.viewOf(ctx, a)}`);
     if (ctx.clarifications.some((c) => c.spec.answers?.some((a) => a === "(no answer)"))) {
       parts.push(
         "Note: answers marked \"(no answer)\" mean the human doesn't know. Proceed with reasonable assumptions, state them " +

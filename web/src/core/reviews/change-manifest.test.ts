@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { SEGMENT_MAX, buildChange, classifyGenerated, coverageOf, coverageProblems, ledgerOf, renderManifest, unreadSegments, type LedgerEntry } from "./change-manifest.ts";
 import { ChangeReviewService } from "./change-review.ts";
 import { prReviewReportReader } from "./pr-review.ts";
+import { codeReviewReportReader } from "./code-review-report.ts";
 import { matchesGlob } from "node:path";
 import type { ExecutionContext, NewTranscriptMessage, TranscriptMessage } from "../ports/index.ts";
 
@@ -100,9 +101,10 @@ function fakeCtx(heads: Record<string, string> = {}, generatedPaths: string[] = 
   } as unknown as ExecutionContext;
   const service = new ChangeReviewService({
     diffs: { diff: async () => ({ stat: "", patch: PATCH, truncated: false }) },
+    candidates: { diff: async () => ({ stat: "", patch: PATCH, truncated: false }) },
     transcripts: { read: async (_r, o) => messages.filter((m) => m.seq > (o?.afterSeq ?? 0)).slice(0, o?.limit ?? 10_000) },
     readers: { forWorkspaces: () => ({ readFile: async (p: string) => heads[p] ?? "package x", listFiles: async () => [] }) } as never,
-    reports: { "pr-review-report": prReviewReportReader },
+    reports: { "pr-review-report": prReviewReportReader, "code-review-report": codeReviewReportReader },
   });
   return { ctx, service, messages };
 }
@@ -225,4 +227,40 @@ test("budget-exhausted is accepted only in the last steps of the budget; results
   await step(27);
   assert.match(await s.acknowledge({ files: [{ path: "src/big.ts", outcome: "skipped", reason: "budget-exhausted" }] }), /src\/big\.ts: skipped \(budget-exhausted\)/);
   assert.match(await s.read({ paths: ["src/big.ts"] }), /\[3 model step\(s\) left in your budget\]\n\[\[truncated tool=read_change/, "the truncation marker stays last");
+});
+
+test("factory candidate: only the review run gets the manifest, from the working tree, and the inline diff is removed", async () => {
+  const { ctx, service } = fakeCtx();
+  const item = ctx.workItem as unknown as { spec: Record<string, unknown> };
+  delete item.spec.pullRequest;
+  const ws = ctx.workspaces[0] as unknown as { spec: Record<string, unknown> };
+  delete ws.spec.checkout;
+  const run = ctx.run as unknown as { spec: { outputs: { name: string }[] } };
+  const sourceCode = { spec: { artifactTypeRef: { name: "source-code" }, content: "# Changes\n\nFixed it.\n\n## Diff\n\n```diff\n+secret\n```" } } as never;
+
+  run.spec.outputs = [{ name: "source-code" }];
+  assert.equal(service.appliesTo(ctx), false, "the developer keeps the inline diff");
+  assert.equal(service.view(ctx, sourceCode), undefined);
+
+  run.spec.outputs = [{ name: "code-review-report" }];
+  assert.equal(service.appliesTo(ctx), true);
+  assert.deepEqual(await service.tools(ctx), ["read_change", "acknowledge_change"]);
+  const [section] = await service.provide(ctx);
+  assert.equal(section.title, "Candidate change — change manifest");
+  assert.match(section.content, /repo b{12}\.\.working tree/);
+  const view = service.view(ctx, sourceCode)!;
+  assert.match(view, /^# Changes\n\nFixed it\./);
+  assert.doesNotMatch(view, /\+secret/);
+
+  const report = (verdict: string, findings: unknown[] = []) => ({ outcome: verdict, artifacts: [{ type: "code-review-report", content: JSON.stringify({ verdict, summary: "s".repeat(20), findings }) }] });
+  assert.match((await service.validate(ctx, report("approve") as never)).join(), /4 in-scope file\(s\) are not acknowledged/);
+  assert.match((await service.validate(ctx, { ...report("approve"), outcome: "changes-requested" } as never)).join(), /outcome "changes-requested" must equal the report's verdict "approve"/);
+});
+
+test("the typed code-review-report renders as Markdown and Markdown reports are not mistaken for it", async () => {
+  const { renderCodeReviewReport, parseCodeReviewReport } = await import("./code-review-report.ts");
+  const md = renderCodeReviewReport(JSON.stringify({ verdict: "changes-requested", summary: "Misses a test for the empty case.",
+    findings: [{ severity: "blocking", path: "web/src/x.ts", line: 12, message: "No test covers the empty case.", fix: "Add one." }, { severity: "non-blocking", path: "README.md", message: "Typo." }] }));
+  assert.equal(md, "## Verdict: Changes requested\n\nMisses a test for the empty case.\n\n### Blocking findings\n- `web/src/x.ts:12` No test covers the empty case.\n  - **Fix:** Add one.\n\n### Non-blocking findings\n- `README.md` Typo.");
+  assert.equal(parseCodeReviewReport("**Verdict: approve**"), null);
 });

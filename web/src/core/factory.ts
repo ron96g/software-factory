@@ -89,6 +89,7 @@ import { DefaultWorkItemRecordReader } from "./agents/work-item-record.ts";
 import { GithubConnector, GithubPullRequestConnector, internalConnector, manualConnector } from "./adapters/sources/connectors.ts";
 import { PR_REVIEW_ACTION, PR_REVIEW_REPORT, prReviewReportReader, prReviewArtifactCheck, prReviewHandler, prReviewPolicy, prReviewPublisher } from "./reviews/pr-review.ts";
 import { ChangeReviewService } from "./reviews/change-review.ts";
+import { CODE_REVIEW_REPORT, codeReviewReportReader, simulatedCodeReviewReport } from "./reviews/code-review-report.ts";
 import { followUpOriginResolver } from "./issues/origin.ts";
 import { DefaultSourceSyncer } from "./sources/syncer.ts";
 import { FactoryApp } from "./app/factory-app.ts";
@@ -120,7 +121,7 @@ import { checkRunValidator } from "./checks/admission.ts";
 import { issueProposalValidator } from "./issues/admission.ts";
 import { createCheckRunController } from "./checks/controller.ts";
 import { GitWorkspaceCheckpoint, GitWorkspaceSnapshotter } from "./adapters/workspaces/snapshot.ts";
-import { GitCandidateChanges, GitCandidateDiff, GitModuleScopePlanner } from "./adapters/workspaces/module-scope.ts";
+import { GitCandidateChanges, GitCandidateDiff, GitModuleScopePlanner, GitWorkingTreeDiff } from "./adapters/workspaces/module-scope.ts";
 import { DEFAULT_CHECK_OUTPUT_BYTES, SandboxCheckRunner } from "./adapters/sandbox/check-runner.ts";
 import { WorkflowCheckScheduler } from "./checks/scheduler.ts";
 import { registerCheckResultClassifiers } from "./checks/classifiers.ts";
@@ -460,7 +461,8 @@ export async function createFactory(o: FactoryOptions) {
   const artifactChecks = new Registry<ArtifactCheck>();
   const candidateDiffs = new GitCandidateDiff();
   // ADR-0095 §7: reviews get a change manifest and read/acknowledge each file; coverage is checked at finish.
-  const changeReview = new ChangeReviewService({ diffs: candidateDiffs, transcripts, readers: workspaceReaders, reports: { [PR_REVIEW_REPORT]: prReviewReportReader } });
+  const changeReview = new ChangeReviewService({ diffs: candidateDiffs, candidates: new GitWorkingTreeDiff(), transcripts, readers: workspaceReaders,
+    reports: { [PR_REVIEW_REPORT]: prReviewReportReader, [CODE_REVIEW_REPORT]: codeReviewReportReader } });
   const domainChecks = new Map([verification.artifactCheck, planning.artifactCheck, planning.reviewCheck, recoveryRouter.artifactCheck, prReviewArtifactCheck({ reader: store, diffs: candidateDiffs })].map((check) => [check.artifactType, check]));
   const registerArtifactChecks = async () => {
     const artifactTypes = await store.list<ArtifactType>("ArtifactType");
@@ -487,7 +489,7 @@ export async function createFactory(o: FactoryOptions) {
     environments,
     compiler,
   });
-  const prompts = new DefaultPromptBuilder();
+  const prompts = new DefaultPromptBuilder([changeReview]);
   const recordedTurns = new DefaultRecordedToolTurns();
   const toolProvider = new McpToolProvider({ secrets, redactor, fetch: o.fetch, transportFor: o.mcpTransportFor });
   const outputFinish = new RegistryFinishValidator({ checks: proposedChecks, readers: workspaceReaders });
@@ -589,7 +591,7 @@ export async function createFactory(o: FactoryOptions) {
     new LLMExecutor(prompts, tools),
     new SkillHandlerExecutor(skillHandlers),
   ];
-  const executor = new ExecutorChain([...realExecutors, new SimulatedExecutor()]);
+  const executor = new ExecutorChain([...realExecutors, new SimulatedExecutor({ [CODE_REVIEW_REPORT]: simulatedCodeReviewReport })]);
   // ADR-0029: `allow` (default) falls back to simulated output; `wait` keeps runs Pending until a real executor fits.
   const simulation = env.FACTORY_SIMULATION ?? "allow";
   if (simulation !== "allow" && simulation !== "wait") throw new Error(`FACTORY_SIMULATION must be "allow" or "wait", got "${simulation}"`);
